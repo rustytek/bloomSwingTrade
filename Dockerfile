@@ -7,17 +7,15 @@ ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
 # Install Python 3 and build dependencies
-# The hassio base is Ubuntu; python3 / python3-venv are in the default repos.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+# The hassio base is Alpine Linux; use apk (not apt-get).
+RUN apk add --no-cache \
         python3 \
-        python3-pip \
-        python3-venv \
+        py3-pip \
         python3-dev \
         gcc \
+        musl-dev \
         libffi-dev \
-        libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+        openssl-dev
 
 # Create an isolated virtual environment to avoid conflicts with system Python
 RUN python3 -m venv /opt/venv

@@ -1,42 +1,35 @@
 # ==============================================================================
-# SwingTrader — Home Assistant OS Add-on
-# Build base is injected by the HA build system via the BUILD_FROM arg.
-# See build.yaml for the base image version.
+# SwingTrader — Home Assistant OS Add-on + Standalone Docker
+#
+# Uses python:3.12-slim directly (no hassio-addons base required).
+# Config is read from /data/options.json (HAOS) or env vars (docker-compose).
 # ==============================================================================
-ARG BUILD_FROM
-FROM ${BUILD_FROM}
+FROM python:3.12-slim
 
-# Install Python 3 and build dependencies
-# The hassio base is Alpine Linux; use apk (not apt-get).
-RUN apk add --no-cache \
-        python3 \
-        py3-pip \
-        python3-dev \
+# Install system dependencies for the cryptography package
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
         gcc \
-        musl-dev \
         libffi-dev \
-        openssl-dev
+        libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Create an isolated virtual environment to avoid conflicts with system Python
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Install Python dependencies first (layer-cached unless requirements change)
 WORKDIR /app
+
+# Install Python dependencies (cached layer — only rebuilds if requirements change)
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# Copy application source code
+# Copy application source
 COPY . .
 
-# Install s6-overlay service + init scripts
-COPY rootfs /
-
-RUN chmod a+x \
-        /etc/cont-init.d/swingtrader.sh \
-        /etc/services.d/swingtrader/run \
-        /etc/services.d/swingtrader/finish
-
-# Expose HTTPS port (also declared in config.yaml)
+# Expose HTTPS port (mirrors config.yaml ports declaration)
 EXPOSE 8443
+
+# Health check — works for both HAOS and standalone deployments
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request,ssl; ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE; urllib.request.urlopen('https://localhost:8443/', context=ctx, timeout=5)" || exit 1
+
+# haos_entry.py reads /data/options.json (HAOS) or falls through to env vars
+CMD ["python", "haos_entry.py"]

@@ -3,7 +3,7 @@ description: >-
   Self-hosted swing trading screener — live market data via Yahoo Finance,
   technical indicators (RSI, MACD, BB, MA), watchlist & portfolio tracking,
   Fidelity CSV import, and optional AI analysis hooks (Anthropic / OpenAI).
-version: "1.0.0"
+version: "1.1.0"
 slug: swingtrader
 init: false
 

@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+  swingtrader:
+    build: .
+    container_name: swingtrader
+    ports:
+      - "8443:8443"
+    volumes:
+      # Persistent SQLite database
+      - ./data:/app/data
+      # SSL certificates — persist so browser trusts them across restarts
+      - ./ssl:/app/ssl
+      # Static files — mount so UI changes are live without rebuilding
+      - ./static:/app/static
+    environment:
+      # ── Security ─────────────────────────────────────────────────────────
+      - SECRET_KEY=${SECRET_KEY:-change-this-to-a-random-secret-at-least-32-chars}
+
+      # ── Initial Admin (first-run only) ────────────────────────────────────
+      - ADMIN_USER=${ADMIN_USER:-admin}
+      - ADMIN_PASS=${ADMIN_PASS:-changeme}
+
+      # ── Server ───────────────────────────────────────────────────────────
+      - HOST=0.0.0.0
+      - PORT=8443
+
+      # ── AI Provider (none | anthropic | openai) ───────────────────────────
+      - AI_PROVIDER=${AI_PROVIDER:-none}
+      - AI_API_KEY=${AI_API_KEY:-}
+      - AI_MODEL=${AI_MODEL:-}
+
+      # ── Cache TTLs (seconds) ──────────────────────────────────────────────
+      - QUOTE_CACHE_TTL=${QUOTE_CACHE_TTL:-900}
+      - HISTORY_CACHE_TTL=${HISTORY_CACHE_TTL:-3600}
+
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,ssl; ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE; urllib.request.urlopen('https://localhost:8443/', context=ctx, timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s

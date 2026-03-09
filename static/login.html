@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SwingTrader — Login</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html,body{height:100%;background:#0d0d0d;color:#c8c8c8;font-family:'Inter',sans-serif;font-size:14px}
+    body{display:flex;align-items:center;justify-content:center}
+    .card{width:340px;background:#111;border:1px solid #1e1e1e;border-radius:6px;padding:32px}
+    .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
+    .logo-icon{width:32px;height:32px;background:#f0a500;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:#000;font-family:'JetBrains Mono',monospace}
+    .logo-text{font-weight:700;font-size:16px;letter-spacing:.08em;color:#fff;font-family:'JetBrains Mono',monospace}
+    h1{font-size:15px;font-weight:600;color:#c8c8c8;margin-bottom:4px}
+    .subtitle{font-size:12px;color:#444;margin-bottom:24px}
+    label{display:block;font-size:11px;color:#555;letter-spacing:.06em;text-transform:uppercase;margin-bottom:5px;font-weight:500}
+    input{width:100%;padding:9px 12px;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:4px;color:#c8c8c8;font-size:13px;font-family:'Inter',sans-serif;outline:none;transition:border-color .15s}
+    input:focus{border-color:#f0a500}
+    .field{margin-bottom:16px}
+    .btn{width:100%;padding:10px;background:#f0a500;color:#000;border:none;border-radius:4px;font-size:13px;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;letter-spacing:.04em;margin-top:8px;transition:opacity .15s}
+    .btn:hover{opacity:.9}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+    .error{background:#1a0a0a;border:1px solid #ff4d4d33;color:#ff4d4d;padding:9px 12px;border-radius:4px;font-size:12px;margin-top:14px;display:none}
+    .spinner{width:14px;height:14px;border:2px solid #0006;border-top-color:#000;border-radius:50%;display:inline-block;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .footer{text-align:center;font-size:11px;color:#333;margin-top:20px}
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="logo-icon">ST</div>
+    <span class="logo-text">SWING TRADER</span>
+  </div>
+  <h1>Sign in</h1>
+  <p class="subtitle">Enter your credentials to access the screener</p>
+
+  <form id="loginForm">
+    <div class="field">
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" autocomplete="username" autofocus required>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" required>
+    </div>
+    <button type="submit" class="btn" id="submitBtn">Sign in</button>
+    <div class="error" id="errorMsg"></div>
+  </form>
+  <div class="footer">SwingTrader &mdash; Swing Trading Screener</div>
+</div>
+
+<script>
+  // If already logged in, redirect
+  const token = localStorage.getItem('st_token');
+  if (token) window.location.href = '/';
+
+  document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('submitBtn');
+    const err = document.getElementById('errorMsg');
+    err.style.display = 'none';
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Signing in…';
+
+    const body = new URLSearchParams({
+      username: document.getElementById('username').value,
+      password: document.getElementById('password').value,
+    });
+
+    try {
+      const res = await fetch('/auth/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        err.textContent = data.detail || 'Login failed';
+        err.style.display = 'block';
+        return;
+      }
+      localStorage.setItem('st_token', data.access_token);
+      localStorage.setItem('st_user', JSON.stringify({
+        id: data.user_id, username: data.username, is_admin: data.is_admin
+      }));
+      window.location.href = '/';
+    } catch (ex) {
+      err.textContent = 'Network error — is the server running?';
+      err.style.display = 'block';
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = 'Sign in';
+    }
+  });
+</script>
+</body>
+</html>

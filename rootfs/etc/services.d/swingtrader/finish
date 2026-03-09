@@ -1,0 +1,9 @@
+#!/usr/bin/execlineb -S0
+# ==============================================================================
+# SwingTrader — s6-overlay finish handler
+# Called when the service exits. Brings down the supervision tree.
+# ==============================================================================
+if -n { s6-test $# -ne 0 }
+if -n { s6-test ${1} -eq 256 }
+
+/run/s6/basedir/bin/halt

@@ -1,0 +1,21 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# SwingTrader — s6-overlay service runner
+# s6 will restart this service automatically if it exits unexpectedly.
+# ==============================================================================
+
+bashio::log.info "Starting SwingTrader service..."
+
+# Load the env file written by cont-init.d/swingtrader.sh
+# shellcheck disable=SC1091
+source /data/swingtrader.env
+
+# Export every variable so the Python process inherits them
+export SECRET_KEY ADMIN_USER ADMIN_PASS \
+       AI_PROVIDER AI_API_KEY AI_MODEL \
+       SSL_CERT SSL_KEY DATABASE_URL HOST PORT
+
+cd /app
+
+# exec replaces the shell — s6 tracks the Python process directly
+exec /opt/venv/bin/python main.py 2>&1

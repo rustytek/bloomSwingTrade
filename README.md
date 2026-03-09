@@ -75,31 +75,36 @@ Implement `OpenAIAIService` in `services/ai_service.py` (template in comments).
 
 ---
 
-## Home Assistant OS (HAOS) Deployment
+## Home Assistant OS (HAOS) — Native Add-on
 
-### Option 1 — Docker via Terminal Add-on
+SwingTrader ships as a proper HA add-on — no Portainer, no terminal, no docker-compose needed.
 
-1. Install the **SSH & Web Terminal** add-on in HAOS
-2. Copy the `swingtrader/` directory to your HA machine (e.g. via Samba share)
-3. In the terminal:
-   ```bash
-   cd /path/to/swingtrader
-   docker-compose up -d
-   ```
-4. Access via `https://<HA-IP>:8443`
+### Install
 
-### Option 2 — Portainer Add-on
+1. Go to **Settings → Add-ons → Add-on Store**
+2. Click the **⋮ menu** (top-right) → **Repositories**
+3. Add: `https://github.com/rustytek/bloomSwingTrade`
+4. Find **SwingTrader** in the store → **Install**
+5. Open the **Configuration** tab — set a strong `secret_key` and change `admin_pass`
+6. Click **Start** → open the **Web UI**
 
-1. Install the **Portainer** add-on in HAOS
-2. In Portainer → Stacks → Add Stack
-3. Paste the contents of `docker-compose.yml`
-4. Set environment variables in the Portainer UI
-5. Deploy
+On first launch, a self-signed SSL cert is auto-generated. Accept the browser warning once, and you're in.
+
+### Use Your HA SSL Certificate (optional)
+
+If you have Let's Encrypt configured in HA:
+
+1. Set `use_ha_ssl: true`
+2. `certfile: fullchain.pem` / `keyfile: privkey.pem` (defaults)
+3. Restart — no more cert warning
+
+### Updating
+
+**Settings → Add-ons → SwingTrader → Update**. Your database survives all updates.
 
 ### Port Forwarding (external access)
 
-If you want to access SwingTrader from outside your LAN, forward port 8443 on your router to your HA machine's IP.
-For production use, consider putting it behind a reverse proxy (e.g. NGINX Proxy Manager add-on) with a real SSL certificate.
+Forward port `8443` on your router to your HA machine IP. For external HTTPS with a trusted cert, put it behind NGINX Proxy Manager (HA add-on).
 
 ---
 

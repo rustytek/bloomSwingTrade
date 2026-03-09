@@ -1,0 +1,11 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# SwingTrader — s6-overlay finish handler
+# Called when the service exits. $1 = exit code, $2 = signal (or -1).
+# ==============================================================================
+
+if [[ "${1}" -ne 0 && "${1}" -ne 256 ]]; then
+    bashio::log.error "SwingTrader exited unexpectedly (exit code: ${1})"
+else
+    bashio::log.info "SwingTrader stopped (exit code: ${1})"
+fi

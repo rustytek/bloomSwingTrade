@@ -1,0 +1,51 @@
+name: SwingTrader
+description: >-
+  Self-hosted swing trading screener — live market data via Yahoo Finance,
+  technical indicators (RSI, MACD, BB, MA), watchlist & portfolio tracking,
+  Fidelity CSV import, and optional AI analysis hooks (Anthropic / OpenAI).
+version: "1.0.0"
+slug: swingtrader
+init: false
+
+arch:
+  - amd64
+  - aarch64
+
+startup: application
+boot: auto
+
+# ── Network ──────────────────────────────────────────────────────────────────
+ports:
+  8443/tcp: 8443
+ports_description:
+  8443/tcp: HTTPS Web UI (accept self-signed cert warning, or use HA SSL below)
+
+# ── Volume mappings ──────────────────────────────────────────────────────────
+map:
+  - ssl:ro        # HA's Let's Encrypt certificates (read-only)
+
+# ── User-configurable options ─────────────────────────────────────────────────
+options:
+  secret_key: "change-me-to-a-random-32-char-string"
+  admin_user: admin
+  admin_pass: changeme
+  use_ha_ssl: false
+  certfile: fullchain.pem
+  keyfile: privkey.pem
+  ai_provider: none
+  ai_api_key: ""
+  ai_model: ""
+
+schema:
+  secret_key: str
+  admin_user: str
+  admin_pass: str
+  use_ha_ssl: bool
+  certfile: str
+  keyfile: str
+  ai_provider: "list(none|anthropic|openai)"
+  ai_api_key: str
+  ai_model: str
+
+# ── Labels ────────────────────────────────────────────────────────────────────
+url: https://github.com/rustytek/bloomSwingTrade

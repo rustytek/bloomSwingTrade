@@ -102,6 +102,7 @@ def _fetch_quote_sync(ticker: str) -> dict:
     name = full_info.get("shortName") or full_info.get("longName") or ticker
     sector = full_info.get("sector") or "Unknown"
     industry = full_info.get("industry") or ""
+    description = full_info.get("longBusinessSummary") or full_info.get("description") or ""
 
     # Convert units
     if mkt_cap:
@@ -124,6 +125,7 @@ def _fetch_quote_sync(ticker: str) -> dict:
         "name": name,
         "sector": sector,
         "industry": industry,
+        "description": description,
         "quote_type": quote_type,
         "price": price,
         "prev_close": prev_close,
@@ -218,8 +220,8 @@ def _enrich_with_technicals(quote: dict, history: list[dict]) -> dict:
 
     perf = compute_performance_metrics(closes)
 
-    # Sparkline: last 30 closes for in-table mini trend chart
-    spark = [round(v, 2) for v in closes[-30:]]
+    # Sparkline: last 7 closes for in-table mini trend chart
+    spark = [round(v, 2) for v in closes[-7:]]
 
     enriched = {
         **quote,
@@ -364,6 +366,58 @@ def get_bb_series(history: list[dict]) -> list:
     return calc_bollinger(closes)
 
 
+# ── Rate Limiting & Tracking ───────────────────────────────────────────────
+
+class APIRateLimiter:
+    def __init__(self, limit_per_hour: int = 2000):
+        self.limit = limit_per_hour
+        self.count = 0
+        self.current_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        self.lock = asyncio.Lock()
+
+    async def increment(self) -> bool:
+        """Increments the counter. Returns True if successful, False if limit reached."""
+        now_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        async with self.lock:
+            if now_hour > self.current_hour:
+                self.current_hour = now_hour
+                self.count = 0
+            
+            if self.count >= self.limit:
+                return False
+            self.count += 1
+            return True
+
+    def get_status(self) -> dict:
+        """Returns current usage dictionary"""
+        now_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        if now_hour > self.current_hour:
+            return {"used": 0, "limit": self.limit, "reset": (now_hour + timedelta(hours=1)).isoformat()}
+        return {"used": self.count, "limit": self.limit, "reset": (self.current_hour + timedelta(hours=1)).isoformat()}
+
+# Global rate limiter instance
+limiter = APIRateLimiter(limit_per_hour=2000)
+
+def is_market_open() -> bool:
+    """Returns True if the US market is currently open"""
+    try:
+        from zoneinfo import ZoneInfo
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        # Fallback if zoneinfo isn't available
+        m = datetime.now(timezone.utc).month
+        now_et = (datetime.now(timezone.utc) + timedelta(hours=-4 if 4 <= m <= 10 else -5)).replace(tzinfo=None)
+        
+    if now_et.weekday() >= 5: # Weekend
+        return False
+    
+    current_time = now_et.time()
+    market_open = current_time.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = current_time.replace(hour=16, minute=0, second=0, microsecond=0)
+    
+    return market_open <= current_time <= market_close
+
+
 # ── Universe background refresh ────────────────────────────────────────────
 
 def cleanup_old_entries(db: Session) -> int:
@@ -381,56 +435,90 @@ def get_universe_status(db: Session, universe: list[str]) -> dict:
     total = len(universe)
     universe_set = set(universe)
     # Count ALL rows including failure markers (quote_json=None) as "attempted/loaded"
-    # so the counter reaches 100% even for permanently dead tickers.
     rows = db.query(StockCache).all()
     loaded = sum(1 for r in rows if r.ticker in universe_set)
     fresh  = sum(1 for r in rows if r.ticker in universe_set
                  and r.quote_json and _is_fresh(r.cached_at))
-    return {"total": total, "loaded": loaded, "fresh": fresh}
+                 
+    last_updated_time = None
+    latest = max((r.cached_at for r in rows if r.ticker in universe_set and r.cached_at), default=None)
+    if latest:
+        try:
+            from datetime import timezone
+            dt = latest.replace(tzinfo=timezone.utc) if latest.tzinfo is None else latest
+            last_updated_time = dt.astimezone().strftime("%I:%M %p").lstrip('0')
+        except Exception:
+            last_updated_time = latest.strftime("%I:%M %p").lstrip('0')
+                 
+    # Append the rate limiter status
+    limit_status = limiter.get_status()
+    return {"total": total, "loaded": loaded, "fresh": fresh, "rate_limit": limit_status, "last_updated_time": last_updated_time}
 
 
 async def refresh_universe(universe: list[str], db_factory, force: bool = False) -> None:
     """
-    Background task: fetch all universe tickers that are stale.
-    Uses a semaphore to avoid hammering yfinance.
-    db_factory is called per-ticker so each gets its own session.
+    Background continuous loop that polls the API while respecting rate limits.
+    If market is open, it will query across the hour avoiding limits.
+    If market is closed, it sweeps once and then waits.
     """
-    sem = asyncio.Semaphore(5)  # max 5 concurrent yfinance calls
+    # Max concurrent fetches (keep low so rate limit checks are granular)
+    sem = asyncio.Semaphore(5)
 
-    async def fetch_one(ticker: str):
+    async def fetch_one(ticker: str, force_flag: bool):
+        # Stop and wait if rate limit is hit
+        if not await limiter.increment():
+            return False
+            
         async with sem:
             db = db_factory()
             try:
-                await get_quote(ticker, db, force_refresh=force)
+                await get_quote(ticker, db, force_refresh=force_flag)
             except Exception as e:
                 logger.debug(f"Background fetch skipped {ticker}: {e}")
             finally:
                 db.close()
-            # Small delay to avoid rate-limiting
-            await asyncio.sleep(0.4)
+            # Distribute requests to about 2000 per hour (1.8s delay total on average)
+            await asyncio.sleep(1.8)
+            return True
 
-    # Determine which tickers need refreshing
-    db = db_factory()
-    try:
-        existing = {
-            r.ticker: r.cached_at
-            for r in db.query(StockCache).all()   # include failure markers
-        }
-    finally:
-        db.close()
+    while True:
+        db = db_factory()
+        try:
+            existing = {
+                r.ticker: r.cached_at
+                for r in db.query(StockCache).all()
+            }
+        finally:
+            db.close()
 
-    if force:
-        stale = universe
-    else:
-        stale = [
+        # Re-check stale tickers
+        stale = universe if force else [
             t for t in universe
             if t not in existing or not _is_fresh(existing[t])
         ]
 
-    if not stale:
-        logger.info("Universe data is fully fresh — no refresh needed")
-        return
-
-    logger.info(f"Background universe refresh: {len(stale)}/{len(universe)} tickers need updating")
-    await asyncio.gather(*[fetch_one(t) for t in stale], return_exceptions=True)
-    logger.info("Background universe refresh complete")
+        if not stale:
+            # Everything is fresh. Sleep a bit then check again.
+            await asyncio.sleep(60)
+            force = False # clear force flag after one loop
+            continue
+            
+        logger.info(f"Background universe loop: {len(stale)}/{len(universe)} tickers need updating")
+        
+        market_open = is_market_open()
+        
+        for ticker in stale:
+            res = await fetch_one(ticker, force)
+            if not res:
+                logger.warning(f"Hourly API rate limit reached ({limiter.limit}). Pausing background polling until next window.")
+                # We hit the limit. Sleep until the next hour begins.
+                now = datetime.now(timezone.utc)
+                next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+                await asyncio.sleep((next_hour - now).total_seconds())
+                break # break the for-loop, while-loop restarts the stale sweep
+        
+        # If the market was closed, we do not want to constantly run. 
+        # By definition, if stale was empty, it skips above. 
+        # So we just wait 5 minutes before the next stale check.
+        await asyncio.sleep(300)
+        force = False

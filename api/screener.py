@@ -38,6 +38,8 @@ class ScreenerFilters(BaseModel):
     dc: bool = False
 
     # Momentum
+    gain_sharpe_min: Optional[float] = None
+    vol_max: Optional[float] = None
     vol_r_min: Optional[float] = None
     p52w_min: Optional[float] = None
     p52w_max: Optional[float] = None
@@ -105,6 +107,8 @@ def _passes(stock: dict, f: ScreenerFilters) -> bool:
     if f.dc and not stock.get("dc"): return False
 
     if not between(stock.get("vol_r"), f.vol_r_min, None): return False
+    if not between(stock.get("gain_sharpe"), f.gain_sharpe_min, None): return False
+    if not between(stock.get("vol"), None, f.vol_max): return False
     if not between(stock.get("p52w"), f.p52w_min, f.p52w_max): return False
     if f.earn_beat and not stock.get("earn_beat"): return False
     if f.earn_soon and not stock.get("earn_soon"): return False
@@ -131,6 +135,16 @@ async def screen(
     """Screen the full S&P 500 + ETF universe from cache."""
     rows = db.query(StockCache).filter(StockCache.quote_json.isnot(None)).all()
 
+    import math
+    def clean_nans(obj):
+        if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+            return None
+        elif isinstance(obj, dict):
+            return {k: clean_nans(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [clean_nans(x) for x in obj]
+        return obj
+
     all_quotes = []
     for row in rows:
         try:
@@ -138,7 +152,7 @@ async def screen(
         except Exception:
             pass
 
-    passed = [q for q in all_quotes if _passes(q, filters)]
+    passed = [clean_nans(q) for q in all_quotes if _passes(q, filters)]
     universe_status = get_universe_status(db, UNIVERSE)
 
     return {
@@ -146,6 +160,7 @@ async def screen(
         "total": len(all_quotes),
         "filtered": len(passed),
         "universe": universe_status,
+        "rate_limit_exceeded": universe_status.get("rate_limit", {}).get("used", 0) >= universe_status.get("rate_limit", {}).get("limit", 2000)
     }
 
 

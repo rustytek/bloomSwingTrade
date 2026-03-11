@@ -78,8 +78,8 @@ def _fetch_quote_sync(ticker: str) -> dict:
     full_info = {}
     try:
         full_info = t.info or {}
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"t.info failed for {ticker}: {e}")
 
     # fast_info fields (always available)
     price = getattr(info, "last_price", None) or full_info.get("currentPrice")
@@ -103,6 +103,11 @@ def _fetch_quote_sync(ticker: str) -> dict:
     sector = full_info.get("sector") or "Unknown"
     industry = full_info.get("industry") or ""
     description = full_info.get("longBusinessSummary") or full_info.get("description") or ""
+    if not description:
+        try:
+            description = t.get_info().get("longBusinessSummary") or ""
+        except Exception:
+            pass
 
     # Convert units
     if mkt_cap:

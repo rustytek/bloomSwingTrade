@@ -153,14 +153,14 @@ async def screen(
             pass
 
     passed = [clean_nans(q) for q in all_quotes if _passes(q, filters)]
-    universe_status = get_universe_status(db, UNIVERSE)
+    universe_status = clean_nans(get_universe_status(db, UNIVERSE))
 
     return {
         "results": passed,
         "total": len(all_quotes),
         "filtered": len(passed),
         "universe": universe_status,
-        "rate_limit_exceeded": universe_status.get("rate_limit", {}).get("used", 0) >= universe_status.get("rate_limit", {}).get("limit", 2000)
+        "rate_limit_exceeded": universe_status.get("rate_limit", {}).get("used", 0) >= (universe_status.get("rate_limit", {}).get("limit") or 2000)
     }
 
 

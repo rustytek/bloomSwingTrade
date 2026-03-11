@@ -1615,7 +1615,7 @@
             color: '#888', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             maxWidth: 150, display: 'block'
           }} title={s.name}>{s.name}</span>;
-          case 'spark': return <Sparkline data={s.spark} width={80} height={26} />;
+          case 'spark': return <Sparkline data={s.spark} width={27} height={26} />;
           case 'price': return s.price != null ?
             <span className="mono" style={{
               background: heatMode ? heatColor(s.chg_pct) : 'transparent',

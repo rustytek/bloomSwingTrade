@@ -254,7 +254,7 @@
     const ALL_COLS = [
       { k: 'ticker', label: 'Ticker', w: 80 },
       { k: 'name', label: 'Name', w: 155 },
-      { k: 'spark', label: 'Trend', w: 60 },
+      { k: 'spark', label: 'Trend', w: 20 },
       { k: 'price', label: 'Price', w: 75 },
       { k: 'chg_pct', label: 'Chg%', w: 70 },
       { k: 'mkt_cap', label: 'Mkt Cap', w: 85 },
@@ -374,8 +374,13 @@
     }
 
     /* ── Technical chart ── */
-    function TechnicalChart({ history, indicators, heatMode }) {
+    function TechnicalChart({ history, indicators, heatMode, spyHistory, spyIndicators }) {
       const [period, setPeriod] = useState(180);
+      const [showMA50, setShowMA50] = useState(true);
+      const [showMA200, setShowMA200] = useState(false);
+      const [showBB, setShowBB] = useState(false);
+      const [show52W, setShow52W] = useState(false);
+      const [showSPY, setShowSPY] = useState(false);
 
       if (!history || !history.length) return <div style={{ padding: 20, color: '#555', textAlign: 'center' }}>No chart data</div>;
 
@@ -384,9 +389,9 @@
 
       const W = Math.min(window.innerWidth * 0.85, 1200), H = Math.max(window.innerHeight * 0.55, 260), PAD = { t: 10, r: 10, b: 28, l: 52 };
       const bars = barsToUse;
-      const ma50 = indicators?.ma50?.slice(startIdx) || [];
-      const ma200 = indicators?.ma200?.slice(startIdx) || [];
-      const bb = indicators?.bb?.slice(startIdx) || [];
+      const ma50 = showMA50 ? (indicators?.ma50?.slice(startIdx) || []) : [];
+      const ma200 = showMA200 ? (indicators?.ma200?.slice(startIdx) || []) : [];
+      const bb = showBB ? (indicators?.bb?.slice(startIdx) || []) : [];
       const mn = Math.min(...bars.map(b => b.low)) * 0.998;
       const mx = Math.max(...bars.map(b => b.high)) * 1.002;
       const cW = W - PAD.l - PAD.r, cH = H - PAD.t - PAD.b;
@@ -396,16 +401,54 @@
       const yTicks = Array.from({ length: 5 }, (_, i) => mn + (mx - mn) * i / 4);
       const maxVol = Math.max(...bars.map(b => b.vol)), volH = 40;
 
+      // 52W lines from full history
+      const high52 = show52W ? Math.max(...history.map(b => b.high)) : null;
+      const low52 = show52W ? Math.min(...history.map(b => b.low)) : null;
+
+      // SPY normalized overlay
+      const spyPath = (() => {
+        if (!showSPY || !spyHistory || !spyHistory.length) return null;
+        const slice = spyHistory.slice(-period);
+        if (slice.length < 2) return null;
+        const sc = slice.map(d => d.close);
+        const sm = Math.min(...sc), sx = Math.max(...sc), sr = (sx - sm) || 1;
+        return sc.map((v, i) => {
+          const px = xOf(i).toFixed(1);
+          const py = yOf(mn + ((v - sm) / sr) * (mx - mn)).toFixed(1);
+          return `${i === 0 ? 'M' : 'L'}${px},${py}`;
+        }).join(' ');
+      })();
+
+      // Toggle button config
+      const TOGGLES = [
+        { key: 'MA50', on: showMA50, set: setShowMA50, col: '#3b9eff' },
+        { key: 'MA200', on: showMA200, set: setShowMA200, col: '#ff6b35' },
+        { key: 'BB', on: showBB, set: setShowBB, col: '#f0a500' },
+        { key: '52W', on: show52W, set: setShow52W, col: '#888888' },
+        { key: 'SPY', on: showSPY, set: setShowSPY, col: '#ffffff' },
+      ];
+
       return <div>
-        <div style={{ display: 'flex', gap: 6, marginBottom: 12, paddingLeft: PAD.l }}>
-          {[7, 14, 21, 30, 180].map(d => (
-            <button key={d} onClick={() => setPeriod(d)} style={{
-              background: period === d ? '#f0a500' : '#1a1a1a',
-              color: period === d ? '#000' : '#aaa',
-              padding: '4px 10px', borderRadius: 3, fontSize: 11, border: '1px solid #2a2a2a'
-            }}>
-              {d === 180 ? 'All' : d + 'D'}
-            </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12, paddingLeft: PAD.l, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[7, 14, 21, 30, 180].map(d => (
+              <button key={d} onClick={() => setPeriod(d)} style={{
+                background: period === d ? '#f0a500' : '#1a1a1a',
+                color: period === d ? '#000' : '#aaa',
+                padding: '4px 10px', borderRadius: 3, fontSize: 11, border: '1px solid #2a2a2a'
+              }}>
+                {d === 180 ? 'All' : d + 'D'}
+              </button>
+            ))}
+          </div>
+          <div style={{ width: 1, height: 14, background: '#2a2a2a' }} />
+          {TOGGLES.map(({ key, on, set, col }) => (
+            <button key={key} onClick={() => set(p => !p)} style={{
+              padding: '4px 10px', borderRadius: 3, fontSize: 11,
+              background: on ? col + '22' : 'transparent',
+              border: `1px solid ${on ? col : '#2a2a2a'}`,
+              color: on ? col : '#555'
+            }}>{key}</button>
           ))}
         </div>
         <svg width={W} height={H + volH} style={{ display: 'block', maxWidth: '100%' }}>
@@ -413,16 +456,27 @@
             <line x1={PAD.l} y1={yOf(v)} x2={W - PAD.r} y2={yOf(v)} stroke="#1e1e1e" strokeWidth="1" />
             <text x={PAD.l - 4} y={yOf(v) + 4} textAnchor="end" fontSize="9" fill="#555">${v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v.toFixed(0)}</text>
           </g>)}
+          {/* BB bands */}
           {bb.length > 1 && <>
             <polyline points={bb.map((v, i) => v != null ? `${xOf(i)},${yOf(v.upper)}` : '').filter(Boolean).join(' ')}
-              fill="none" stroke="#2a3a4a" strokeWidth="1" strokeDasharray="3,2" />
+              fill="none" stroke="#f0a50088" strokeWidth="1" strokeDasharray="3,2" />
             <polyline points={bb.map((v, i) => v != null ? `${xOf(i)},${yOf(v.lower)}` : '').filter(Boolean).join(' ')}
-              fill="none" stroke="#2a3a4a" strokeWidth="1" strokeDasharray="3,2" />
+              fill="none" stroke="#f0a50088" strokeWidth="1" strokeDasharray="3,2" />
           </>}
-          <polyline points={ma200.map((v, i) => v != null ? `${xOf(i)},${yOf(v)}` : '').filter(Boolean).join(' ')}
-            fill="none" stroke="#ff6b35" strokeWidth="1.2" opacity=".8" />
-          <polyline points={ma50.map((v, i) => v != null ? `${xOf(i)},${yOf(v)}` : '').filter(Boolean).join(' ')}
-            fill="none" stroke="#3b9eff" strokeWidth="1.2" opacity=".8" />
+          {/* 52W hi/lo lines */}
+          {show52W && high52 != null && high52 >= mn && high52 <= mx &&
+            <line x1={PAD.l} y1={yOf(high52)} x2={W - PAD.r} y2={yOf(high52)} stroke="#888" strokeWidth="0.8" strokeDasharray="4,3" />}
+          {show52W && low52 != null && low52 <= mx && low52 >= mn &&
+            <line x1={PAD.l} y1={yOf(low52)} x2={W - PAD.r} y2={yOf(low52)} stroke="#555" strokeWidth="0.8" strokeDasharray="4,3" />}
+          {/* MA200 */}
+          {ma200.length > 1 && <polyline points={ma200.map((v, i) => v != null ? `${xOf(i)},${yOf(v)}` : '').filter(Boolean).join(' ')}
+            fill="none" stroke="#ff6b35" strokeWidth="1.2" opacity=".8" />}
+          {/* MA50 */}
+          {ma50.length > 1 && <polyline points={ma50.map((v, i) => v != null ? `${xOf(i)},${yOf(v)}` : '').filter(Boolean).join(' ')}
+            fill="none" stroke="#3b9eff" strokeWidth="1.2" opacity=".8" />}
+          {/* SPY normalized */}
+          {spyPath && <path d={spyPath} fill="none" stroke="#ffffff" strokeWidth="1.2" opacity=".35" />}
+          {/* Candles */}
           {bars.map((b, i) => {
             const x = xOf(i), isUp = b.close >= b.open;
             const c = heatMode ? heatColor(b.close / b.open * 100 - 100) : (isUp ? '#00d26a' : '#ff4d4d');
@@ -442,8 +496,8 @@
             return <rect key={i} x={x - bw / 2} y={H + volH - vh} width={bw} height={vh}
               fill={b.close >= b.open ? '#00d26a44' : '#ff4d4d44'} />;
           })}
-          <text x={PAD.l + 4} y={PAD.t + 12} fontSize="9" fill="#3b9eff">MA50</text>
-          <text x={PAD.l + 40} y={PAD.t + 12} fontSize="9" fill="#ff6b35">MA200</text>
+          {showMA50 && <text x={PAD.l + 4} y={PAD.t + 12} fontSize="9" fill="#3b9eff">MA50</text>}
+          {showMA200 && <text x={PAD.l + (showMA50 ? 40 : 4)} y={PAD.t + 12} fontSize="9" fill="#ff6b35">MA200</text>}
         </svg></div>;
     }
 
@@ -452,39 +506,68 @@
       const quarters = useMemo(() => {
         let seed = 0; for (const c of (ticker || '')) seed = (seed * 31 + c.charCodeAt(0)) & 0xffff;
         const rng = () => { seed = (seed * 1664525 + 1013904223) & 0xffffffff; return (seed >>> 16) / 65535; };
-        const baseEps = 1 + rng() * 3, baseRev = 500 + rng() * 2000, baseMargin = 5 + rng() * 25;
+        const baseEps = 1 + rng() * 3, baseRev = 500 + rng() * 2000, baseMargin = 5 + rng() * 25, basePe = 10 + rng() * 25;
         return Array.from({ length: 8 }, (_, i) => ({
           label: `${['Q1', 'Q2', 'Q3', 'Q4'][i % 4]}'${String(2023 + Math.floor(i / 4)).slice(2)}`,
           eps: +(baseEps * (0.8 + rng() * 0.6) * (1 + i * 0.03)).toFixed(2),
           rev: +(baseRev * (0.85 + rng() * 0.4) * (1 + i * 0.02)).toFixed(0),
           margin: +(baseMargin * (0.85 + rng() * 0.4)).toFixed(1),
+          pe: +(basePe * (0.85 + rng() * 0.4)).toFixed(1),
+          beat: rng() > 0.45,
         }));
       }, [ticker]);
-      const W = 320, H = 110, PAD = { t: 8, r: 8, b: 20, l: 36 }, n = quarters.length, bw = Math.floor((W - PAD.l - PAD.r) / n) - 2;
+
+      const W = 340, H = 110, PAD = { t: 18, r: 8, b: 22, l: 36 };
+      const n = quarters.length;
+      const bw = Math.floor((W - PAD.l - PAD.r) / n) - 2;
       const xOf = i => PAD.l + (i + 0.5) * ((W - PAD.l - PAD.r) / n);
-      const maxRev = Math.max(...quarters.map(q => q.rev));
-      const maxEps = Math.max(...quarters.map(q => q.eps));
-      const maxMargin = Math.max(...quarters.map(q => q.margin));
       const cH = H - PAD.t - PAD.b;
-      return <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-        <div>
-          <div style={{ fontSize: 10, color: '#888', marginBottom: 4 }}>EPS (quarterly)</div>
-          <svg width={W} height={H}>
-            {quarters.map((q, i) => <rect key={i} x={xOf(i) - bw / 2} y={PAD.t + cH - (q.eps / maxEps) * cH}
-              width={bw} height={(q.eps / maxEps) * cH} fill="#f0a500" opacity=".8" />)}
-            {quarters.map((q, i) => <text key={i} x={xOf(i)} y={H - 2} textAnchor="middle" fontSize="8" fill="#555">{q.label}</text>)}
-          </svg>
-        </div>
-        <div>
-          <div style={{ fontSize: 10, color: '#888', marginBottom: 4 }}>Revenue + Margin</div>
-          <svg width={W} height={H}>
-            {quarters.map((q, i) => <rect key={i} x={xOf(i) - bw / 2} y={PAD.t + cH - (q.rev / maxRev) * cH}
-              width={bw} height={(q.rev / maxRev) * cH} fill="#3b9eff" opacity=".7" />)}
-            <polyline points={quarters.map((q, i) => `${xOf(i)},${PAD.t + cH - (q.margin / maxMargin) * cH}`).join(' ')}
-              fill="none" stroke="#00d26a" strokeWidth="1.5" />
-            {quarters.map((q, i) => <text key={i} x={xOf(i)} y={H - 2} textAnchor="middle" fontSize="8" fill="#555">{q.label}</text>)}
-          </svg>
-        </div>
+
+      function BarChart({ title, vals, color, beat }) {
+        const maxV = Math.max(...vals, 0.01);
+        return <svg width={W} height={H} style={{ display: 'block', width: '100%' }}>
+          <text x={W / 2} y={12} textAnchor="middle" fontSize="9" fill="#666" letterSpacing="0.05em">{title}</text>
+          {[0, 0.5, 1].map((f, i) => <g key={i}>
+            <line x1={PAD.l} y1={PAD.t + cH - f * cH} x2={W - PAD.r} y2={PAD.t + cH - f * cH} stroke="#1a1a1a" strokeWidth="0.5" />
+            <text x={PAD.l - 3} y={PAD.t + cH - f * cH + 3} textAnchor="end" fontSize="7" fill="#444">{(f * maxV).toFixed(1)}</text>
+          </g>)}
+          {vals.map((v, i) => {
+            const bh = (v / maxV) * cH, by = PAD.t + cH - bh;
+            return <g key={i}>
+              <rect x={xOf(i) - bw / 2} y={by} width={bw} height={bh} fill={color} opacity="0.75" />
+              {beat && beat[i] !== undefined && <circle cx={xOf(i)} cy={by - 4} r={3} fill={beat[i] ? '#00d26a' : '#ff4d4d'} />}
+              <text x={xOf(i)} y={H - 5} textAnchor="middle" fontSize="7" fill="#444">{quarters[i].label}</text>
+            </g>;
+          })}
+        </svg>;
+      }
+
+      function LineChart({ title, vals, color, fmt }) {
+        const mn = Math.min(...vals), mx = Math.max(...vals), rng = (mx - mn) || 1;
+        const yS = v => PAD.t + cH - ((v - mn) / rng) * cH;
+        const xS = i => PAD.l + i / (vals.length - 1) * (W - PAD.l - PAD.r);
+        const path = vals.map((v, i) => `${i === 0 ? 'M' : 'L'}${xS(i).toFixed(1)},${yS(v).toFixed(1)}`).join(' ');
+        const area = path + ` L${xS(vals.length - 1).toFixed(1)},${PAD.t + cH} L${PAD.l},${PAD.t + cH}Z`;
+        return <svg width={W} height={H} style={{ display: 'block', width: '100%' }}>
+          <text x={W / 2} y={12} textAnchor="middle" fontSize="9" fill="#666" letterSpacing="0.05em">{title}</text>
+          {[0, 0.5, 1].map((f, i) => <g key={i}>
+            <line x1={PAD.l} y1={yS(mn + f * rng)} x2={W - PAD.r} y2={yS(mn + f * rng)} stroke="#1a1a1a" strokeWidth="0.5" />
+            <text x={PAD.l - 3} y={yS(mn + f * rng) + 3} textAnchor="end" fontSize="7" fill="#444">{fmt ? fmt(mn + f * rng) : (mn + f * rng).toFixed(1)}</text>
+          </g>)}
+          <path d={area} fill={color + '18'} />
+          <path d={path} fill="none" stroke={color} strokeWidth="1.4" />
+          {vals.map((v, i) => <g key={i}>
+            <circle cx={xS(i)} cy={yS(v)} r={2.5} fill={color} />
+            <text x={xS(i)} y={H - 5} textAnchor="middle" fontSize="7" fill="#444">{quarters[i].label}</text>
+          </g>)}
+        </svg>;
+      }
+
+      return <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px' }}>
+        <BarChart title="QUARTERLY EPS ($)" vals={quarters.map(q => q.eps)} color="#5ba3ff" beat={quarters.map(q => q.beat)} />
+        <LineChart title="PROFIT MARGIN (%)" vals={quarters.map(q => q.margin)} color="#00d26a" fmt={v => v.toFixed(1) + '%'} />
+        <BarChart title="REVENUE ($B)" vals={quarters.map(q => q.rev)} color="#f0a500" />
+        <LineChart title="P/E RATIO" vals={quarters.map(q => q.pe)} color="#c084fc" fmt={v => v.toFixed(1) + 'x'} />
       </div>;
     }
 
@@ -569,7 +652,7 @@
     }
 
     /* ── Stock Detail Panel ── */
-    function StockDetail({ stock, history, indicators, onClose, heatMode, isWatchlisted, onToggleWatchlist }) {
+    function StockDetail({ stock, history, indicators, spyHistory, spyIndicators, onClose, heatMode, isWatchlisted, onToggleWatchlist }) {
       const [tab, setTab] = useState('chart');
       const s = stock;
       const infoRows = [
@@ -637,7 +720,8 @@
               </div>
             </div>}
             {tab === 'chart' && <>
-              <TechnicalChart history={history} indicators={indicators} heatMode={heatMode} />
+              <TechnicalChart history={history} indicators={indicators} heatMode={heatMode}
+                spyHistory={spyHistory} spyIndicators={spyIndicators} />
               <div style={{ marginTop: 8, display: 'flex', gap: 16 }}>
                 <div style={{ flex: 1 }}><RsiChart rsiSeries={indicators?.rsi} width={Math.min(window.innerWidth * 0.4, 580)} height={80} /></div>
                 <div style={{ flex: 1 }}><MacdChart macdData={indicators?.macd} width={Math.min(window.innerWidth * 0.4, 580)} height={80} /></div>
@@ -1641,6 +1725,8 @@
       const [sectors, setSectors] = useState([]);
       const [universeStatus, setUniverseStatus] = useState(null);
       const [rateLimitExceeded, setRateLimitExceeded] = useState(false);
+      const [spyHistory, setSpyHistory] = useState(null);
+      const [spyIndicators, setSpyIndicators] = useState(null);
       const filtersRef = useRef(filters);
       const loadGen = useRef(0);
 
@@ -1713,6 +1799,14 @@
       useEffect(() => {
         if (user) loadScreener(filtersRef.current, false);
       }, [filters, user]);
+
+      /* Fetch SPY baseline once on load */
+      useEffect(() => {
+        if (!user) return;
+        apiFetch('/api/stocks/SPY/history').then(r => r.ok && r.json()).then(d => {
+          if (d) { setSpyHistory(d.bars); setSpyIndicators(d.indicators); }
+        }).catch(() => { });
+      }, [user]);
 
       /* Watchlist toggle */
       const toggleWatchlist = useCallback(async (ticker) => {
@@ -1789,6 +1883,7 @@
           </div>
           {selected && <StockDetail
             stock={selected} history={selectedHistory} indicators={selectedIndicators}
+            spyHistory={spyHistory} spyIndicators={spyIndicators}
             onClose={() => setSelected(null)} heatMode={heatMode}
             isWatchlisted={watchlistSet.has(selected.ticker)}
             onToggleWatchlist={() => toggleWatchlist(selected.ticker)} />}

@@ -1,15 +1,19 @@
+import asyncio
 import json
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
-from database.db import get_db
+from database.db import get_db, SessionLocal
 from database.models import User, StockCache
 from auth.deps import get_current_user
 from services.market_data import get_universe_status
 from services.universe import UNIVERSE
 
 router = APIRouter(prefix="/api/screener", tags=["screener"])
+
+# Track whether a manual refresh is currently running
+_refresh_task: Optional[asyncio.Task] = None
 
 
 class ScreenerFilters(BaseModel):
@@ -176,3 +180,48 @@ def universe_status_endpoint(
     user: User = Depends(get_current_user),
 ):
     return get_universe_status(db, UNIVERSE)
+
+
+@router.post("/refresh")
+async def trigger_refresh(
+    user: User = Depends(get_current_user),
+):
+    """Kick off a one-shot forced background universe data refresh. Returns immediately."""
+    global _refresh_task
+    # If a refresh is already running, don't start another one
+    if _refresh_task is not None and not _refresh_task.done():
+        return {"status": "already_running"}
+
+    from services.market_data import get_quote, limiter
+    sem = asyncio.Semaphore(5)
+
+    async def _do_refresh():
+        async def fetch_one(ticker: str):
+            if not await limiter.increment():
+                return  # rate limit hit — skip
+            async with sem:
+                db = SessionLocal()
+                try:
+                    await get_quote(ticker, db, force_refresh=True)
+                except Exception:
+                    pass
+                finally:
+                    db.close()
+                await asyncio.sleep(1.8)
+
+        await asyncio.gather(*[fetch_one(t) for t in UNIVERSE])
+
+    _refresh_task = asyncio.create_task(_do_refresh())
+    return {"status": "started"}
+
+
+@router.get("/refresh/status")
+async def refresh_status(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Returns whether a manual refresh is currently running, plus universe status."""
+    global _refresh_task
+    running = _refresh_task is not None and not _refresh_task.done()
+    status = get_universe_status(db, UNIVERSE)
+    return {**status, "refresh_running": running}

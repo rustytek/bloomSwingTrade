@@ -2095,11 +2095,6 @@
 
       /* Screener */
       const loadScreener = useCallback(async (f, force = false) => {
-        if (force && rateLimitExceeded) {
-          alert("Hourly yfinance API rate limit (2000) reached. Further queries are temporarily disabled to prevent blocking.");
-          return;
-        }
-
         const gen = ++loadGen.current;
         setLoading(true);
         try {
@@ -2117,7 +2112,35 @@
           }
         } catch (e) { }
         if (gen === loadGen.current) setLoading(false);
-      }, [rateLimitExceeded]);
+      }, []);
+
+      /* Refresh — trigger forced market data reload, poll until done */
+      const handleRefresh = useCallback(async () => {
+        if (rateLimitExceeded) {
+          alert("Hourly yfinance API rate limit (2000) reached. Further queries are temporarily disabled to prevent blocking.");
+          return;
+        }
+        setLoading(true);
+        try {
+          // Kick off the forced background refresh
+          await apiFetch('/api/screener/refresh', { method: 'POST' });
+          // Poll until the background refresh finishes
+          while (true) {
+            await new Promise(res => setTimeout(res, 3000));
+            const sr = await apiFetch('/api/screener/refresh/status');
+            if (sr.ok) {
+              const sd = await sr.json();
+              if (sd.last_updated_time) setUniverseStatus(sd);
+              if (!sd.refresh_running) break;
+            } else {
+              break;
+            }
+          }
+          // Now re-fetch screener results with fresh data
+          await loadScreener(filtersRef.current, false);
+        } catch (e) { }
+        setLoading(false);
+      }, [rateLimitExceeded, loadScreener]);
 
       /* Poll universe status while loading */
       useEffect(() => {
@@ -2212,7 +2235,7 @@
           showCompare={showCompare} setShowCompare={setShowCompare}
           visibleCols={visibleCols} setVisibleCols={setVisibleCols}
           onShowSave={() => setShowSave(true)}
-          onRefresh={() => loadScreener(filtersRef.current, true)}
+          onRefresh={handleRefresh}
           loading={loading} watchlist={watchlist} />
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
           <Sidebar filters={filters} setFilters={setFilters} sectors={sectors} />

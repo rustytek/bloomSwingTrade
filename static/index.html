@@ -313,6 +313,7 @@
       beta_min: '', beta_max: '', div_min: '', div_max: '', sectors: [],
       asset_type: '', cap_tier: '',
       score_min: '', score_f_min: '', score_t_min: '', score_m_min: '',
+      tickers: [],
       force_refresh: false,
     });
 
@@ -1774,7 +1775,7 @@
     function Toolbar({ filters, setFilters, results, heatMode, setHeatMode,
       showPortfolio, setShowPortfolio, showWatchlist, setShowWatchlist,
       showCompare, setShowCompare,
-      visibleCols, setVisibleCols, onShowSave, onRefresh, loading }) {
+      visibleCols, setVisibleCols, onShowSave, onRefresh, loading, watchlist }) {
       const [showPresets, setShowPresets] = useState(false);
       const [showCols, setShowCols] = useState(false);
       const [dragCol, setDragCol] = useState(null);
@@ -1827,6 +1828,27 @@
               onMouseOver={e => e.currentTarget.style.color = '#f0a500'} onMouseOut={e => e.currentTarget.style.color = '#aaa'}>
               {p.name}
             </div>)}
+            <div style={{ borderTop: '1px solid #222', margin: '4px 0' }} />
+            <div onClick={() => { setFilters(() => ({ ...defFilters(), tickers: [...watchlist] })); setShowPresets(false); }}
+              style={{ padding: '7px 12px', cursor: 'pointer', fontSize: 12, color: '#00d26a', borderBottom: '1px solid #1a1a1a' }}
+              onMouseOver={e => e.currentTarget.style.color = '#fff'} onMouseOut={e => e.currentTarget.style.color = '#00d26a'}>
+              ★ My Watchlist
+            </div>
+            <div onClick={async () => {
+              setShowPresets(false);
+              try {
+                const r = await apiFetch('/api/portfolio');
+                if (r.ok) {
+                  const data = await r.json();
+                  const tickers = (data.holdings || data || []).map(h => h.ticker || h).filter(Boolean);
+                  setFilters(() => ({ ...defFilters(), tickers }));
+                }
+              } catch(e) {}
+            }}
+              style={{ padding: '7px 12px', cursor: 'pointer', fontSize: 12, color: '#f0a500', borderBottom: '1px solid #1a1a1a' }}
+              onMouseOver={e => e.currentTarget.style.color = '#fff'} onMouseOut={e => e.currentTarget.style.color = '#f0a500'}>
+              💼 My Portfolio
+            </div>
             <div onClick={() => { setFilters(defFilters()); setShowPresets(false); }}
               style={{ padding: '7px 12px', cursor: 'pointer', fontSize: 12, color: '#555', borderTop: '1px solid #1a1a1a' }}
               onMouseOver={e => e.currentTarget.style.color = '#ff4d4d'} onMouseOut={e => e.currentTarget.style.color = '#555'}>
@@ -2191,7 +2213,7 @@
           visibleCols={visibleCols} setVisibleCols={setVisibleCols}
           onShowSave={() => setShowSave(true)}
           onRefresh={() => loadScreener(filtersRef.current, true)}
-          loading={loading} />
+          loading={loading} watchlist={watchlist} />
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
           <Sidebar filters={filters} setFilters={setFilters} sectors={sectors} />
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>

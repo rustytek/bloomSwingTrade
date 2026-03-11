@@ -63,6 +63,9 @@ class ScreenerFilters(BaseModel):
     score_t_min: Optional[int] = None
     score_m_min: Optional[int] = None
 
+    # Ticker allow-list (for watchlist/portfolio presets)
+    tickers: list[str] = []
+
     force_refresh: bool = False
 
 
@@ -77,6 +80,9 @@ def _passes(stock: dict, f: ScreenerFilters) -> bool:
         return True
 
     qt = stock.get("quote_type", "EQUITY")
+    # Ticker allow-list filter (watchlist / portfolio presets)
+    if f.tickers and stock.get("ticker", "").upper() not in {t.upper() for t in f.tickers}:
+        return False
     if f.asset_type == "stocks" and qt in ("ETF", "MUTUALFUND"):
         return False
     if f.asset_type == "etfs" and qt not in ("ETF", "MUTUALFUND"):

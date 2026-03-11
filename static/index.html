@@ -309,10 +309,18 @@
     });
 
     /* ── Small components ── */
-    function ScoreDots({ val, max = 5, color = '#f0a500' }) {
+    function scoreGradient(val, max = 5) {
+      const t = Math.max(0, Math.min(1, (val - 1) / (max - 1)));
+      const r = Math.round(255 * (1 - t));
+      const g = Math.round(77 + 133 * t);
+      const b = Math.round(77 * (1 - t) + 106 * t);
+      return `rgb(${r},${g},${b})`;
+    }
+    function ScoreDots({ val, max = 5, color }) {
+      const c = color || (val > 0 ? scoreGradient(val, max) : '#f0a500');
       return <span style={{ display: 'inline-flex', gap: 2 }}>
         {Array.from({ length: max }, (_, i) => (
-          <span key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: i < val ? color : '#2a2a2a', border: `1px solid ${i < val ? color : '#333'}` }} />
+          <span key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: i < val ? c : '#2a2a2a', border: `1px solid ${i < val ? c : '#333'}` }} />
         ))}
       </span>;
     }
@@ -1576,7 +1584,8 @@
             <div style={{ fontSize: 10, color: '#555', marginBottom: 6, textTransform: 'uppercase', letterSpacing: .5 }}>
               Drag to reorder · click to toggle
             </div>
-            {ALL_COLS.map(col => {
+            {[...visibleCols.map(k => ALL_COLS.find(c => c.k === k)).filter(Boolean),
+               ...ALL_COLS.filter(c => !visibleCols.includes(c.k))].map(col => {
               const on = visibleCols.includes(col.k);
               return <div key={col.k} draggable onDragStart={() => setDragCol(col.k)}
                 onDragOver={e => e.preventDefault()} onDrop={() => handleDrop(col.k)}
@@ -1604,7 +1613,7 @@
 
     /* ── Results Table ── */
     function ResultsTable({ results, loading, heatMode, onSelect, sortKey, sortDir, onSort, visibleCols, watchlistSet }) {
-      const cols = ALL_COLS.filter(c => visibleCols.includes(c.k));
+      const cols = visibleCols.map(k => ALL_COLS.find(c => c.k === k)).filter(Boolean);
       const renderCell = (s, k) => {
         switch (k) {
           case 'ticker': return <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>

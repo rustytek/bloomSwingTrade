@@ -34,6 +34,10 @@
       min-width: 1280px
     }
 
+    #root {
+      height: 100%
+    }
+
     ::-webkit-scrollbar {
       width: 5px;
       height: 5px
@@ -241,7 +245,7 @@
       vol_r: 'Volume ratio: recent 5-day avg vs 20-day avg. >1.5 = high volume (confirmation)',
       beta: 'Volatility vs S&P 500. 1.0=market, >1=more volatile, <1=less volatile',
       div: 'Annual dividend yield %. Income investors seek >2%',
-      ann_ret: 'Annualized return based on 6-month price history',
+      ann_ret: 'Annualized return based on the last 1 month (21 trading days) of price data',
       sharpe: 'Sharpe ratio: return per unit of risk. >1=good, >2=excellent',
       score_f: 'Fundamental score 0-5. Rates P/E, margins, growth, debt, FCF',
       score_t: 'Technical score 0-5. Rates RSI, MACD, MA position, volume',
@@ -249,6 +253,8 @@
       score: 'Overall composite score 0-5. Average of F+T+M scores',
       gc: 'Golden Cross: MA50 crossed above MA200 (bullish long-term signal)',
       dc: 'Death Cross: MA50 crossed below MA200 (bearish long-term signal)',
+      vol_1m: '1-month annualized volatility (std dev of daily returns × √252). Lower=less risky. <20%=low, >40%=high',
+      max_dd_1m: 'Max drawdown over the last 1 month: largest peak-to-trough decline. Lower is better',
     };
 
     const ALL_COLS = [
@@ -280,6 +286,8 @@
       { k: 'score_t', label: 'T', w: 42 },
       { k: 'score_m', label: 'M', w: 42 },
       { k: 'score', label: 'Score', w: 76 },
+      { k: 'vol_1m', label: 'Vol 1M', w: 68 },
+      { k: 'max_dd_1m', label: 'MaxDD 1M', w: 80 },
     ];
     const DEFAULT_COLS = ['ticker', 'name', 'spark', 'price', 'chg_pct', 'mkt_cap', 'pe', 'rsi', 'macd_sig', 'vs_ma50', 'p52w', 'vol_r', 'gain_sharpe', 'vol', 'score_f', 'score_t', 'score_m', 'score'];
 
@@ -1033,7 +1041,10 @@
     /* ── Compare Panel ── */
     const CMP_COLORS = ['#f0a500', '#3b9eff', '#00d26a', '#ff4d4d', '#a855f7', '#06b6d4', '#f97316', '#ec4899', '#84cc16', '#f43f5e', '#8b5cf6', '#14b8a6', '#fb923c', '#c084fc', '#34d399', '#fbbf24', '#60a5fa', '#4ade80'];
     function ComparePanel({ watchlist, onClose }) {
-      const [source, setSource] = useState('watchlist');
+      const [tab, setTab] = useState('performance'); // 'performance', 'returns', 'correlation'
+      const [perfSource, setPerfSource] = useState('watchlist');
+      const [returnsSource, setReturnsSource] = useState('watchlist');
+      const [corrSource, setCorrSource] = useState('watchlist');
       const [period, setPeriod] = useState(30);
       const [showSpy, setShowSpy] = useState(true);
       const [portfolioTickers, setPortfolioTickers] = useState([]);
@@ -1051,19 +1062,27 @@
         });
       }, []);
 
-      const tickers = useMemo(() => {
+      const getTickersForSource = (source) => {
         const wl = [...watchlist], pt = [...portfolioTickers];
         if (source === 'watchlist') return wl;
         if (source === 'portfolio') return pt;
         return [...new Set([...wl, ...pt])];
-      }, [source, watchlist, portfolioTickers]);
+      };
 
-      const tickerKey = tickers.join(',');
+      const perfTickers = useMemo(() => getTickersForSource(perfSource), [perfSource, watchlist, portfolioTickers]);
+      const returnsTickers = useMemo(() => getTickersForSource(returnsSource), [returnsSource, watchlist, portfolioTickers]);
+      const corrTickers = useMemo(() => getTickersForSource(corrSource), [corrSource, watchlist, portfolioTickers]);
+
+      const allUniqueTickers = useMemo(() => {
+        return [...new Set([...perfTickers, ...returnsTickers, ...corrTickers])];
+      }, [perfTickers, returnsTickers, corrTickers]);
+
+      const tickerKey = allUniqueTickers.join(',');
       useEffect(() => {
         if (!tickerKey) { setLoading(false); setHistories({}); return; }
         setLoading(true);
         const result = {};
-        Promise.all(tickers.map(async ticker => {
+        Promise.all(allUniqueTickers.map(async ticker => {
           try {
             const r = await apiFetch(`/api/stocks/${ticker}/history`);
             if (r.ok) { const d = await r.json(); result[ticker] = d.bars || []; }
@@ -1082,7 +1101,7 @@
       };
 
       const chartData = useMemo(() => {
-        return tickers.map((ticker, i) => {
+        return perfTickers.map((ticker, i) => {
           const n = normalize(histories[ticker] || []);
           if (!n) return null;
           return {
@@ -1091,7 +1110,7 @@
             startDate: n.startDate, endDate: n.endDate, isBenchmark: false
           };
         }).filter(Boolean).sort((a, b) => b.current - a.current);
-      }, [histories, tickers, period]);
+      }, [histories, perfTickers, period]);
 
       const spyData = useMemo(() => {
         const n = normalize(spyHistory);
@@ -1115,6 +1134,158 @@
       const yTicks = [];
       for (let v = Math.ceil(yMin / tickStep) * tickStep; v <= yMax; v += tickStep)yTicks.push(v);
 
+      // Annualized Returns Calculation
+      const calculateAnnualizedReturns = (tickerList) => {
+        const results = tickerList.map(ticker => {
+          const bars = histories[ticker] || [];
+          const sliced = period === 182 ? bars : bars.slice(-period);
+          if (sliced.length < 2) return null;
+
+          const startPrice = sliced[0].close;
+          const endPrice = sliced[sliced.length - 1].close;
+          const numDays = sliced.length;
+
+          if (numDays === 0 || startPrice === 0) return null;
+
+          const totalReturn = (endPrice - startPrice) / startPrice;
+          const annualizedReturn = Math.pow(1 + totalReturn, 365 / numDays) - 1;
+          return { ticker, annualizedReturn: annualizedReturn * 100 };
+        }).filter(Boolean).sort((a, b) => b.annualizedReturn - a.annualizedReturn);
+        return results;
+      };
+
+      const annualizedReturnsData = useMemo(() => calculateAnnualizedReturns(returnsTickers), [histories, returnsTickers, period]);
+
+      // Correlation Matrix Calculation
+      const calculateCorrelationMatrix = (tickerList) => {
+        if (tickerList.length < 2) return { matrix: [], tickers: [] };
+
+        const validTickers = tickerList.filter(ticker => {
+          const bars = histories[ticker] || [];
+          const sliced = period === 182 ? bars : bars.slice(-period);
+          return sliced.length >= 2;
+        });
+
+        if (validTickers.length < 2) return { matrix: [], tickers: [] };
+
+        const dailyReturns = {};
+        validTickers.forEach(ticker => {
+          const bars = histories[ticker] || [];
+          const sliced = period === 182 ? bars : bars.slice(-period);
+          dailyReturns[ticker] = sliced.slice(1).map((bar, i) => (bar.close - sliced[i].close) / sliced[i].close);
+        });
+
+        const commonLength = Math.min(...Object.values(dailyReturns).map(arr => arr.length));
+        for (const ticker in dailyReturns) {
+          dailyReturns[ticker] = dailyReturns[ticker].slice(0, commonLength);
+        }
+
+        const matrix = Array(validTickers.length).fill(0).map(() => Array(validTickers.length).fill(0));
+
+        for (let i = 0; i < validTickers.length; i++) {
+          for (let j = i; j < validTickers.length; j++) {
+            const returns1 = dailyReturns[validTickers[i]];
+            const returns2 = dailyReturns[validTickers[j]];
+
+            if (returns1.length === 0 || returns2.length === 0) {
+              matrix[i][j] = matrix[j][i] = NaN;
+              continue;
+            }
+
+            const mean1 = returns1.reduce((sum, val) => sum + val, 0) / returns1.length;
+            const mean2 = returns2.reduce((sum, val) => sum + val, 0) / returns2.length;
+
+            let numerator = 0;
+            let denominator1 = 0;
+            let denominator2 = 0;
+
+            for (let k = 0; k < returns1.length; k++) {
+              numerator += (returns1[k] - mean1) * (returns2[k] - mean2);
+              denominator1 += Math.pow(returns1[k] - mean1, 2);
+              denominator2 += Math.pow(returns2[k] - mean2, 2);
+            }
+
+            const correlation = numerator / (Math.sqrt(denominator1) * Math.sqrt(denominator2));
+            matrix[i][j] = matrix[j][i] = isNaN(correlation) ? 0 : correlation; // Handle NaN for zero variance
+          }
+        }
+        return { matrix, tickers: validTickers };
+      };
+
+      const correlationData = useMemo(() => calculateCorrelationMatrix(corrTickers), [histories, corrTickers, period]);
+
+      const getCorrelationColor = (value) => {
+        if (value > 0.7) return '#00d26a'; // Strong positive
+        if (value > 0.3) return '#84cc16'; // Moderate positive
+        if (value > -0.3) return '#555'; // Weak/Neutral
+        if (value > -0.7) return '#fb923c'; // Moderate negative
+        return '#ff4d4d'; // Strong negative
+      };
+
+      // ── Annualized return color scale ──
+      const annRetColor = (v) => {
+        if (v == null) return '#1a1a1a';
+        const c = Math.max(-60, Math.min(100, v));
+        if (c >= 0) { const t = c / 100; return `rgb(${Math.round(26*(1-t))},${Math.round(26+t*184)},${Math.round(26+t*54)})`; }
+        const t = -c / 60; return `rgb(${Math.round(26+t*204)},${Math.round(26*(1-t))},${Math.round(26*(1-t))})`;
+      };
+
+      // ── Annualized return periods ──
+      const ANN_PERIODS = [
+        { label: '7D', bars: 7 },
+        { label: '91D', bars: 91 },
+        { label: '1mo', bars: 21 },
+        { label: '1y', bars: 252 },
+      ];
+      const calcAnnRet = (bars, n) => {
+        const slice = bars.slice(-n);
+        if (slice.length < 2) return null;
+        const ratio = slice[slice.length - 1].close / slice[0].close;
+        if (ratio <= 0) return null;
+        return (Math.pow(ratio, 252 / slice.length) - 1) * 100;
+      };
+      const annData = useMemo(() =>
+        returnsTickers.map(ticker => ({
+          ticker,
+          values: ANN_PERIODS.map(p => calcAnnRet(histories[ticker] || [], p.bars))
+        })).filter(d => d.values.some(v => v != null))
+      , [histories, returnsTickers]);
+
+      // Sort state for annualized return: { col: 'ticker'|0|1|2|3, dir: 'asc'|'desc' }
+      const [annSort, setAnnSort] = useState({ col: null, dir: 'desc' });
+      const sortedAnnData = useMemo(() => {
+        if (!annData.length) return annData;
+        const { col, dir } = annSort;
+        if (col === null) return annData;
+        const mult = dir === 'desc' ? -1 : 1;
+        return [...annData].sort((a, b) => {
+          if (col === 'ticker') return mult * a.ticker.localeCompare(b.ticker);
+          const va = a.values[col] ?? -Infinity;
+          const vb = b.values[col] ?? -Infinity;
+          return mult * (va - vb);
+        });
+      }, [annData, annSort]);
+      const handleAnnSort = (col) => {
+        setAnnSort(prev => ({
+          col,
+          dir: prev.col === col && prev.dir === 'desc' ? 'asc' : 'desc'
+        }));
+      };
+
+      // ── Source selector pill ──
+      const SourceSel = ({ value, onChange }) => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <span style={{ fontSize: 10, color: '#555', letterSpacing: .4, textTransform: 'uppercase', marginRight: 2 }}>Source</span>
+          {[['watchlist', '★ Watchlist'], ['portfolio', 'Portfolio'], ['both', 'Both']].map(([v, lbl]) => (
+            <button key={v} onClick={() => onChange(v)}
+              style={{
+                padding: '4px 10px', borderRadius: 3, fontSize: 11, border: '1px solid #2a2a2a',
+                background: value === v ? '#f0a500' : '#1a1a1a', color: value === v ? '#000' : '#888'
+              }}>{lbl}</button>
+          ))}
+        </div>
+      );
+
       return createPortal(
         <div onClick={e => { if (e.target === e.currentTarget) onClose(); }}
           style={{ position: 'fixed', inset: 0, background: '#000c', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1122,117 +1293,254 @@
             background: '#111', border: '1px solid #222', borderRadius: 6, width: '95vw', maxWidth: 1400,
             height: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden'
           }}>
+            {/* ── Header ── */}
             <div style={{ padding: '12px 16px', borderBottom: '1px solid #1a1a1a', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
               <button onClick={onClose} style={{ background: '#1a1a1a', color: '#888', padding: '4px 10px', borderRadius: 3, fontSize: 12 }}>✕</button>
-              <span style={{ fontWeight: 600, color: '#f0a500', fontSize: 14 }}>Performance Comparison</span>
-              <span style={{ fontSize: 11, color: '#555' }}>— normalized price return from period start</span>
+              <span style={{ fontWeight: 600, color: '#f0a500', fontSize: 14 }}>Compare</span>
+              <span style={{ fontSize: 11, color: '#555' }}>— side-by-side analysis</span>
             </div>
-            <div style={{ padding: '10px 16px', borderBottom: '1px solid #1a1a1a', display: 'flex', alignItems: 'center', gap: 20, flexShrink: 0, flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                <span style={{ fontSize: 10, color: '#555', letterSpacing: .4, textTransform: 'uppercase', marginRight: 2 }}>Source</span>
-                {[['watchlist', '★ Watchlist'], ['portfolio', 'Portfolio'], ['both', 'Both']].map(([v, lbl]) => (
-                  <button key={v} onClick={() => setSource(v)}
-                    style={{
-                      padding: '4px 10px', borderRadius: 3, fontSize: 11, border: '1px solid #2a2a2a',
-                      background: source === v ? '#f0a500' : '#1a1a1a', color: source === v ? '#000' : '#888'
-                    }}>
-                    {lbl}
-                  </button>
-                ))}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                <span style={{ fontSize: 10, color: '#555', letterSpacing: .4, textTransform: 'uppercase', marginRight: 2 }}>Period</span>
-                {[[7, '7D'], [14, '14D'], [21, '21D'], [30, '30D'], [182, '6M']].map(([v, lbl]) => (
-                  <button key={v} onClick={() => setPeriod(v)}
-                    style={{
-                      padding: '4px 10px', borderRadius: 3, fontSize: 11, border: '1px solid #2a2a2a',
-                      background: period === v ? '#f0a500' : '#1a1a1a', color: period === v ? '#000' : '#888'
-                    }}>
-                    {lbl}
-                  </button>
-                ))}
-              </div>
-              <button onClick={() => setShowSpy(s => !s)}
-                style={{
-                  padding: '4px 10px', borderRadius: 3, fontSize: 11, border: '1px solid #2a2a2a',
-                  background: showSpy ? '#1e2a1e' : '#1a1a1a', color: showSpy ? '#888' : '#444',
-                  borderColor: showSpy ? '#555' : '#2a2a2a'
-                }}>
-                ▬ S&amp;P 500 (SPY)
-              </button>
-              <span style={{ marginLeft: 'auto', fontSize: 11, color: '#444' }}>{chartData.length} ticker{chartData.length !== 1 ? 's' : ''}</span>
+            {/* ── Tab bar ── */}
+            <div style={{ display: 'flex', borderBottom: '1px solid #1a1a1a', paddingLeft: 16, flexShrink: 0 }}>
+              {[['performance', '📈 Performance'], ['annualized', '📊 Annualized Return'], ['correlation', '🔗 Correlation Matrix']].map(([t, lbl]) => (
+                <button key={t} onClick={() => setTab(t)} style={{
+                  padding: '9px 16px', background: 'none', fontSize: 12, fontWeight: tab === t ? 600 : 400,
+                  color: tab === t ? '#f0a500' : '#555',
+                  borderBottom: tab === t ? '2px solid #f0a500' : '2px solid transparent',
+                  marginBottom: -1
+                }}>{lbl}</button>
+              ))}
             </div>
-            <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
-              {loading && <div style={{ textAlign: 'center', color: '#f0a500', padding: 60, fontSize: 12 }}>Fetching price histories…</div>}
-              {!loading && tickers.length === 0 && <div style={{ textAlign: 'center', color: '#444', padding: 60, fontSize: 12 }}>
-                No tickers in {source === 'both' ? 'your watchlist or portfolio' : source}.<br />
-                Add stocks via the {source === 'portfolio' ? 'Portfolio' : '★ Watchlist'} panel first.
-              </div>}
-              {!loading && tickers.length > 0 && chartData.length === 0 && <div style={{ textAlign: 'center', color: '#555', padding: 40, fontSize: 12 }}>
-                Not enough history data yet — check back after the background refresh completes.
-              </div>}
-              {!loading && allLines.length > 0 && <>
-                <svg width={W} height={H} style={{ display: 'block', maxWidth: '100%', overflow: 'visible' }}>
-                  {yTicks.map(v => <g key={v}>
-                    <line x1={PAD.l} y1={yOf(v)} x2={W - PAD.r} y2={yOf(v)}
-                      stroke={v === 0 ? '#333' : '#1a1a1a'} strokeWidth={v === 0 ? 1.5 : 1} strokeDasharray={v !== 0 ? '3,3' : ''} />
-                    <text x={PAD.l - 5} y={yOf(v) + 4} textAnchor="end" fontSize={9} fill={v === 0 ? '#666' : '#444'}>
-                      {v > 0 ? '+' : ''}{v}%
-                    </text>
-                  </g>)}
-                  {/* Regular ticker lines */}
-                  {chartData.map(d => <polyline key={d.ticker}
-                    points={d.pct.map((v, i) => `${xOf(i, d.pct.length)},${yOf(v)}`).join(' ')}
-                    fill="none" stroke={d.color} strokeWidth={1.8} strokeLinejoin="round" opacity={0.85} />)}
-                  {chartData.map(d => {
-                    const last = d.pct[d.pct.length - 1];
-                    return <circle key={d.ticker} cx={xOf(d.pct.length - 1, d.pct.length)} cy={yOf(last)} r={3} fill={d.color} />;
-                  })}
-                  {/* SPY benchmark — dashed gray line drawn on top */}
-                  {showSpy && spyData && <>
-                    <polyline
-                      points={spyData.pct.map((v, i) => `${xOf(i, spyData.pct.length)},${yOf(v)}`).join(' ')}
-                      fill="none" stroke="#777" strokeWidth={1.5} strokeDasharray="6,3" opacity={0.9} />
-                    <circle cx={xOf(spyData.pct.length - 1, spyData.pct.length)}
-                      cy={yOf(spyData.pct[spyData.pct.length - 1])} r={3} fill="#777" />
-                  </>}
-                  {allLines[0] && <>
-                    <text x={PAD.l} y={H - 2} fontSize={9} fill="#444">{allLines[0].startDate}</text>
-                    <text x={W - PAD.r} y={H - 2} textAnchor="end" fontSize={9} fill="#444">{allLines[0].endDate}</text>
-                  </>}
-                </svg>
-                <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 4 }}>
-                  {/* SPY benchmark row at top of legend */}
-                  {showSpy && spyData && <div style={{
-                    display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px',
-                    background: '#0d0d0d', borderRadius: 3, border: '1px solid #222', gridColumn: '1/-1', maxWidth: 230
-                  }}>
-                    <span style={{
-                      width: 22, height: 2, background: '#777', flexShrink: 0, display: 'inline-block',
-                      backgroundImage: 'repeating-linear-gradient(90deg,#777 0,#777 6px,transparent 6px,transparent 9px)'
-                    }} />
-                    <span className="mono" style={{ flex: 1, fontSize: 12, fontWeight: 600, color: '#777' }}>SPY</span>
-                    <span style={{ fontSize: 10, color: '#555', marginRight: 4 }}>S&amp;P 500</span>
-                    <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: spyData.current >= 0 ? '#00d26a' : '#ff4d4d' }}>
-                      {spyData.current >= 0 ? '+' : ''}{spyData.current.toFixed(2)}%
-                    </span>
-                  </div>}
-                  {chartData.map((d, i) => (
-                    <div key={d.ticker} style={{
-                      display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px',
-                      background: '#0d0d0d', borderRadius: 3, border: '1px solid #1a1a1a'
-                    }}>
-                      <span style={{ width: 12, height: 12, borderRadius: '50%', background: d.color, flexShrink: 0, display: 'inline-block' }} />
-                      <span className="mono" style={{ flex: 1, fontSize: 12, fontWeight: 600, color: '#c8c8c8' }}>{d.ticker}</span>
-                      <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: d.current >= 0 ? '#00d26a' : '#ff4d4d' }}>
-                        {d.current >= 0 ? '+' : ''}{d.current.toFixed(2)}%
-                      </span>
-                      <span style={{ fontSize: 9, color: '#444' }}>#{i + 1}</span>
-                    </div>
+
+            {/* ══ PERFORMANCE TAB ══ */}
+            {tab === 'performance' && <>
+              <div style={{ padding: '10px 16px', borderBottom: '1px solid #1a1a1a', display: 'flex', alignItems: 'center', gap: 20, flexShrink: 0, flexWrap: 'wrap' }}>
+                <SourceSel value={perfSource} onChange={setPerfSource} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <span style={{ fontSize: 10, color: '#555', letterSpacing: .4, textTransform: 'uppercase', marginRight: 2 }}>Period</span>
+                  {[[7, '7D'], [14, '14D'], [21, '21D'], [30, '30D'], [182, '6M']].map(([v, lbl]) => (
+                    <button key={v} onClick={() => setPeriod(v)}
+                      style={{ padding: '4px 10px', borderRadius: 3, fontSize: 11, border: '1px solid #2a2a2a', background: period === v ? '#f0a500' : '#1a1a1a', color: period === v ? '#000' : '#888' }}>{lbl}</button>
                   ))}
                 </div>
-              </>}
-            </div>
+                <button onClick={() => setShowSpy(s => !s)}
+                  style={{ padding: '4px 10px', borderRadius: 3, fontSize: 11, border: '1px solid', background: showSpy ? '#1e2a1e' : '#1a1a1a', color: showSpy ? '#888' : '#444', borderColor: showSpy ? '#555' : '#2a2a2a' }}>
+                  ▬ S&P 500 (SPY)
+                </button>
+                <span style={{ marginLeft: 'auto', fontSize: 11, color: '#444' }}>{chartData.length} ticker{chartData.length !== 1 ? 's' : ''}</span>
+              </div>
+              <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
+                {loading && <div style={{ textAlign: 'center', color: '#f0a500', padding: 60, fontSize: 12 }}>Fetching price histories…</div>}
+                {!loading && perfTickers.length === 0 && <div style={{ textAlign: 'center', color: '#444', padding: 60, fontSize: 12 }}>
+                  No tickers in {perfSource === 'both' ? 'your watchlist or portfolio' : perfSource}.<br />
+                  Add stocks via the {perfSource === 'portfolio' ? 'Portfolio' : '★ Watchlist'} panel first.
+                </div>}
+                {!loading && perfTickers.length > 0 && chartData.length === 0 && <div style={{ textAlign: 'center', color: '#555', padding: 40, fontSize: 12 }}>
+                  Not enough history data yet — check back after the background refresh completes.
+                </div>}
+                {!loading && allLines.length > 0 && <>
+                  <svg width={W} height={H} style={{ display: 'block', maxWidth: '100%', overflow: 'visible' }}>
+                    {yTicks.map(v => <g key={v}>
+                      <line x1={PAD.l} y1={yOf(v)} x2={W - PAD.r} y2={yOf(v)}
+                        stroke={v === 0 ? '#333' : '#1a1a1a'} strokeWidth={v === 0 ? 1.5 : 1} strokeDasharray={v !== 0 ? '3,3' : ''} />
+                      <text x={PAD.l - 5} y={yOf(v) + 4} textAnchor="end" fontSize={9} fill={v === 0 ? '#666' : '#444'}>
+                        {v > 0 ? '+' : ''}{v}%
+                      </text>
+                    </g>)}
+                    {chartData.map(d => <polyline key={d.ticker}
+                      points={d.pct.map((v, i) => `${xOf(i, d.pct.length)},${yOf(v)}`).join(' ')}
+                      fill="none" stroke={d.color} strokeWidth={1.8} strokeLinejoin="round" opacity={0.85} />)}
+                    {chartData.map(d => {
+                      const last = d.pct[d.pct.length - 1];
+                      return <circle key={d.ticker} cx={xOf(d.pct.length - 1, d.pct.length)} cy={yOf(last)} r={3} fill={d.color} />;
+                    })}
+                    {showSpy && spyData && <>
+                      <polyline points={spyData.pct.map((v, i) => `${xOf(i, spyData.pct.length)},${yOf(v)}`).join(' ')}
+                        fill="none" stroke="#777" strokeWidth={1.5} strokeDasharray="6,3" opacity={0.9} />
+                      <circle cx={xOf(spyData.pct.length - 1, spyData.pct.length)}
+                        cy={yOf(spyData.pct[spyData.pct.length - 1])} r={3} fill="#777" />
+                    </> }
+                    {allLines[0] && <>
+                      <text x={PAD.l} y={H - 2} fontSize={9} fill="#444">{allLines[0].startDate}</text>
+                      <text x={W - PAD.r} y={H - 2} textAnchor="end" fontSize={9} fill="#444">{allLines[0].endDate}</text>
+                    </>}
+                  </svg>
+                  <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 4 }}>
+                    {showSpy && spyData && <div style={{
+                      display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px',
+                      background: '#0d0d0d', borderRadius: 3, border: '1px solid #222', gridColumn: '1/-1', maxWidth: 230
+                    }}>
+                      <span style={{ width: 22, height: 2, background: '#777', flexShrink: 0, display: 'inline-block',
+                        backgroundImage: 'repeating-linear-gradient(90deg,#777 0,#777 6px,transparent 6px,transparent 9px)' }} />
+                      <span className="mono" style={{ flex: 1, fontSize: 12, fontWeight: 600, color: '#777' }}>SPY</span>
+                      <span style={{ fontSize: 10, color: '#555', marginRight: 4 }}>S&amp;P 500</span>
+                      <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: spyData.current >= 0 ? '#00d26a' : '#ff4d4d' }}>
+                        {spyData.current >= 0 ? '+' : ''}{spyData.current.toFixed(2)}%
+                      </span>
+                    </div>}
+                    {chartData.map((d, i) => (
+                      <div key={d.ticker} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', background: '#0d0d0d', borderRadius: 3, border: '1px solid #1a1a1a' }}>
+                        <span style={{ width: 12, height: 12, borderRadius: '50%', background: d.color, flexShrink: 0, display: 'inline-block' }} />
+                        <span className="mono" style={{ flex: 1, fontSize: 12, fontWeight: 600, color: '#c8c8c8' }}>{d.ticker}</span>
+                        <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: d.current >= 0 ? '#00d26a' : '#ff4d4d' }}>
+                          {d.current >= 0 ? '+' : ''}{d.current.toFixed(2)}%
+                        </span>
+                        <span style={{ fontSize: 9, color: '#444' }}>#{i + 1}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>}
+              </div>
+            </>}
+
+            {/* ══ ANNUALIZED RETURN TAB ══ */}
+            {tab === 'annualized' && <>
+              <div style={{ padding: '10px 16px', borderBottom: '1px solid #1a1a1a', display: 'flex', alignItems: 'center', gap: 20, flexShrink: 0 }}>
+                <SourceSel value={returnsSource} onChange={setReturnsSource} />
+                <span style={{ marginLeft: 'auto', fontSize: 11, color: '#444' }}>{annData.length} ticker{annData.length !== 1 ? 's' : ''}</span>
+              </div>
+              <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
+                {loading && <div style={{ textAlign: 'center', color: '#f0a500', padding: 60, fontSize: 12 }}>Fetching price histories…</div>}
+                {!loading && returnsTickers.length === 0 && <div style={{ textAlign: 'center', color: '#444', padding: 60, fontSize: 12 }}>
+                  No tickers in {returnsSource === 'both' ? 'your watchlist or portfolio' : returnsSource}.
+                </div>}
+                {!loading && annData.length === 0 && returnsTickers.length > 0 && <div style={{ textAlign: 'center', color: '#555', padding: 40, fontSize: 12 }}>
+                  Not enough history data yet.
+                </div>}
+                {!loading && annData.length > 0 && (() => {
+                  return <div style={{ display: 'flex', alignItems: 'stretch', gap: 16, overflowX: 'auto' }}>
+                    <div>
+                      <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: 500 }}>
+                        <thead>
+                          <tr>
+                            <th onClick={() => handleAnnSort('ticker')}
+                              style={{ textAlign: 'left', padding: '6px 16px 8px 0', color: annSort.col === 'ticker' ? '#f0a500' : '#555', fontWeight: 600, fontSize: 10, borderBottom: '1px solid #1a1a1a', width: 90, cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                              TICKER {annSort.col === 'ticker' ? (annSort.dir === 'desc' ? ' ▼' : ' ▲') : ' ⇅'}
+                            </th>
+                            {ANN_PERIODS.map((p, pi) => (
+                              <th key={p.label} onClick={() => handleAnnSort(pi)}
+                                style={{ padding: '6px 4px 8px', color: annSort.col === pi ? '#f0a500' : '#666', fontWeight: 600, fontSize: 10, borderBottom: '1px solid #1a1a1a', textAlign: 'center', minWidth: 100, cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                                {p.label} {annSort.col === pi ? (annSort.dir === 'desc' ? '▼' : '▲') : '⇅'}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sortedAnnData.map(({ ticker, values }) => (
+                            <tr key={ticker}>
+                              <td style={{ padding: '3px 16px 3px 0', fontFamily: "'JetBrains Mono',monospace", fontWeight: 700, color: '#f0a500', fontSize: 12 }}>{ticker}</td>
+                              {values.map((v, i) => (
+                                <td key={i} style={{ padding: '3px 4px', textAlign: 'center' }}>
+                                  <div style={{
+                                    background: annRetColor(v), borderRadius: 3, padding: '5px 10px',
+                                    fontFamily: "'JetBrains Mono',monospace", fontSize: 11, fontWeight: 600,
+                                    color: v == null ? '#444' : Math.abs(v) < 5 ? '#ddd' : '#fff'
+                                  }}>
+                                    {v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%'}
+                                  </div>
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {/* Vertical legend — stretches to match table height via parent align-items:stretch */}
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, paddingTop: 28, paddingBottom: 2, flexShrink: 0 }}>
+                      <span style={{ fontSize: 9, color: '#555' }}>+100%</span>
+                      <div style={{
+                        width: 10, flex: 1, borderRadius: 4,
+                        background: 'linear-gradient(180deg,#1aaa50 0%,#1a1a1a 50%,#c41a1a 100%)'
+                      }} />
+                      <span style={{ fontSize: 9, color: '#555' }}>–60%</span>
+                    </div>
+                  </div>;
+                })()}
+              </div>
+            </>}
+
+            {/* ══ CORRELATION MATRIX TAB ══ */}
+            {tab === 'correlation' && <>
+              <div style={{ padding: '10px 16px', borderBottom: '1px solid #1a1a1a', display: 'flex', alignItems: 'center', gap: 20, flexShrink: 0 }}>
+                <SourceSel value={corrSource} onChange={setCorrSource} />
+                <span style={{ marginLeft: 'auto', fontSize: 11, color: '#444' }}>{corrTickers.length} ticker{corrTickers.length !== 1 ? 's' : ''}</span>
+              </div>
+              <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
+                {loading && <div style={{ textAlign: 'center', color: '#f0a500', padding: 60, fontSize: 12 }}>Fetching price histories…</div>}
+                {!loading && corrTickers.length === 0 && <div style={{ textAlign: 'center', color: '#444', padding: 60, fontSize: 12 }}>
+                  No tickers in {corrSource === 'both' ? 'your watchlist or portfolio' : corrSource}.
+                </div>}
+                {!loading && corrTickers.length === 1 && <div style={{ textAlign: 'center', color: '#555', padding: 40, fontSize: 12 }}>
+                  Add at least 2 tickers to compute a correlation matrix.
+                </div>}
+                {!loading && correlationData && correlationData.tickers && correlationData.tickers.length >= 2 && (() => {
+                  const { tickers: ct, matrix } = correlationData;
+                  const cellSz = Math.max(40, Math.min(70, Math.floor(660 / ct.length)));
+                  const lblW = 64;
+                  const matrixH = ct.length * (cellSz + 1);
+                  const corrCellColor = (v) => {
+                    if (isNaN(v)) return '#1a1a1a';
+                    if (v > 0.7) return '#176b3a';
+                    if (v > 0.4) return '#1e8c4e';
+                    if (v > 0.1) return '#2aaa62';
+                    if (v > -0.1) return '#2a2a2a';
+                    if (v > -0.4) return '#8c3a1e';
+                    if (v > -0.7) return '#a6381a';
+                    return '#c41a1a';
+                  };
+                  return <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, overflowX: 'auto' }}>
+                    <div style={{ display: 'inline-block' }}>
+                      <div style={{ fontSize: 11, color: '#555', marginBottom: 14 }}>
+                        Pearson correlation of daily returns. 1.00 = perfect positive, –1.00 = perfect inverse, 0 = no relationship.
+                      </div>
+                      <div style={{ display: 'flex', marginLeft: lblW }}>
+                        {ct.map(t => (
+                          <div key={t} style={{ width: cellSz, fontSize: Math.max(7, Math.min(9, cellSz * 0.14)), color: '#aaa', fontWeight: 700,
+                            textAlign: 'center', paddingBottom: 4, overflow: 'hidden', fontFamily: "'JetBrains Mono',monospace" }}>{t}</div>
+                        ))}
+                      </div>
+                      {ct.map((t1, i) => (
+                        <div key={t1} style={{ display: 'flex', alignItems: 'center', marginBottom: 1 }}>
+                          <div style={{ width: lblW, fontSize: Math.max(7, Math.min(9, lblW * 0.14)), color: '#aaa', fontWeight: 700,
+                            textAlign: 'right', paddingRight: 6, overflow: 'hidden', whiteSpace: 'nowrap',
+                            fontFamily: "'JetBrains Mono',monospace", flexShrink: 0 }}>{t1}</div>
+                          {ct.map((t2, j) => {
+                            const v = matrix[i][j];
+                            const isDiag = i === j;
+                            return (
+                              <div key={t2} title={`${t1} / ${t2}: ${isNaN(v) ? 'N/A' : v.toFixed(3)}`}
+                                style={{
+                                  width: cellSz, height: cellSz, background: corrCellColor(v),
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  fontSize: Math.max(7, Math.min(10, cellSz * 0.16)),
+                                  color: isDiag ? '#fff' : '#ddd',
+                                  fontWeight: isDiag ? 800 : 500,
+                                  fontFamily: "'JetBrains Mono',monospace",
+                                  borderRadius: 2, margin: '0 0.5px', cursor: 'default',
+                                  border: isDiag ? '1px solid #ffffff33' : 'none',
+                                  opacity: isNaN(v) ? 0.3 : 1
+                                }}
+                                onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.3)'}
+                                onMouseOut={e => e.currentTarget.style.filter = ''}>
+                                {isNaN(v) ? '—' : v.toFixed(2)}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                    {/* Vertical legend to the right of the matrix */}
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, paddingTop: 23, flexShrink: 0 }}>
+                      <span style={{ fontSize: 9, color: '#555' }}>+1.0</span>
+                      <div style={{
+                        width: 10, height: matrixH, borderRadius: 4,
+                        background: 'linear-gradient(180deg,#176b3a 0%,#2a2a2a 50%,#c41a1a 100%)'
+                      }} />
+                      <span style={{ fontSize: 9, color: '#555' }}>–1.0</span>
+                    </div>
+                  </div>;
+                })()}
+              </div>
+            </>}
           </div>
         </div>, document.body
       );
@@ -1326,7 +1634,7 @@
         }}>FILTERS</div>
         <div style={{ padding: '6px 12px' }}>
 
-          <FilterSection title="Universe" badge={countUni()}>
+          <FilterSection title="Universe" defaultOpen={true} badge={countUni()}>
             <div style={{ marginBottom: 6 }}>
               <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>Asset Type</div>
               <div style={{ display: 'flex', gap: 3 }}>
@@ -1373,7 +1681,7 @@
             </div>}
           </FilterSection>
 
-          <FilterSection title="Fundamental" defaultOpen={true} badge={countFund()}>
+          <FilterSection title="Fundamental" badge={countFund()}>
             <RangeRow label="P/E" tip={COL_TIPS.pe} minKey="pe_min" maxKey="pe_max" filters={f} setFilters={setFilters} />
             <RangeRow label="Fwd P/E" tip={COL_TIPS.fwd_pe} minKey="fwd_pe_min" maxKey="fwd_pe_max" filters={f} setFilters={setFilters} />
             <RangeRow label="EPS Growth %" tip={COL_TIPS.eps_grw} minKey="eps_grw_min" maxKey="eps_grw_max" filters={f} setFilters={setFilters} />
@@ -1383,7 +1691,7 @@
             <div style={{ marginTop: 4 }}><Toggle checked={f.fcf_only} onChange={v => setFilters(p => ({ ...p, fcf_only: v }))} label="Free Cash Flow Positive" /></div>
           </FilterSection>
 
-          <FilterSection title="Technical" defaultOpen={true} badge={countTech()}>
+          <FilterSection title="Technical" badge={countTech()}>
             <RangeRow label="RSI" tip={COL_TIPS.rsi} minKey="rsi_min" maxKey="rsi_max" filters={f} setFilters={setFilters} step="1" />
             <div style={{ marginBottom: 6 }}>
               <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}><Tip label="MACD Signal" tip={COL_TIPS.macd_sig} /></div>
@@ -1661,10 +1969,12 @@
             <ScoreDots val={s.score?.o || 0} color="#f0a500" />
             <span className="mono" style={{ fontSize: 10, color: '#555' }}>{s.score?.o ?? '—'}</span>
           </div>;
+          case 'vol_1m': return s.vol_1m != null ? <span className="mono" style={{ color: s.vol_1m > 40 ? '#ff4d4d' : s.vol_1m < 20 ? '#00d26a' : '#c8c8c8' }}>{s.vol_1m.toFixed(1)}%</span> : '—';
+          case 'max_dd_1m': return s.max_dd_1m != null ? <span className="mono" style={{ color: s.max_dd_1m > 10 ? '#ff4d4d' : s.max_dd_1m < 3 ? '#00d26a' : '#c8c8c8' }}>-{s.max_dd_1m.toFixed(1)}%</span> : '—';
           default: return s[k] != null ? <span className="mono">{s[k]}</span> : '—';
         }
       };
-      return <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
+      return <div style={{ flex: 1, overflow: 'auto', position: 'relative', minHeight: 0 }}>
         {loading && <div style={{
           position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: '#0d0d0d99',
           display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10

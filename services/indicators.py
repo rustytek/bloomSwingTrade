@@ -148,9 +148,10 @@ def compute_score(stock: dict) -> dict:
 
 
 def compute_performance_metrics(closes: list[float]) -> dict:
-    """Annual return, volatility, Sharpe, Sortino."""
+    """Annual return, volatility, Sharpe, Sortino — full history; plus 1-month slice metrics."""
     if len(closes) < 2:
-        return {"ann_ret": None, "vol": None, "sharpe": None, "gain_sharpe": None}
+        return {"ann_ret": None, "vol": None, "sharpe": None, "gain_sharpe": None,
+                "vol_1m": None, "max_dd_1m": None}
     arr = np.array(closes, dtype=float)
     n = len(arr)
     daily_ret = np.diff(arr) / arr[:-1]
@@ -163,9 +164,33 @@ def compute_performance_metrics(closes: list[float]) -> dict:
     neg = daily_ret[daily_ret < 0]
     down_vol = float(np.sqrt(np.sum(neg ** 2) / len(daily_ret) * 252) * 100) if len(neg) > 0 else 0.01
     gain_sharpe = (ann_ret / 100 - rf) / (down_vol / 100) if down_vol > 0 else None
+
+    # ── 1-month slice (last 21 trading days) ──────────────────────────────
+    BARS_1M = 21
+    arr_1m = arr[-BARS_1M:] if len(arr) >= BARS_1M else arr
+    n1 = len(arr_1m)
+    vol_1m = max_dd_1m = ann_ret_1m = None
+    if n1 >= 2:
+        dr_1m = np.diff(arr_1m) / arr_1m[:-1]
+        total_1m = (arr_1m[-1] - arr_1m[0]) / arr_1m[0]
+        ann_ret_1m = ((1 + total_1m) ** (252 / n1) - 1) * 100
+        vol_1m = float(np.std(dr_1m) * np.sqrt(252) * 100)
+        # Max drawdown: largest peak-to-trough decline in the window
+        peak = arr_1m[0]
+        max_dd = 0.0
+        for p in arr_1m:
+            if p > peak:
+                peak = p
+            dd = (peak - p) / peak
+            if dd > max_dd:
+                max_dd = dd
+        max_dd_1m = round(max_dd * 100, 2)  # as positive %
+
     return {
-        "ann_ret": round(ann_ret, 2),
+        "ann_ret": round(ann_ret_1m, 2) if ann_ret_1m is not None else None,
         "vol": round(vol, 2),
         "sharpe": round(sharpe, 3) if sharpe is not None else None,
         "gain_sharpe": round(gain_sharpe, 3) if gain_sharpe is not None else None,
+        "vol_1m": round(vol_1m, 2) if vol_1m is not None else None,
+        "max_dd_1m": max_dd_1m,
     }

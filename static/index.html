@@ -215,12 +215,44 @@
       const t = -c / 10; return `rgb(${Math.round(26 + t * 229)},${Math.round(26 + t * 51)},${Math.round(26 + t * 51)})`;
     };
 
-    /* ── Tooltip component ── */
+    /* ── Tooltip component (portal-based to escape sticky overflow) ── */
     function Tip({ label, tip, children }) {
-      return <span className="tip">
-        {label || children}
-        {tip && <span className="tip-box">{tip}</span>}
-      </span>;
+      const [pos, setPos] = React.useState(null);
+      const ref = React.useRef(null);
+      if (!tip) return <span>{label || children}</span>;
+      const show = (e) => {
+        const r = ref.current?.getBoundingClientRect();
+        if (r) setPos({ x: r.left + r.width / 2, y: r.top });
+      };
+      const hide = () => setPos(null);
+      return (
+        <span ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'default' }}
+          onMouseEnter={show} onMouseLeave={hide}>
+          {label || children}
+          {pos && createPortal(
+            <div style={{
+              position: 'fixed', left: pos.x, top: pos.y - 6,
+              transform: 'translate(-50%, -100%)',
+              background: '#1e1e1e', border: '1px solid #333',
+              color: '#c8c8c8', fontSize: 11, fontWeight: 400,
+              padding: '6px 9px', borderRadius: 4,
+              whiteSpace: 'normal', width: 220,
+              zIndex: 9999, pointerEvents: 'none',
+              lineHeight: 1.5, boxShadow: '0 4px 12px #000a',
+            }}>
+              {tip}
+              <div style={{
+                position: 'absolute', top: '100%', left: '50%',
+                transform: 'translateX(-50%)',
+                borderLeft: '5px solid transparent',
+                borderRight: '5px solid transparent',
+                borderTop: '5px solid #333',
+              }} />
+            </div>,
+            document.body
+          )}
+        </span>
+      );
     }
 
     /* ── Column definitions ── */
@@ -246,7 +278,12 @@
       beta: 'Volatility vs S&P 500. 1.0=market, >1=more volatile, <1=less volatile',
       div: 'Annual dividend yield %. Income investors seek >2%',
       ann_ret: 'Annualized return based on the last 1 month (21 trading days) of price data',
-      sharpe: 'Sharpe ratio: return per unit of risk. >1=good, >2=excellent',
+      sharpe: 'Sharpe Ratio — (Return − Risk-Free Rate) ÷ Total Volatility (σ). Measures general-purpose risk-adjusted return. >1 = good, >2 = excellent. Penalizes ALL volatility, including upside.',
+      sortino: 'Sortino Ratio — like Sharpe but only penalizes DOWNSIDE volatility. Rewards strategies with high upside swings. >1 = good, >2 = excellent. Prefer over Sharpe for asymmetric return profiles.',
+      gain_sharpe: 'Sortino Ratio — like Sharpe but only penalizes DOWNSIDE volatility. Rewards strategies with high upside swings. >1 = good, >2 = excellent.',
+      calmar: 'Calmar Ratio — Annualized Return ÷ Max Drawdown (full history). Measures blow-up risk and recovery quality. >1 = good, >3 = excellent. High Calmar = strong returns with shallow drawdowns.',
+      info_ratio: 'Information Ratio — (Stock Return − SPY Return) ÷ Tracking Error. Measures consistency of alpha over the S&P 500 benchmark. >0.5 = good, >1 = excellent. Negative = underperforms SPY.',
+      treynor: 'Treynor Ratio — (Return − Risk-Free Rate) ÷ Beta (β). Uses only systematic/market risk, not total volatility. Best for well-diversified portfolios. >0.1 = good, >0.5 = excellent.',
       score_f: 'Fundamental score 0-5. Rates P/E, margins, growth, debt, FCF',
       score_t: 'Technical score 0-5. Rates RSI, MACD, MA position, volume',
       score_m: 'Momentum score 0-5. Rates 52W position, volume trend, earnings',
@@ -276,12 +313,16 @@
       { k: 'vs_ma200', label: 'vMA200', w: 72 },
       { k: 'p52w', label: '52W%', w: 58 },
       { k: 'vol_r', label: 'VolR', w: 58 },
-      { k: 'gain_sharpe', label: 'Gain Sh.', w: 70 },
       { k: 'vol', label: 'Vol', w: 55 },
       { k: 'beta', label: 'Beta', w: 52 },
       { k: 'div', label: 'Div%', w: 55 },
       { k: 'ann_ret', label: 'AnnRet', w: 68 },
       { k: 'sharpe', label: 'Sharpe', w: 62 },
+      { k: 'sortino', label: 'Sortino', w: 68 },
+      { k: 'calmar', label: 'Calmar', w: 65 },
+      { k: 'info_ratio', label: 'Info R.', w: 65 },
+      { k: 'treynor', label: 'Treynor', w: 68 },
+      { k: 'gain_sharpe', label: 'Gain Sh.', w: 70 },
       { k: 'score_f', label: 'F', w: 42 },
       { k: 'score_t', label: 'T', w: 42 },
       { k: 'score_m', label: 'M', w: 42 },
@@ -289,7 +330,7 @@
       { k: 'vol_1m', label: 'Vol 1M', w: 68 },
       { k: 'max_dd_1m', label: 'MaxDD 1M', w: 80 },
     ];
-    const DEFAULT_COLS = ['ticker', 'name', 'spark', 'price', 'chg_pct', 'mkt_cap', 'pe', 'rsi', 'macd_sig', 'vs_ma50', 'p52w', 'vol_r', 'gain_sharpe', 'vol', 'score_f', 'score_t', 'score_m', 'score'];
+    const DEFAULT_COLS = ['ticker', 'name', 'spark', 'price', 'chg_pct', 'mkt_cap', 'pe', 'rsi', 'macd_sig', 'vs_ma50', 'p52w', 'vol_r', 'sharpe', 'sortino', 'vol', 'score_f', 'score_t', 'score_m', 'score'];
 
     /* ── Presets ── */
     const PRESETS = [
@@ -313,6 +354,7 @@
       beta_min: '', beta_max: '', div_min: '', div_max: '', sectors: [],
       asset_type: '', cap_tier: '',
       score_min: '', score_f_min: '', score_t_min: '', score_m_min: '',
+      sortino_min: '', calmar_min: '', info_ratio_min: '', treynor_min: '',
       tickers: [],
       force_refresh: false,
     });
@@ -690,6 +732,12 @@
         ['Ann Return', s.ann_ret != null ? fmtPct(s.ann_ret) : null],
         ['Volatility', s.vol != null ? fmtPct(s.vol) : null],
         ['Sharpe', fmt2(s.sharpe)],
+        ['Sortino', fmt2(s.sortino)],
+        ['Calmar', fmt2(s.calmar)],
+        ['Info Ratio', fmt2(s.info_ratio)],
+        ['Treynor', fmt2(s.treynor)],
+        ['Vol 1M', s.vol_1m != null ? fmtPct(s.vol_1m) : null],
+        ['MaxDD 1M', s.max_dd_1m != null ? '-' + fmt1(s.max_dd_1m) + '%' : null],
       ].filter(([, v]) => v != null && v !== '—');
       return <div style={{
         position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: '#000000cc',
@@ -1627,6 +1675,7 @@
       const countUni = () => [f.asset_type, f.cap_tier, ...f.sectors].filter(v => v !== '' && v != null).length;
       const countScore = () => [f.score_min, f.score_f_min, f.score_t_min, f.score_m_min].filter(v => v !== '' && v != null).length;
       const countPort = () => [f.beta_min, f.beta_max, f.div_min, f.div_max].filter(v => v !== '' && v != null).length;
+      const countRisk = () => [f.sortino_min, f.calmar_min, f.info_ratio_min, f.treynor_min].filter(v => v !== '' && v != null).length;
 
       return <div style={{ width: 220, flexShrink: 0, background: '#111', borderRight: '1px solid #1a1a1a', overflow: 'auto' }}>
         <div style={{
@@ -1747,6 +1796,21 @@
             <RangeRow label="Dividend Yield %" tip={COL_TIPS.div} minKey="div_min" maxKey="div_max" filters={f} setFilters={setFilters} step="0.1" />
           </FilterSection>
 
+          <FilterSection title="Risk Ratios" badge={countRisk()}>
+            {[
+              ['sortino_min', 'Min Sortino', COL_TIPS.sortino, '0.1', '>1 = good, >2 = excellent'],
+              ['calmar_min', 'Min Calmar', COL_TIPS.calmar, '0.1', '>1 = good, >3 = excellent'],
+              ['info_ratio_min', 'Min Info Ratio', COL_TIPS.info_ratio, '0.1', '>0.5 = good, >1 = excellent'],
+              ['treynor_min', 'Min Treynor', COL_TIPS.treynor, '0.05', '>0.1 = good, >0.5 = excellent'],
+            ].map(([key, label, tip, step, placeholder]) => (
+              <div key={key} style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}><Tip label={label} tip={tip} /></div>
+                <input type="number" placeholder={placeholder} step={step} value={f[key] ?? ''}
+                  onChange={e => setFilters(p => ({ ...p, [key]: e.target.value }))} style={{ width: '100%' }} />
+              </div>
+            ))}
+          </FilterSection>
+
           <FilterSection title="Score" badge={countScore()}>
             {[['score_min', 'Overall', COL_TIPS.score], ['score_f_min', 'Fundamental', COL_TIPS.score_f],
             ['score_t_min', 'Technical', COL_TIPS.score_t], ['score_m_min', 'Momentum', COL_TIPS.score_m]].map(([key, label, tip]) => (
@@ -1785,7 +1849,8 @@
         f.rev_grw_min, f.rev_grw_max, f.pm_min, f.pm_max, f.debt_eq_min, f.debt_eq_max,
         f.rsi_min, f.rsi_max, f.macd, f.vs_ma200, f.vs_ma50, f.vol_r_min, f.p52w_min, f.p52w_max, f.gain_sharpe_min, f.vol_max,
         f.beta_min, f.beta_max, f.div_min, f.div_max, f.asset_type, f.cap_tier,
-        f.score_min, f.score_f_min, f.score_t_min, f.score_m_min, ...f.sectors]
+        f.score_min, f.score_f_min, f.score_t_min, f.score_m_min,
+        f.sortino_min, f.calmar_min, f.info_ratio_min, f.treynor_min, ...f.sectors]
           .filter(v => v !== '' && v !== false && v != null).length +
           (f.fcf_only ? 1 : 0) + (f.gc ? 1 : 0) + (f.dc ? 1 : 0) + (f.earn_beat ? 1 : 0) + (f.earn_soon ? 1 : 0);
       }, [filters]);
@@ -1983,7 +2048,28 @@
           case 'beta': return <span className="mono">{fmt2(s.beta)}</span>;
           case 'div': return s.div != null ? <span className="mono" style={{ color: '#00d26a' }}>{s.div}%</span> : '—';
           case 'ann_ret': return s.ann_ret != null ? <span className="mono" style={{ color: clr(s.ann_ret) }}>{fmtPct(s.ann_ret)}</span> : '—';
-          case 'sharpe': return s.sharpe != null ? <span className="mono" style={{ color: s.sharpe > 1 ? '#00d26a' : s.sharpe < 0 ? '#ff4d4d' : '#c8c8c8' }}>{fmt2(s.sharpe)}</span> : '—';
+          case 'sharpe':
+          case 'gain_sharpe':
+          case 'sortino': {
+            const v = s[k];
+            const color = v == null ? '#888' : v > 2 ? '#00d26a' : v > 1 ? '#c8c8c8' : v > 0 ? '#f0a500' : '#ff4d4d';
+            return v != null ? <span className="mono" style={{ color }}>{fmt2(v)}</span> : '—';
+          }
+          case 'calmar': {
+            const v = s.calmar;
+            const color = v == null ? '#888' : v > 3 ? '#00d26a' : v > 1 ? '#c8c8c8' : v > 0 ? '#f0a500' : '#ff4d4d';
+            return v != null ? <span className="mono" style={{ color }}>{fmt2(v)}</span> : '—';
+          }
+          case 'info_ratio': {
+            const v = s.info_ratio;
+            const color = v == null ? '#888' : v > 1 ? '#00d26a' : v > 0.5 ? '#c8c8c8' : v >= 0 ? '#f0a500' : '#ff4d4d';
+            return v != null ? <span className="mono" style={{ color }}>{fmt2(v)}</span> : '—';
+          }
+          case 'treynor': {
+            const v = s.treynor;
+            const color = v == null ? '#888' : v > 0.5 ? '#00d26a' : v > 0.1 ? '#c8c8c8' : v >= 0 ? '#f0a500' : '#ff4d4d';
+            return v != null ? <span className="mono" style={{ color }}>{fmt2(v)}</span> : '—';
+          }
           case 'score_f': return <ScoreDots val={s.score?.f || 0} color="#f0a500" />;
           case 'score_t': return <ScoreDots val={s.score?.t || 0} color="#5ba3ff" />;
           case 'score_m': return <ScoreDots val={s.score?.m || 0} color="#00c48c" />;

@@ -223,7 +223,16 @@ def _enrich_with_technicals(quote: dict, history: list[dict]) -> dict:
     avg_vol_5 = sum(vols[-5:]) / min(5, len(vols)) if vols else 0
     vol_r = (avg_vol_5 / avg_vol_20) if avg_vol_20 > 0 else 1.0
 
-    perf = compute_performance_metrics(closes)
+    # SPY closes from memory cache (for Info Ratio) — best-effort
+    spy_closes = None
+    spy_entry = _mem_cache.get("history:SPY")
+    if spy_entry and spy_entry.get("data"):
+        spy_closes = [b["close"] for b in spy_entry["data"]]
+
+    # Beta from yfinance (for Treynor)
+    beta = quote.get("beta")
+
+    perf = compute_performance_metrics(closes, spy_closes=spy_closes, beta=beta)
 
     # Sparkline: last 7 closes for in-table mini trend chart
     spark = [round(v, 2) for v in closes[-7:]]
@@ -433,6 +442,30 @@ def cleanup_old_entries(db: Session) -> int:
     if deleted:
         logger.info(f"Cleaned up {deleted} stale cache entries (> {settings.cache_max_age_days} days old)")
     return deleted
+
+
+def invalidate_legacy_cache(db: Session) -> int:
+    """Reset cached_at for entries that pre-date performance metrics (missing 'sharpe' field).
+
+    This forces refresh_universe to re-fetch those tickers so risk ratio fields
+    (sharpe, sortino, calmar, etc.) get computed and stored. Safe to call on every
+    startup — once entries are refreshed they will have the field and be skipped.
+    """
+    epoch = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    rows = db.query(StockCache).filter(StockCache.quote_json.isnot(None)).all()
+    count = 0
+    for row in rows:
+        try:
+            data = json.loads(row.quote_json)
+            if "sharpe" not in data:
+                row.cached_at = epoch
+                count += 1
+        except Exception:
+            pass
+    if count:
+        db.commit()
+        logger.info(f"Invalidated {count} legacy cache entries missing performance metrics — will re-fetch")
+    return count
 
 
 def get_universe_status(db: Session, universe: list[str]) -> dict:

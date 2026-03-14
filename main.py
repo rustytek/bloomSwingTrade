@@ -31,7 +31,7 @@ from api.portfolio import router as portfolio_router
 from api.ai import router as ai_router
 from generate_ssl import generate_ssl_cert
 from services.universe import UNIVERSE
-from services.market_data import refresh_universe, cleanup_old_entries
+from services.market_data import refresh_universe, cleanup_old_entries, invalidate_legacy_cache
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -64,6 +64,7 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         cleanup_old_entries(db)
+        invalidate_legacy_cache(db)
     finally:
         db.close()
     # Kick off background universe data refresh (non-blocking)
@@ -77,7 +78,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.3.0",
+    version="1.4.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

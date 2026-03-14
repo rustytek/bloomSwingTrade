@@ -67,6 +67,14 @@ class ScreenerFilters(BaseModel):
     score_t_min: Optional[int] = None
     score_m_min: Optional[int] = None
 
+    # Risk-adjusted ratio filters
+    sharpe_min: Optional[float] = None
+    sortino_min: Optional[float] = None
+    calmar_min: Optional[float] = None
+    info_ratio_min: Optional[float] = None
+    treynor_min: Optional[float] = None
+    max_dd_1m_max: Optional[float] = None
+
     # Ticker allow-list (for watchlist/portfolio presets)
     tickers: list[str] = []
 
@@ -132,6 +140,13 @@ def _passes(stock: dict, f: ScreenerFilters) -> bool:
     if f.score_f_min is not None and (sc.get("f") or 0) < f.score_f_min: return False
     if f.score_t_min is not None and (sc.get("t") or 0) < f.score_t_min: return False
     if f.score_m_min is not None and (sc.get("m") or 0) < f.score_m_min: return False
+
+    if f.sharpe_min is not None and (stock.get("sharpe") or 0) < f.sharpe_min: return False
+    if f.sortino_min is not None and (stock.get("sortino") or stock.get("gain_sharpe") or 0) < f.sortino_min: return False
+    if f.calmar_min is not None and (stock.get("calmar") or 0) < f.calmar_min: return False
+    if f.info_ratio_min is not None and (stock.get("info_ratio") or 0) < f.info_ratio_min: return False
+    if f.treynor_min is not None and (stock.get("treynor") or 0) < f.treynor_min: return False
+    if f.max_dd_1m_max is not None and (stock.get("max_dd_1m") or 0) > f.max_dd_1m_max: return False
 
     return True
 

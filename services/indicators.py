@@ -147,23 +147,75 @@ def compute_score(stock: dict) -> dict:
     return {"f": f, "t": t, "m": m, "o": o}
 
 
-def compute_performance_metrics(closes: list[float]) -> dict:
-    """Annual return, volatility, Sharpe, Sortino — full history; plus 1-month slice metrics."""
+def compute_performance_metrics(
+    closes: list[float],
+    spy_closes: list[float] | None = None,
+    beta: float | None = None,
+) -> dict:
+    """Annual return, volatility, Sharpe, Sortino, Calmar, Info Ratio, Treynor.
+
+    Args:
+        closes:    full price history for the stock
+        spy_closes: SPY price history (same length requested); used for Info Ratio
+        beta:      pre-computed beta from yfinance; used for Treynor
+    """
     if len(closes) < 2:
-        return {"ann_ret": None, "vol": None, "sharpe": None, "gain_sharpe": None,
-                "vol_1m": None, "max_dd_1m": None}
+        return {
+            "ann_ret": None, "vol": None, "sharpe": None,
+            "gain_sharpe": None, "sortino": None, "calmar": None,
+            "info_ratio": None, "treynor": None,
+            "vol_1m": None, "max_dd_1m": None,
+        }
     arr = np.array(closes, dtype=float)
     n = len(arr)
     daily_ret = np.diff(arr) / arr[:-1]
     total_ret = (arr[-1] - arr[0]) / arr[0]
     ann_ret = ((1 + total_ret) ** (252 / n) - 1) * 100
-    mean = float(np.mean(daily_ret))
     vol = float(np.std(daily_ret) * np.sqrt(252) * 100)
-    rf = 0.05
+    rf = 0.05  # 5% risk-free rate
+
+    # ── Sharpe: (R − rf) / σ_total ───────────────────────────────────────
     sharpe = (ann_ret / 100 - rf) / (vol / 100) if vol > 0 else None
+
+    # ── Sortino: (R − rf) / σ_downside ───────────────────────────────────
     neg = daily_ret[daily_ret < 0]
-    down_vol = float(np.sqrt(np.sum(neg ** 2) / len(daily_ret) * 252) * 100) if len(neg) > 0 else 0.01
-    gain_sharpe = (ann_ret / 100 - rf) / (down_vol / 100) if down_vol > 0 else None
+    down_vol = float(np.sqrt(np.sum(neg ** 2) / max(len(daily_ret), 1) * 252) * 100) if len(neg) > 0 else 0.01
+    sortino = (ann_ret / 100 - rf) / (down_vol / 100) if down_vol > 0 else None
+
+    # ── Calmar: ann_ret / max_drawdown (full history) ─────────────────────
+    calmar = None
+    peak = float(arr[0])
+    max_dd_full = 0.0
+    for p in arr:
+        if p > peak:
+            peak = p
+        dd = (peak - p) / peak
+        if dd > max_dd_full:
+            max_dd_full = dd
+    if max_dd_full > 0:
+        calmar = (ann_ret / 100) / max_dd_full
+
+    # ── Information Ratio: (R_stock − R_spy) / tracking_error ─────────────
+    info_ratio = None
+    if spy_closes and len(spy_closes) >= 2:
+        # Align lengths
+        spy_arr = np.array(spy_closes[-n:] if len(spy_closes) >= n else spy_closes, dtype=float)
+        stock_sub = arr[-len(spy_arr):]
+        if len(spy_arr) >= 2 and len(spy_arr) == len(stock_sub):
+            spy_ret = np.diff(spy_arr) / spy_arr[:-1]
+            stock_ret_sub = np.diff(stock_sub) / stock_sub[:-1]
+            excess_daily = stock_ret_sub - spy_ret
+            tracking_err = float(np.std(excess_daily) * np.sqrt(252))
+            spy_total = (spy_arr[-1] - spy_arr[0]) / spy_arr[0]
+            spy_ann = ((1 + spy_total) ** (252 / len(spy_arr)) - 1)
+            excess_ann = ann_ret / 100 - spy_ann
+            if tracking_err > 0:
+                info_ratio = excess_ann / tracking_err
+
+    # ── Treynor: (R − rf) / β ────────────────────────────────────────────
+    treynor = None
+    if beta is not None and abs(beta) > 0.001:
+        treynor = (ann_ret / 100 - rf) / beta
 
     # ── 1-month slice (last 21 trading days) ──────────────────────────────
     BARS_1M = 21
@@ -175,22 +227,25 @@ def compute_performance_metrics(closes: list[float]) -> dict:
         total_1m = (arr_1m[-1] - arr_1m[0]) / arr_1m[0]
         ann_ret_1m = ((1 + total_1m) ** (252 / n1) - 1) * 100
         vol_1m = float(np.std(dr_1m) * np.sqrt(252) * 100)
-        # Max drawdown: largest peak-to-trough decline in the window
-        peak = arr_1m[0]
-        max_dd = 0.0
+        peak_1m = arr_1m[0]
+        max_dd_1m_raw = 0.0
         for p in arr_1m:
-            if p > peak:
-                peak = p
-            dd = (peak - p) / peak
-            if dd > max_dd:
-                max_dd = dd
-        max_dd_1m = round(max_dd * 100, 2)  # as positive %
+            if p > peak_1m:
+                peak_1m = p
+            dd = (peak_1m - p) / peak_1m
+            if dd > max_dd_1m_raw:
+                max_dd_1m_raw = dd
+        max_dd_1m = round(max_dd_1m_raw * 100, 2)  # as positive %
 
     return {
         "ann_ret": round(ann_ret_1m, 2) if ann_ret_1m is not None else None,
         "vol": round(vol, 2),
         "sharpe": round(sharpe, 3) if sharpe is not None else None,
-        "gain_sharpe": round(gain_sharpe, 3) if gain_sharpe is not None else None,
+        "gain_sharpe": round(sortino, 3) if sortino is not None else None,  # legacy key
+        "sortino": round(sortino, 3) if sortino is not None else None,
+        "calmar": round(calmar, 3) if calmar is not None else None,
+        "info_ratio": round(info_ratio, 3) if info_ratio is not None else None,
+        "treynor": round(treynor, 3) if treynor is not None else None,
         "vol_1m": round(vol_1m, 2) if vol_1m is not None else None,
         "max_dd_1m": max_dd_1m,
     }

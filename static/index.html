@@ -295,42 +295,42 @@
     };
 
     const ALL_COLS = [
+      { k: 'spark', label: 'Trend', w: 20 },
       { k: 'ticker', label: 'Ticker', w: 80 },
       { k: 'name', label: 'Name', w: 155 },
-      { k: 'spark', label: 'Trend', w: 20 },
       { k: 'price', label: 'Price', w: 75 },
       { k: 'chg_pct', label: 'Chg%', w: 70 },
-      { k: 'mkt_cap', label: 'Mkt Cap', w: 85 },
       { k: 'pe', label: 'P/E', w: 58 },
+      { k: 'rsi', label: 'RSI', w: 52 },
+      { k: 'vs_ma50', label: 'vMA50', w: 68 },
+      { k: 'sharpe', label: 'Sharpe', w: 62 },
+      { k: 'sortino', label: 'Sortino', w: 68 },
+      { k: 'max_dd_1m', label: 'MaxDD 1M', w: 80 },
+      { k: 'ann_ret', label: 'AnnRet', w: 68 },
+      { k: 'beta', label: 'Beta', w: 52 },
+      { k: 'calmar', label: 'Calmar', w: 65 },
+      { k: 'info_ratio', label: 'Info R.', w: 65 },
+      { k: 'treynor', label: 'Treynor', w: 68 },
+      { k: 'score', label: 'Score', w: 76 },
+      { k: 'mkt_cap', label: 'Mkt Cap', w: 85 },
       { k: 'fwd_pe', label: 'Fwd P/E', w: 68 },
       { k: 'eps_grw', label: 'EPS Grw', w: 72 },
       { k: 'rev_grw', label: 'Rev Grw', w: 72 },
       { k: 'pm', label: 'Margin', w: 68 },
       { k: 'debt_eq', label: 'D/E', w: 55 },
-      { k: 'rsi', label: 'RSI', w: 52 },
       { k: 'macd_sig', label: 'MACD', w: 70 },
-      { k: 'vs_ma50', label: 'vMA50', w: 68 },
       { k: 'vs_ma200', label: 'vMA200', w: 72 },
       { k: 'p52w', label: '52W%', w: 58 },
       { k: 'vol_r', label: 'VolR', w: 58 },
       { k: 'vol', label: 'Vol', w: 55 },
-      { k: 'beta', label: 'Beta', w: 52 },
       { k: 'div', label: 'Div%', w: 55 },
-      { k: 'ann_ret', label: 'AnnRet', w: 68 },
-      { k: 'sharpe', label: 'Sharpe', w: 62 },
-      { k: 'sortino', label: 'Sortino', w: 68 },
-      { k: 'calmar', label: 'Calmar', w: 65 },
-      { k: 'info_ratio', label: 'Info R.', w: 65 },
-      { k: 'treynor', label: 'Treynor', w: 68 },
       { k: 'gain_sharpe', label: 'Gain Sh.', w: 70 },
       { k: 'score_f', label: 'F', w: 42 },
       { k: 'score_t', label: 'T', w: 42 },
       { k: 'score_m', label: 'M', w: 42 },
-      { k: 'score', label: 'Score', w: 76 },
       { k: 'vol_1m', label: 'Vol 1M', w: 68 },
-      { k: 'max_dd_1m', label: 'MaxDD 1M', w: 80 },
     ];
-    const DEFAULT_COLS = ['ticker', 'name', 'spark', 'price', 'chg_pct', 'mkt_cap', 'pe', 'rsi', 'macd_sig', 'vs_ma50', 'p52w', 'vol_r', 'sharpe', 'sortino', 'vol', 'score_f', 'score_t', 'score_m', 'score'];
+    const DEFAULT_COLS = ['spark', 'ticker', 'name', 'price', 'chg_pct', 'pe', 'rsi', 'vs_ma50', 'sharpe', 'sortino', 'max_dd_1m', 'ann_ret', 'beta', 'calmar', 'info_ratio', 'treynor', 'score'];
 
     /* ── Presets ── */
     const PRESETS = [
@@ -354,21 +354,22 @@
       beta_min: '', beta_max: '', div_min: '', div_max: '', sectors: [],
       asset_type: '', cap_tier: '',
       score_min: '', score_f_min: '', score_t_min: '', score_m_min: '',
-      sortino_min: '', calmar_min: '', info_ratio_min: '', treynor_min: '',
+      sharpe_min: '', sortino_min: '', calmar_min: '', info_ratio_min: '', treynor_min: '', max_dd_1m_max: '',
       tickers: [],
       force_refresh: false,
     });
 
     /* ── Small components ── */
     function scoreGradient(val, max = 5) {
+      // Blue (#2d72b8) → Teal (#00c48c) — matches site palette
       const t = Math.max(0, Math.min(1, (val - 1) / (max - 1)));
-      const r = Math.round(255 * (1 - t));
-      const g = Math.round(77 + 133 * t);
-      const b = Math.round(77 * (1 - t) + 106 * t);
+      const r = Math.round(45 * (1 - t));
+      const g = Math.round(114 + 82 * t);
+      const b = Math.round(184 - 44 * t);
       return `rgb(${r},${g},${b})`;
     }
     function ScoreDots({ val, max = 5, color }) {
-      const c = color || (val > 0 ? scoreGradient(val, max) : '#f0a500');
+      const c = color || (val > 0 ? scoreGradient(val, max) : '#555');
       return <span style={{ display: 'inline-flex', gap: 2 }}>
         {Array.from({ length: max }, (_, i) => (
           <span key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: i < val ? c : '#2a2a2a', border: `1px solid ${i < val ? c : '#333'}` }} />
@@ -1674,8 +1675,8 @@
         .filter(v => v !== '' && v !== false && v != null).length;
       const countUni = () => [f.asset_type, f.cap_tier, ...f.sectors].filter(v => v !== '' && v != null).length;
       const countScore = () => [f.score_min, f.score_f_min, f.score_t_min, f.score_m_min].filter(v => v !== '' && v != null).length;
-      const countPort = () => [f.beta_min, f.beta_max, f.div_min, f.div_max].filter(v => v !== '' && v != null).length;
-      const countRisk = () => [f.sortino_min, f.calmar_min, f.info_ratio_min, f.treynor_min].filter(v => v !== '' && v != null).length;
+      const countPort = () => [f.div_min, f.div_max].filter(v => v !== '' && v != null).length;
+      const countRisk = () => [f.sharpe_min, f.sortino_min, f.calmar_min, f.info_ratio_min, f.treynor_min, f.beta_min, f.beta_max, f.max_dd_1m_max].filter(v => v !== '' && v != null).length;
 
       return <div style={{ width: 220, flexShrink: 0, background: '#111', borderRight: '1px solid #1a1a1a', overflow: 'auto' }}>
         <div style={{
@@ -1792,12 +1793,12 @@
           </FilterSection>
 
           <FilterSection title="Portfolio" badge={countPort()}>
-            <RangeRow label="Beta" tip={COL_TIPS.beta} minKey="beta_min" maxKey="beta_max" filters={f} setFilters={setFilters} step="0.1" />
             <RangeRow label="Dividend Yield %" tip={COL_TIPS.div} minKey="div_min" maxKey="div_max" filters={f} setFilters={setFilters} step="0.1" />
           </FilterSection>
 
           <FilterSection title="Risk Ratios" badge={countRisk()}>
             {[
+              ['sharpe_min', 'Min Sharpe', COL_TIPS.sharpe, '0.1', '>1 = good, >2 = excellent'],
               ['sortino_min', 'Min Sortino', COL_TIPS.sortino, '0.1', '>1 = good, >2 = excellent'],
               ['calmar_min', 'Min Calmar', COL_TIPS.calmar, '0.1', '>1 = good, >3 = excellent'],
               ['info_ratio_min', 'Min Info Ratio', COL_TIPS.info_ratio, '0.1', '>0.5 = good, >1 = excellent'],
@@ -1809,6 +1810,12 @@
                   onChange={e => setFilters(p => ({ ...p, [key]: e.target.value }))} style={{ width: '100%' }} />
               </div>
             ))}
+            <RangeRow label="Beta" tip={COL_TIPS.beta} minKey="beta_min" maxKey="beta_max" filters={f} setFilters={setFilters} step="0.1" />
+            <div style={{ marginBottom: 6 }}>
+              <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}><Tip label="Max DrawDown 1M %" tip={COL_TIPS.max_dd_1m} /></div>
+              <input type="number" placeholder="e.g. 10" step="0.1" value={f.max_dd_1m_max ?? ''}
+                onChange={e => setFilters(p => ({ ...p, max_dd_1m_max: e.target.value }))} style={{ width: '100%' }} />
+            </div>
           </FilterSection>
 
           <FilterSection title="Score" badge={countScore()}>
@@ -1850,7 +1857,7 @@
         f.rsi_min, f.rsi_max, f.macd, f.vs_ma200, f.vs_ma50, f.vol_r_min, f.p52w_min, f.p52w_max, f.gain_sharpe_min, f.vol_max,
         f.beta_min, f.beta_max, f.div_min, f.div_max, f.asset_type, f.cap_tier,
         f.score_min, f.score_f_min, f.score_t_min, f.score_m_min,
-        f.sortino_min, f.calmar_min, f.info_ratio_min, f.treynor_min, ...f.sectors]
+        f.sharpe_min, f.sortino_min, f.calmar_min, f.info_ratio_min, f.treynor_min, f.max_dd_1m_max, ...f.sectors]
           .filter(v => v !== '' && v !== false && v != null).length +
           (f.fcf_only ? 1 : 0) + (f.gc ? 1 : 0) + (f.dc ? 1 : 0) + (f.earn_beat ? 1 : 0) + (f.earn_soon ? 1 : 0);
       }, [filters]);
@@ -2074,8 +2081,8 @@
           case 'score_t': return <ScoreDots val={s.score?.t || 0} color="#5ba3ff" />;
           case 'score_m': return <ScoreDots val={s.score?.m || 0} color="#00c48c" />;
           case 'score': return <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-            <ScoreDots val={s.score?.o || 0} color="#f0a500" />
-            <span className="mono" style={{ fontSize: 10, color: '#555' }}>{s.score?.o ?? '—'}</span>
+            <ScoreDots val={s.score?.o || 0} />
+            <span className="mono" style={{ fontSize: 10, color: scoreGradient(s.score?.o || 1) }}>{s.score?.o ?? '—'}</span>
           </div>;
           case 'vol_1m': return s.vol_1m != null ? <span className="mono" style={{ color: s.vol_1m > 40 ? '#ff4d4d' : s.vol_1m < 20 ? '#00d26a' : '#c8c8c8' }}>{s.vol_1m.toFixed(1)}%</span> : '—';
           case 'max_dd_1m': return s.max_dd_1m != null ? <span className="mono" style={{ color: s.max_dd_1m > 10 ? '#ff4d4d' : s.max_dd_1m < 3 ? '#00d26a' : '#c8c8c8' }}>-{s.max_dd_1m.toFixed(1)}%</span> : '—';

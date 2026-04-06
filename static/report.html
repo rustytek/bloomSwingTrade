@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SwingTrader — Daily Report</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: #0d0d0d; color: #c8c8c8; font-family: 'Inter', sans-serif; font-size: 14px; }
+
+    .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+    /* ── Topbar ── */
+    .topbar { display: flex; align-items: center; gap: 10px; padding: 0 16px; height: 44px; background: #111; border-bottom: 1px solid #1e1e1e; flex-shrink: 0; }
+    .logo { display: flex; align-items: center; gap: 8px; text-decoration: none; }
+    .logo-icon { width: 26px; height: 26px; background: #f0a500; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 800; color: #000; font-family: 'JetBrains Mono', monospace; }
+    .logo-text { font-weight: 700; font-size: 13px; letter-spacing: .08em; color: #fff; font-family: 'JetBrains Mono', monospace; }
+    .topbar-sep { width: 1px; height: 20px; background: #222; }
+    .topbar-title { font-size: 12px; color: #555; }
+    .spacer { flex: 1; }
+
+    .btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 3px; border: none; font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; transition: opacity .15s, background .15s; white-space: nowrap; }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-primary { background: #f0a500; color: #000; }
+    .btn-primary:hover:not(:disabled) { opacity: .85; }
+    .btn-ghost { background: #1a1a1a; color: #aaa; border: 1px solid #2a2a2a; }
+    .btn-ghost:hover:not(:disabled) { background: #222; }
+    .btn-chat { background: #1a2a3a; color: #4a9eff; border: 1px solid #1e3a5a; }
+    .btn-chat.active { background: #1e3a5a; border-color: #4a9eff; }
+
+    /* ── Model selector dropdown ── */
+    .model-select-wrap { position: relative; display: flex; align-items: center; gap: 5px; }
+    .model-label { font-size: 9px; color: #444; text-transform: uppercase; letter-spacing: .08em; white-space: nowrap; }
+    .model-select {
+      background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 3px;
+      color: #aaa; font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      padding: 4px 22px 4px 8px; cursor: pointer; outline: none;
+      appearance: none; -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23555'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 6px center;
+      max-width: 180px;
+    }
+    .model-select:focus { border-color: #3a3a3a; }
+
+    /* ── Body ── */
+    .body { display: flex; flex: 1; overflow: hidden; }
+
+    /* ── Sidebar ── */
+    .sidebar { width: 200px; flex-shrink: 0; background: #0a0a0a; border-right: 1px solid #1a1a1a; display: flex; flex-direction: column; overflow: hidden; }
+    .sidebar-hdr { padding: 10px 12px 6px; font-size: 9px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: #333; }
+    .sidebar-list { flex: 1; overflow-y: auto; }
+    .s-item { padding: 8px 12px; cursor: pointer; border-left: 2px solid transparent; }
+    .s-item:hover { background: #0f0f0f; }
+    .s-item.active { background: #111; border-left-color: #f0a500; }
+    .s-item .d { font-size: 11px; font-weight: 600; color: #bbb; font-family: 'JetBrains Mono', monospace; }
+    .s-item .m { font-size: 10px; color: #333; margin-top: 2px; }
+    .s-item.active .d { color: #f0a500; }
+    .no-reports { padding: 14px 12px; font-size: 11px; color: #2a2a2a; }
+
+    /* ── Main ── */
+    .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+    .content-toolbar { display: flex; align-items: center; gap: 8px; padding: 5px 14px; background: #0f0f0f; border-bottom: 1px solid #1a1a1a; flex-shrink: 0; }
+    .status { font-size: 10px; color: #333; }
+    .status.running { color: #f0a500; }
+    .status.ok { color: #4caf50; }
+    .status.err { color: #f44336; }
+
+    .content-split { display: flex; flex: 1; overflow: hidden; }
+
+    /* ── Report pane ── */
+    .report-pane { flex: 1; overflow-y: auto; padding: 28px 36px 60px; min-width: 0; }
+
+    /* ── Chat panel ── */
+    .chat-panel { width: 380px; flex-shrink: 0; border-left: 1px solid #1a1a1a; background: #0a0a0a; display: flex; flex-direction: column; transition: width .2s ease; overflow: hidden; }
+    .chat-panel.hidden { width: 0; border-left: none; }
+
+    .chat-header { padding: 8px 12px; border-bottom: 1px solid #1a1a1a; display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
+    .chat-title { font-size: 11px; font-weight: 700; color: #4a9eff; letter-spacing: .06em; text-transform: uppercase; }
+    .chat-header .spacer { flex: 1; min-width: 8px; }
+
+    .chat-ctx { display: flex; align-items: center; gap: 4px; padding: 5px 12px; border-bottom: 1px solid #141414; flex-shrink: 0; }
+    .ctx-lbl { font-size: 9px; color: #333; margin-right: 2px; }
+    .ctx-btn { font-size: 9px; padding: 2px 8px; border-radius: 10px; cursor: pointer; border: 1px solid #2a2a2a; background: #111; color: #444; font-family: 'Inter', sans-serif; font-weight: 600; }
+    .ctx-btn.on { background: #1a2a1a; color: #4caf50; border-color: #2d6b2d; }
+
+    .chat-msgs { flex: 1; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+    .chat-placeholder { font-size: 11px; color: #2a2a2a; text-align: center; margin-top: 20px; line-height: 1.7; }
+
+    .msg { display: flex; flex-direction: column; gap: 3px; }
+    .msg-meta { font-size: 9px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+    .msg.user .msg-meta { color: #f0a500; text-align: right; }
+    .msg.assistant .msg-meta { color: #4a9eff; }
+    .msg-bubble { font-size: 12px; line-height: 1.65; padding: 7px 10px; border-radius: 6px; }
+    .msg.user .msg-bubble { background: #1a1500; border: 1px solid #2a2000; color: #d4a800; border-radius: 6px 6px 2px 6px; }
+    .msg.assistant .msg-bubble { background: #0d1520; border: 1px solid #1a2a3a; color: #c8d8e8; border-radius: 6px 6px 6px 2px; }
+    .msg.assistant .msg-bubble p { margin-bottom: 5px; }
+    .msg.assistant .msg-bubble p:last-child { margin-bottom: 0; }
+    .msg.assistant .msg-bubble code { background: #1a1a1a; padding: 1px 4px; border-radius: 3px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #e0c080; }
+    .msg.assistant .msg-bubble strong { color: #e8e8e8; }
+    .msg.assistant .msg-bubble ul, .msg.assistant .msg-bubble ol { padding-left: 16px; margin-bottom: 5px; }
+
+    .chat-thinking { display: flex; align-items: center; gap: 5px; padding: 7px 10px; }
+    .dot { width: 5px; height: 5px; background: #4a9eff; border-radius: 50%; animation: pulse .9s ease-in-out infinite; }
+    .dot:nth-child(2) { animation-delay: .2s; }
+    .dot:nth-child(3) { animation-delay: .4s; }
+    @keyframes pulse { 0%,100% { opacity:.2; transform:scale(.8); } 50% { opacity:1; transform:scale(1.1); } }
+
+    .chat-input-area { padding: 8px 12px; border-top: 1px solid #1a1a1a; flex-shrink: 0; }
+    .chat-input-row { display: flex; gap: 5px; align-items: flex-end; }
+    .chat-input { flex: 1; background: #111; border: 1px solid #2a2a2a; border-radius: 4px; color: #c8c8c8; font-size: 12px; font-family: 'Inter', sans-serif; padding: 6px 8px; resize: none; outline: none; min-height: 34px; max-height: 100px; line-height: 1.5; }
+    .chat-input:focus { border-color: #4a9eff44; }
+    .chat-send { background: #4a9eff; color: #000; border: none; border-radius: 4px; width: 30px; height: 30px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .chat-send:disabled { opacity: .35; cursor: not-allowed; }
+    .chat-hint { font-size: 9px; color: #2a2a2a; margin-top: 4px; }
+
+    /* ── Empty / loading ── */
+    .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; }
+    .empty-icon { font-size: 36px; }
+    .empty-title { font-size: 14px; color: #444; font-weight: 600; }
+    .empty-sub { font-size: 11px; color: #2a2a2a; text-align: center; max-width: 280px; line-height: 1.6; }
+
+    .spinner { width: 16px; height: 16px; border: 2px solid #2a2a2a; border-top-color: #f0a500; border-radius: 50%; animation: spin .7s linear infinite; display: inline-block; }
+    .spinner-lg { width: 28px; height: 28px; border-width: 3px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Markdown ── */
+    .md { max-width: 860px; line-height: 1.75; }
+    .md h1 { font-size: 18px; font-weight: 700; color: #fff; border-bottom: 1px solid #1e1e1e; padding-bottom: 10px; margin-bottom: 20px; font-family: 'JetBrains Mono', monospace; }
+    .md h2 { font-size: 13px; font-weight: 700; color: #f0a500; margin: 26px 0 10px; text-transform: uppercase; letter-spacing: .07em; }
+    .md h3 { font-size: 12px; font-weight: 600; color: #ddd; margin: 14px 0 6px; }
+    .md p { margin-bottom: 10px; }
+    .md strong { color: #e0e0e0; }
+    .md a { color: #4a9eff; text-decoration: none; }
+    .md a:hover { text-decoration: underline; color: #7ab8ff; }
+    .md ul, .md ol { padding-left: 20px; margin-bottom: 10px; }
+    .md li { margin-bottom: 3px; }
+    .md code { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 3px; padding: 1px 5px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #e0c080; }
+    .md pre { background: #0a0a0a; border: 1px solid #1e1e1e; border-radius: 4px; padding: 12px 14px; overflow-x: auto; margin-bottom: 12px; }
+    .md pre code { background: none; border: none; padding: 0; color: #a8d8a8; }
+    .md hr { border: none; border-top: 1px solid #1e1e1e; margin: 18px 0; }
+    .md blockquote { border-left: 3px solid #f0a500; padding: 6px 14px; background: #0f0f0f; margin-bottom: 10px; color: #777; }
+    .md table { width: 100%; border-collapse: collapse; margin-bottom: 14px; font-size: 11px; font-family: 'JetBrains Mono', monospace; }
+    .md th { background: #111; color: #666; font-weight: 600; text-align: left; padding: 6px 10px; border-bottom: 1px solid #2a2a2a; text-transform: uppercase; font-size: 9px; letter-spacing: .05em; }
+    .md td { padding: 6px 10px; border-bottom: 1px solid #141414; color: #c8c8c8; }
+    .md tr:hover td { background: #0f0f0f; }
+
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: #0a0a0a; }
+    ::-webkit-scrollbar-thumb { background: #222; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #333; }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Topbar -->
+  <div class="topbar">
+    <a href="/" class="logo">
+      <div class="logo-icon">ST</div>
+      <span class="logo-text">SwingTrader</span>
+    </a>
+    <div class="topbar-sep"></div>
+    <span class="topbar-title">Daily Report</span>
+    <div class="topbar-sep"></div>
+    <a href="/charts" class="btn btn-ghost" style="text-decoration:none;">&#x1F4CA; Charts</a>
+    <div class="spacer"></div>
+
+    <!-- Report model picker -->
+    <div class="model-select-wrap">
+      <span class="model-label">Report</span>
+      <select class="model-select" id="reportModelSelect" title="Model used to generate the report">
+        <option value="">Loading…</option>
+      </select>
+    </div>
+
+    <button class="btn btn-ghost" id="btnCopy" disabled>Copy MD</button>
+    <button class="btn btn-ghost" id="btnSave" disabled>Save .md</button>
+    <button class="btn btn-chat" id="btnToggleChat">&#x1F4AC; Chat</button>
+    <button class="btn btn-primary" id="btnGenerate">Generate Report</button>
+  </div>
+
+  <div class="body">
+
+    <!-- History sidebar -->
+    <div class="sidebar">
+      <div class="sidebar-hdr">History</div>
+      <div class="sidebar-list" id="sidebarList">
+        <div class="no-reports">No reports yet.</div>
+      </div>
+    </div>
+
+    <!-- Main -->
+    <div class="main">
+      <div class="content-toolbar">
+        <span id="genStatus" class="status">—</span>
+        <div class="spacer"></div>
+      </div>
+
+      <div class="content-split">
+
+        <!-- Report pane -->
+        <div class="report-pane">
+          <div class="empty" id="emptyState">
+            <div class="empty-icon">📊</div>
+            <div class="empty-title">No report loaded</div>
+            <div class="empty-sub">Click <strong>Generate Report</strong> to create today's analysis, or select a past report from the sidebar.</div>
+          </div>
+          <div class="md" id="reportContent" style="display:none;"></div>
+        </div>
+
+        <!-- Chat panel -->
+        <div class="chat-panel hidden" id="chatPanel">
+          <div class="chat-header">
+            <span class="chat-title">&#x1F4AC; Chat</span>
+            <div class="spacer"></div>
+            <!-- Chat model picker -->
+            <div class="model-select-wrap">
+              <select class="model-select" id="chatModelSelect" title="Model used for chat" style="max-width:150px;">
+                <option value="">Loading…</option>
+              </select>
+            </div>
+            <button class="btn btn-ghost" id="btnClearChat" style="padding:2px 8px;font-size:10px;">Clear</button>
+          </div>
+
+          <div class="chat-ctx">
+            <span class="ctx-lbl">Context:</span>
+            <button class="ctx-btn on" id="ctxPortfolio">Portfolio</button>
+            <button class="ctx-btn" id="ctxReport">Report</button>
+          </div>
+
+          <div class="chat-msgs" id="chatMsgs">
+            <div class="chat-placeholder">
+              Ask anything about your portfolio,<br>market conditions, or the report.<br><br>
+              <span style="font-size:10px;">e.g. "Why is MU recommended?" or<br>"Explain the Wyckoff signal"</span>
+            </div>
+          </div>
+
+          <div class="chat-input-area">
+            <div class="chat-input-row">
+              <textarea class="chat-input" id="chatInput" rows="1" placeholder="Ask about your portfolio or the report…"></textarea>
+              <button class="chat-send" id="chatSend" title="Send (Ctrl+Enter)">&#x2191;</button>
+            </div>
+            <div class="chat-hint">Ctrl+Enter to send &nbsp;·&nbsp; Toggle context above</div>
+          </div>
+        </div>
+
+      </div><!-- content-split -->
+    </div><!-- main -->
+  </div><!-- body -->
+</div>
+
+<script>
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  const token = localStorage.getItem('st_token');
+  if (!token) window.location.href = '/login';
+  const authHdr = () => ({ 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' });
+
+  // ── State ─────────────────────────────────────────────────────────────────
+  let currentMarkdown = '';
+  let currentDate     = '';
+  let generating      = false;
+  let chatOpen        = false;
+  let chatBusy        = false;
+  let useReportCtx    = false;
+
+  // ── Elements ──────────────────────────────────────────────────────────────
+  const btnGenerate       = document.getElementById('btnGenerate');
+  const btnSave           = document.getElementById('btnSave');
+  const btnCopy           = document.getElementById('btnCopy');
+  const btnToggleChat     = document.getElementById('btnToggleChat');
+  const btnClearChat      = document.getElementById('btnClearChat');
+  const genStatus         = document.getElementById('genStatus');
+  const emptyState        = document.getElementById('emptyState');
+  const reportContent     = document.getElementById('reportContent');
+  const sidebarList       = document.getElementById('sidebarList');
+  const chatPanel         = document.getElementById('chatPanel');
+  const chatMsgs          = document.getElementById('chatMsgs');
+  const chatInput         = document.getElementById('chatInput');
+  const chatSend          = document.getElementById('chatSend');
+  const ctxReport         = document.getElementById('ctxReport');
+  const reportModelSelect = document.getElementById('reportModelSelect');
+  const chatModelSelect   = document.getElementById('chatModelSelect');
+
+  // ── marked: links open in new tab ─────────────────────────────────────────
+  const renderer = new marked.Renderer();
+  renderer.link = (href, title, text) => {
+    const t = title ? ` title="${title}"` : '';
+    return `<a href="${href}"${t} target="_blank" rel="noopener noreferrer">${text} ↗</a>`;
+  };
+  marked.setOptions({ breaks: true, gfm: true, renderer });
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  function setStatus(msg, cls = '') {
+    genStatus.textContent = msg;
+    genStatus.className = 'status ' + cls;
+  }
+
+  function renderMarkdown(md) {
+    currentMarkdown = md;
+    reportContent.innerHTML = marked.parse(md);
+    emptyState.style.display   = 'none';
+    reportContent.style.display = '';
+    btnSave.disabled = false;
+    btnCopy.disabled = false;
+  }
+
+  // ── Model loading ─────────────────────────────────────────────────────────
+  async function loadModels() {
+    try {
+      const res = await fetch('/api/ai/ollama/models', { headers: authHdr() });
+      if (!res.ok) throw new Error(res.statusText);
+      const data = await res.json();   // { models: [{name, size_gb, ...}] }
+      const models = data.models || [];
+
+      const savedReport = localStorage.getItem('st_report_model');
+      const savedChat   = localStorage.getItem('st_chat_model');
+
+      [reportModelSelect, chatModelSelect].forEach((sel, i) => {
+        sel.innerHTML = '';
+        models.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m.name;
+          const gb = m.size_gb ? ` (${m.size_gb}GB)` : '';
+          opt.textContent = m.name + gb;
+          sel.appendChild(opt);
+        });
+        // Restore saved or fall back to first
+        const saved = i === 0 ? savedReport : savedChat;
+        if (saved && models.find(m => m.name === saved)) sel.value = saved;
+      });
+
+      if (models.length === 0) {
+        [reportModelSelect, chatModelSelect].forEach(s => {
+          s.innerHTML = '<option value="">No models found</option>';
+        });
+      }
+    } catch (e) {
+      console.warn('Could not load Ollama models:', e);
+      [reportModelSelect, chatModelSelect].forEach(s => {
+        s.innerHTML = '<option value="">Ollama unavailable</option>';
+      });
+    }
+  }
+
+  reportModelSelect.addEventListener('change', () => localStorage.setItem('st_report_model', reportModelSelect.value));
+  chatModelSelect.addEventListener('change',   () => localStorage.setItem('st_chat_model',   chatModelSelect.value));
+
+  // ── Chat panel toggle ─────────────────────────────────────────────────────
+  btnToggleChat.addEventListener('click', () => {
+    chatOpen = !chatOpen;
+    chatPanel.classList.toggle('hidden', !chatOpen);
+    btnToggleChat.classList.toggle('active', chatOpen);
+  });
+
+  // ── Context toggles ───────────────────────────────────────────────────────
+  ctxReport.addEventListener('click', () => {
+    useReportCtx = !useReportCtx;
+    ctxReport.classList.toggle('on', useReportCtx);
+  });
+
+  // ── Clear chat ────────────────────────────────────────────────────────────
+  btnClearChat.addEventListener('click', () => {
+    chatMsgs.innerHTML = '<div class="chat-placeholder">Chat cleared.<br><span style="font-size:10px;">Ask anything about your portfolio or the report.</span></div>';
+  });
+
+  // ── Auto-resize textarea ──────────────────────────────────────────────────
+  chatInput.addEventListener('input', () => {
+    chatInput.style.height = 'auto';
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 100) + 'px';
+  });
+  chatInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendChat(); }
+  });
+  chatSend.addEventListener('click', sendChat);
+
+  // ── Message helpers ───────────────────────────────────────────────────────
+  function appendMsg(role, content, isHtml = false) {
+    chatMsgs.querySelector('.chat-placeholder')?.remove();
+    const w = document.createElement('div');
+    w.className = 'msg ' + role;
+    const meta = document.createElement('div');
+    meta.className = 'msg-meta';
+    meta.textContent = role === 'user' ? 'You' : 'AI';
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble';
+    isHtml ? (bubble.innerHTML = content) : (bubble.textContent = content);
+    w.append(meta, bubble);
+    chatMsgs.appendChild(w);
+    chatMsgs.scrollTop = chatMsgs.scrollHeight;
+  }
+
+  function appendThinking() {
+    chatMsgs.querySelector('.chat-placeholder')?.remove();
+    const w = document.createElement('div');
+    w.className = 'msg assistant'; w.id = 'thinkingBubble';
+    w.innerHTML = '<div class="msg-meta">AI</div><div class="chat-thinking"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
+    chatMsgs.appendChild(w);
+    chatMsgs.scrollTop = chatMsgs.scrollHeight;
+  }
+
+  // ── Send chat ─────────────────────────────────────────────────────────────
+  async function sendChat() {
+    const question = chatInput.value.trim();
+    if (!question || chatBusy) return;
+    chatBusy = true;
+    chatSend.disabled = true;
+    chatInput.value = '';
+    chatInput.style.height = 'auto';
+
+    appendMsg('user', question);
+    appendThinking();
+
+    try {
+      const res = await fetch('/api/ai/market-chat', {
+        method: 'POST', headers: authHdr(),
+        body: JSON.stringify({
+          question,
+          report_context: useReportCtx && currentMarkdown ? currentMarkdown : null,
+          model: chatModelSelect.value || undefined,
+        }),
+      });
+      document.getElementById('thinkingBubble')?.remove();
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        appendMsg('assistant', '⚠️ ' + (err.detail || res.statusText));
+      } else {
+        const data = await res.json();
+        appendMsg('assistant', marked.parse(data.answer), true);
+      }
+    } catch (e) {
+      document.getElementById('thinkingBubble')?.remove();
+      appendMsg('assistant', '⚠️ Network error: ' + e.message);
+    } finally {
+      chatBusy = false;
+      chatSend.disabled = false;
+      chatInput.focus();
+      chatMsgs.scrollTop = chatMsgs.scrollHeight;
+    }
+  }
+
+  // ── History sidebar ───────────────────────────────────────────────────────
+  async function loadHistory() {
+    try {
+      const res = await fetch('/api/ai/reports', { headers: authHdr() });
+      if (!res.ok) return;
+      const reports = await res.json();
+      if (!reports.length) return;
+      sidebarList.innerHTML = '';
+      reports.forEach((r, idx) => {
+        const dt = new Date(r.generated_at);
+        const el = document.createElement('div');
+        el.className = 's-item' + (idx === 0 ? ' active' : '');
+        el.dataset.id = r.id;
+        el.innerHTML = `
+          <div class="d">${dt.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'2-digit' })}</div>
+          <div class="m">${dt.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' })} · ${r.triggered_by}</div>`;
+        el.addEventListener('click', () => loadById(r.id, el));
+        sidebarList.appendChild(el);
+      });
+    } catch (e) { console.warn('loadHistory', e); }
+  }
+
+  async function loadById(id, el) {
+    setStatus('Loading…');
+    try {
+      const res = await fetch(`/api/ai/report/${id}`, { headers: authHdr() });
+      if (!res.ok) throw new Error(res.statusText);
+      const data = await res.json();
+      renderMarkdown(data.markdown);
+      currentDate = new Date(data.generated_at).toISOString().slice(0,10).replace(/-/g,'');
+      setStatus('Loaded · ' + new Date(data.generated_at).toLocaleString(), 'ok');
+      document.querySelectorAll('.s-item').forEach(i => i.classList.remove('active'));
+      el?.classList.add('active');
+    } catch (e) { setStatus('Load failed: ' + e.message, 'err'); }
+  }
+
+  async function loadLatest() {
+    try {
+      const res = await fetch('/api/ai/report/latest', { headers: authHdr() });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.markdown) return;
+      renderMarkdown(data.markdown);
+      currentDate = new Date(data.generated_at).toISOString().slice(0,10).replace(/-/g,'');
+      setStatus('Last generated ' + new Date(data.generated_at).toLocaleString() + ' · ' + data.triggered_by, 'ok');
+    } catch (e) { console.warn('loadLatest', e); }
+  }
+
+  // ── Generate ──────────────────────────────────────────────────────────────
+  btnGenerate.addEventListener('click', async () => {
+    if (generating) return;
+    generating = true;
+    btnGenerate.disabled = true;
+    btnGenerate.innerHTML = '<span class="spinner"></span> Generating…';
+    const modelName = reportModelSelect.value || 'LLM';
+    setStatus(`Calling ${modelName} — 30–90 seconds…`, 'running');
+
+    emptyState.style.display = '';
+    emptyState.innerHTML = `
+      <span class="spinner spinner-lg"></span>
+      <div class="empty-title" style="color:#f0a500;margin-top:8px">Generating…</div>
+      <div class="empty-sub">${modelName} is analysing your portfolio,<br>watchlist, and correlations.</div>`;
+    reportContent.style.display = 'none';
+
+    try {
+      const res = await fetch('/api/ai/daily-report', {
+        method: 'POST', headers: authHdr(),
+        body: JSON.stringify({ model: reportModelSelect.value || undefined }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || res.statusText);
+      }
+      const data = await res.json();
+      renderMarkdown(data.markdown);
+      currentDate = new Date(data.generated_at).toISOString().slice(0,10).replace(/-/g,'');
+      setStatus('Generated at ' + new Date(data.generated_at).toLocaleString(), 'ok');
+      await loadHistory();
+      const first = sidebarList.querySelector('.s-item');
+      if (first) { document.querySelectorAll('.s-item').forEach(i => i.classList.remove('active')); first.classList.add('active'); }
+    } catch (e) {
+      setStatus('Error: ' + e.message, 'err');
+      emptyState.innerHTML = `<div class="empty-icon">⚠️</div><div class="empty-title" style="color:#f44336">Generation failed</div><div class="empty-sub">${e.message}</div>`;
+    } finally {
+      generating = false;
+      btnGenerate.disabled = false;
+      btnGenerate.innerHTML = 'Generate Report';
+    }
+  });
+
+  // ── Save / Copy ───────────────────────────────────────────────────────────
+  btnSave.addEventListener('click', () => {
+    if (!currentMarkdown) return;
+    const a = Object.assign(document.createElement('a'), {
+      href: URL.createObjectURL(new Blob([currentMarkdown], { type: 'text/markdown' })),
+      download: (currentDate || 'report') + '_market_analysis.md',
+    });
+    a.click(); URL.revokeObjectURL(a.href);
+  });
+
+  btnCopy.addEventListener('click', async () => {
+    if (!currentMarkdown) return;
+    try {
+      await navigator.clipboard.writeText(currentMarkdown);
+      const orig = btnCopy.textContent;
+      btnCopy.textContent = 'Copied!';
+      setTimeout(() => btnCopy.textContent = orig, 1500);
+    } catch {}
+  });
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+  (async () => {
+    await loadModels();
+    await loadHistory();
+    await loadLatest();
+  })();
+</script>
+</body>
+</html>

@@ -23,11 +23,15 @@ if os.path.exists(OPTS):
     os.environ["SECRET_KEY"]  = str(opts.get("secret_key",  "change-me"))
     os.environ["ADMIN_USER"]  = str(opts.get("admin_user",  "admin"))
     os.environ["ADMIN_PASS"]  = str(opts.get("admin_pass",  "changeme"))
-    os.environ["AI_PROVIDER"] = str(opts.get("ai_provider", "none"))
-    os.environ["AI_API_KEY"]  = str(opts.get("ai_api_key",  ""))
-    os.environ["AI_MODEL"]    = str(opts.get("ai_model",    ""))
-    os.environ["HOST"]        = "0.0.0.0"
-    os.environ["PORT"]        = "8443"
+    os.environ["AI_PROVIDER"]  = str(opts.get("ai_provider",  "none"))
+    os.environ["AI_API_KEY"]   = str(opts.get("ai_api_key",   ""))
+    os.environ["AI_MODEL"]     = str(opts.get("ai_model",     ""))
+    os.environ["FRED_API_KEY"] = str(opts.get("fred_api_key", ""))
+    os.environ["OLLAMA_URL"]   = str(opts.get("ollama_url",   "http://192.168.10.21:11434"))
+    os.environ["OLLAMA_MODEL"] = str(opts.get("ollama_model", "qwen35-moe:latest"))
+    os.environ["REPORT_MODEL"] = str(opts.get("report_model", "deepseek-r1:8b"))
+    os.environ["HOST"]         = "0.0.0.0"
+    os.environ["PORT"]         = "8443"
 
     # ── Database (HA persistent volume) ───────────────────────────────────────
     os.environ["DATABASE_URL"] = "sqlite:////data/swingtrader.db"

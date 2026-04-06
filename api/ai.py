@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from database.db import get_db
-from database.models import User
+from database.models import User, ReportCache
 from auth.deps import get_current_user
 from services import market_data
 from services.ai_service import AIService, ai_service
@@ -14,6 +14,16 @@ settings = get_settings()
 
 class ChatRequest(BaseModel):
     question: str
+
+
+class MarketChatRequest(BaseModel):
+    question: str
+    report_context: str | None = None
+    model: str | None = None            # override chat model
+
+
+class ReportRequest(BaseModel):
+    model: str | None = None            # override report model
 
 
 @router.get("/status")
@@ -85,3 +95,202 @@ async def sector_summary(
 ):
     summary = await svc.summarize_sector(sector, [])
     return {"sector": sector, "summary": summary}
+
+
+# ── Daily Report Endpoints ────────────────────────────────────────────────────
+
+@router.get("/ollama/models")
+async def ollama_models(user: User = Depends(get_current_user)):
+    """Return all models currently loaded on the Ollama server."""
+    import httpx
+    url = settings.ollama_url.rstrip("/") + "/api/tags"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Cannot reach Ollama: {e}")
+
+    models = []
+    for m in data.get("models", []):
+        size_bytes = m.get("size", 0)
+        models.append({
+            "name": m["name"],
+            "size_gb": round(size_bytes / 1e9, 1) if size_bytes else None,
+            "modified_at": m.get("modified_at"),
+        })
+    # Sort: put embedding models last, everything else alphabetical
+    models.sort(key=lambda m: (1 if "embed" in m["name"] else 0, m["name"]))
+    return {"models": models}
+
+
+@router.post("/daily-report")
+async def generate_report(
+    req: ReportRequest = ReportRequest(),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Trigger on-demand report generation for the current user."""
+    from services.report_service import generate_daily_report
+    try:
+        markdown = await generate_daily_report(db, user.id, triggered_by="user", model=req.model)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return {
+        "markdown": markdown,
+        "generated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+    }
+
+
+@router.get("/report/latest")
+def get_latest_report(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return the most recently generated report for the current user."""
+    report = (
+        db.query(ReportCache)
+        .filter(ReportCache.user_id == user.id)
+        .order_by(ReportCache.generated_at.desc())
+        .first()
+    )
+    if not report:
+        return {"markdown": None, "generated_at": None, "triggered_by": None}
+    return {
+        "markdown": report.report_markdown,
+        "generated_at": report.generated_at.isoformat(),
+        "triggered_by": report.triggered_by,
+    }
+
+
+@router.get("/reports")
+def list_reports(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """List all stored reports for the current user (newest first)."""
+    rows = (
+        db.query(ReportCache)
+        .filter(ReportCache.user_id == user.id)
+        .order_by(ReportCache.generated_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "generated_at": r.generated_at.isoformat(),
+            "triggered_by": r.triggered_by,
+        }
+        for r in rows
+    ]
+
+
+@router.post("/market-chat")
+async def market_chat(
+    req: MarketChatRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    General market/report chat. Loads the user's live portfolio + watchlist
+    as context, then calls Ollama with the question (and optional report markdown).
+    """
+    import json, httpx
+    from database.models import PortfolioPosition, WatchlistItem
+    from services import market_data
+
+    # Gather live portfolio + watchlist data
+    positions = db.query(PortfolioPosition).filter(PortfolioPosition.user_id == user.id).all()
+    watchlist = db.query(WatchlistItem).filter(WatchlistItem.user_id == user.id).all()
+    all_tickers = list({p.ticker for p in positions} | {w.ticker for w in watchlist})
+
+    quotes = await market_data.get_batch(all_tickers, db) if all_tickers else []
+    qmap = {q["ticker"]: q for q in quotes}
+
+    portfolio_data = []
+    total_cost = total_mv = 0.0
+    for pos in positions:
+        q = qmap.get(pos.ticker, {})
+        price = q.get("price") or pos.avg_cost
+        cost = pos.shares * pos.avg_cost
+        mv = pos.shares * price
+        total_cost += cost
+        total_mv += mv
+        portfolio_data.append({
+            "ticker": pos.ticker, "shares": pos.shares, "avg_cost": pos.avg_cost,
+            "price": round(price, 2),
+            "market_value": round(mv, 2),
+            "pnl_pct": round((mv - cost) / cost * 100, 2) if cost > 0 else 0,
+            "rsi": q.get("rsi"), "vol_r": q.get("vol_r"), "chg_pct": q.get("chg_pct"),
+            "ann_ret": q.get("ann_ret"), "sharpe": q.get("sharpe"),
+            "sector": q.get("sector", "Unknown"), "macd_sig": q.get("macd_sig"),
+        })
+
+    watchlist_data = [
+        {"ticker": w.ticker, "price": qmap.get(w.ticker, {}).get("price"),
+         "rsi": qmap.get(w.ticker, {}).get("rsi"), "score": qmap.get(w.ticker, {}).get("score"),
+         "chg_pct": qmap.get(w.ticker, {}).get("chg_pct"),
+         "sector": qmap.get(w.ticker, {}).get("sector", "Unknown"), "notes": w.notes}
+        for w in watchlist
+    ]
+
+    system = (
+        "You are a professional swing-trading assistant with access to the user's live portfolio "
+        "and watchlist data. Answer questions concisely and specifically using the data provided. "
+        "Use markdown formatting. Cite specific tickers and numbers from the data when relevant. "
+        "Keep answers focused and under 400 words unless a detailed breakdown is requested."
+    )
+
+    context_parts = [
+        f"=== PORTFOLIO ({len(portfolio_data)} positions, Total MV: ${total_mv:,.0f}) ===",
+        json.dumps(portfolio_data, indent=2),
+        f"\n=== WATCHLIST ({len(watchlist_data)} tickers) ===",
+        json.dumps(watchlist_data, indent=2),
+    ]
+    if req.report_context:
+        context_parts += ["\n=== TODAY'S MARKET REPORT ===", req.report_context[:6000]]
+
+    user_msg = "\n".join(context_parts) + f"\n\n=== QUESTION ===\n{req.question}"
+
+    payload = {
+        "model": req.model or settings.ollama_model,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_msg},
+        ],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                settings.ollama_url.rstrip("/") + "/api/chat", json=payload
+            )
+            resp.raise_for_status()
+            answer = resp.json()["message"]["content"]
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Ollama error: {e}")
+
+    return {"answer": answer}
+
+
+@router.get("/report/{report_id}")
+def get_report_by_id(
+    report_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Fetch a specific past report by ID."""
+    report = (
+        db.query(ReportCache)
+        .filter(ReportCache.id == report_id, ReportCache.user_id == user.id)
+        .first()
+    )
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return {
+        "id": report.id,
+        "markdown": report.report_markdown,
+        "generated_at": report.generated_at.isoformat(),
+        "triggered_by": report.triggered_by,
+    }

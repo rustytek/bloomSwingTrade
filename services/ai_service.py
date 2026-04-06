@@ -11,9 +11,12 @@ The rest of the application always calls get_ai_service() to get the current
 implementation, so switching providers requires zero changes elsewhere.
 """
 
+import json
 import logging
 from abc import ABC, abstractmethod
 from config import get_settings
+
+import httpx
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -143,6 +146,99 @@ class MockAIService(AIService):
         return f"AI sector analysis for {sector} is not configured."
 
 
+# ── Ollama Implementation ─────────────────────────────────────────────────
+
+class OllamaAIService(AIService):
+    """
+    Ollama local LLM service.
+    Calls the Ollama /api/chat endpoint on your local network.
+    Set AI_PROVIDER=ollama in .env to activate.
+    """
+
+    def __init__(self):
+        self.base_url = settings.ollama_url.rstrip("/")
+        self.model = settings.ollama_model
+        self._timeout = 120.0
+
+    async def _chat(self, system: str, user: str) -> str:
+        payload = {
+            "model": self.model,
+            "stream": False,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            resp = await client.post(f"{self.base_url}/api/chat", json=payload)
+            resp.raise_for_status()
+            return resp.json()["message"]["content"]
+
+    async def analyze_stock(self, ticker: str, data: dict) -> dict:
+        system = (
+            "You are a professional stock analyst. Analyze the given stock data and respond "
+            "with a JSON object only — no markdown, no extra text. Keys: summary (str), "
+            "sentiment (bullish|bearish|neutral), confidence (0.0-1.0), key_factors ([str]), "
+            "ai_score (1-10 int), risks ([str]), opportunities ([str])."
+        )
+        user = f"Analyze {ticker}:\n{json.dumps(data, default=str)}"
+        try:
+            raw = await self._chat(system, user)
+            # Strip any markdown code fences the model may add
+            raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            return json.loads(raw)
+        except Exception as e:
+            logger.error(f"Ollama analyze_stock failed for {ticker}: {e}")
+            return {
+                "summary": f"Ollama analysis failed: {e}",
+                "sentiment": "neutral", "confidence": 0.0,
+                "key_factors": [], "ai_score": None,
+                "risks": ["LLM unavailable"], "opportunities": [],
+            }
+
+    async def generate_signals(self, ticker: str, technicals: dict) -> list[dict]:
+        system = (
+            "You are a swing-trading signal generator. Based on the technical data provided, "
+            "return a JSON array of signal objects only — no markdown, no extra text. "
+            "Each object: type (entry|exit|warning|info), signal (short label), "
+            "message (explanation), strength (strong|moderate|weak)."
+        )
+        user = f"Generate signals for {ticker}:\n{json.dumps(technicals, default=str)}"
+        try:
+            raw = await self._chat(system, user)
+            raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            return json.loads(raw)
+        except Exception as e:
+            logger.error(f"Ollama generate_signals failed for {ticker}: {e}")
+            return [{"type": "info", "signal": "LLM Error", "message": str(e), "strength": "weak"}]
+
+    async def chat(self, ticker: str, question: str, context: dict) -> str:
+        system = (
+            "You are a swing-trading assistant. Answer concisely using the stock data provided. "
+            "Use markdown formatting. Keep answers under 300 words."
+        )
+        user = (
+            f"Stock: {ticker}\nData: {json.dumps(context, default=str)}\n\nQuestion: {question}"
+        )
+        try:
+            return await self._chat(system, user)
+        except Exception as e:
+            logger.error(f"Ollama chat failed for {ticker}: {e}")
+            return f"Ollama error: {e}"
+
+    async def summarize_sector(self, sector: str, stocks: list[dict]) -> str:
+        system = (
+            "You are a market analyst. Write a 2-4 sentence markdown sector summary "
+            "based on the stock data provided."
+        )
+        user = f"Sector: {sector}\nStocks: {json.dumps(stocks[:10], default=str)}"
+        try:
+            return await self._chat(system, user)
+        except Exception as e:
+            logger.error(f"Ollama summarize_sector failed for {sector}: {e}")
+            return f"Ollama sector summary unavailable: {e}"
+
+
 # ── Future: Anthropic Implementation ──────────────────────────────────────
 #
 # class AnthropicAIService(AIService):
@@ -179,6 +275,9 @@ class MockAIService(AIService):
 def get_ai_service() -> AIService:
     """Return the configured AI service singleton."""
     provider = settings.ai_provider.lower()
+
+    if provider == "ollama":
+        return OllamaAIService()
 
     if provider == "anthropic":
         # Uncomment when AnthropicAIService is implemented above

@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SwingTrader — Market Charts</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <!-- Lightweight Charts (TradingView OSS) -->
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0d0d0d; color: #e0e0e0; font-family: 'Inter', sans-serif; font-size: 13px; }
+
+    /* ── Topbar ── */
+    .topbar { display: flex; align-items: center; gap: 10px; padding: 0 16px; height: 44px; background: #111; border-bottom: 1px solid #1e1e1e; flex-shrink: 0; }
+    .logo { display: flex; align-items: center; gap: 8px; text-decoration: none; }
+    .logo-icon { width: 26px; height: 26px; background: #f0a500; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 800; color: #000; font-family: 'JetBrains Mono', monospace; }
+    .logo-text { font-weight: 700; font-size: 13px; letter-spacing: .08em; color: #fff; font-family: 'JetBrains Mono', monospace; }
+    .topbar-sep { width: 1px; height: 20px; background: #222; }
+    .topbar-title { font-size: 12px; color: #555; }
+    .spacer { flex: 1; }
+    .btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 3px; border: none; font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; text-decoration: none; white-space: nowrap; }
+    .btn-ghost { background: transparent; color: #aaa; border: 1px solid #2a2a2a; }
+    .btn-ghost:hover { background: #1a1a1a; color: #ddd; }
+    .btn-primary { background: #f0a500; color: #000; }
+    .btn-primary:hover { opacity: 0.85; }
+
+    /* ── Layout ── */
+    .page { padding: 20px; display: grid; gap: 20px; max-width: 1600px; margin: 0 auto; }
+
+    /* ── Stat cards ── */
+    .stat-row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .stat-card { background: #111; border: 1px solid #1e1e1e; border-radius: 6px; padding: 14px 18px; flex: 1; min-width: 150px; }
+    .stat-label { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 4px; }
+    .stat-value { font-size: 22px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #e0e0e0; }
+    .stat-sub { font-size: 11px; color: #666; margin-top: 3px; }
+    .stat-up { color: #26a65b; }
+    .stat-down { color: #e05252; }
+    .stat-warn { color: #f0a500; }
+
+    /* ── Section headers ── */
+    .section-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+    .section-title { font-size: 13px; font-weight: 700; color: #e0e0e0; }
+    .section-sub { font-size: 11px; color: #555; }
+
+    /* ── Chart panels ── */
+    .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .chart-panel { background: #111; border: 1px solid #1e1e1e; border-radius: 6px; padding: 16px; }
+    .chart-panel.full-width { grid-column: 1 / -1; }
+    .chart-title { font-size: 12px; font-weight: 600; color: #ccc; margin-bottom: 12px; }
+    .chart-container { position: relative; }
+    .lw-chart { width: 100%; height: 220px; }
+    .canvas-wrap { position: relative; height: 260px; }
+
+    /* ── Breadth bars ── */
+    .breadth-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .breadth-bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .breadth-bar-label { width: 110px; font-size: 11px; color: #aaa; text-align: right; flex-shrink: 0; }
+    .breadth-bar-track { flex: 1; background: #1a1a1a; border-radius: 2px; height: 14px; overflow: hidden; }
+    .breadth-bar-fill { height: 100%; border-radius: 2px; transition: width 0.4s ease; }
+    .breadth-bar-pct { width: 36px; font-size: 11px; color: #aaa; font-family: 'JetBrains Mono', monospace; }
+
+    /* ── Sector heatmap ── */
+    .sector-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .sector-table th { text-align: left; padding: 5px 8px; font-weight: 600; color: #555; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid #1e1e1e; }
+    .sector-table td { padding: 6px 8px; border-bottom: 1px solid #141414; }
+    .sector-table tr:hover td { background: #161616; }
+    .pct-cell { font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+
+    /* ── VIX zone badge ── */
+    .vix-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+    .zone-extreme_fear { background: #5c0a0a; color: #ff6b6b; }
+    .zone-fear { background: #3d2200; color: #f0a500; }
+    .zone-neutral { background: #1a2a1a; color: #26a65b; }
+    .zone-complacency { background: #0a1a3c; color: #7eb8f5; }
+
+    /* ── Loading / Error ── */
+    .loading-overlay { display: flex; align-items: center; justify-content: center; height: 200px; color: #444; font-size: 13px; }
+    .error-msg { color: #e05252; font-size: 12px; padding: 10px; }
+
+    @media (max-width: 900px) {
+      .charts-grid, .breadth-grid { grid-template-columns: 1fr; }
+      .charts-grid .full-width { grid-column: 1; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <a href="/" class="logo">
+    <div class="logo-icon">ST</div>
+    <span class="logo-text">SwingTrader</span>
+  </a>
+  <div class="topbar-sep"></div>
+  <span class="topbar-title">Market Charts</span>
+  <div class="topbar-sep"></div>
+  <a href="/report" class="btn btn-ghost" style="text-decoration:none;">&#x1F4C4; Report</a>
+  <div class="spacer"></div>
+  <button class="btn btn-primary" id="btnRefresh">&#x21BB; Refresh</button>
+</div>
+
+<div class="page">
+
+  <!-- ── Stat cards ── -->
+  <div class="stat-row" id="statRow">
+    <div class="stat-card"><div class="stat-label">Loading…</div><div class="stat-value">—</div></div>
+  </div>
+
+  <!-- ── Top row: Yields + VIX ── -->
+  <div class="charts-grid">
+
+    <div class="chart-panel">
+      <div class="chart-title">10yr &amp; 2yr Treasury Yields (%)</div>
+      <div class="lw-chart" id="yieldChart"></div>
+    </div>
+
+    <div class="chart-panel">
+      <div class="chart-title">Yield Spread: 10yr − 2yr (bps)</div>
+      <div class="lw-chart" id="spreadChart"></div>
+    </div>
+
+    <div class="chart-panel">
+      <div class="chart-title">VIX — Volatility Index (90 days)</div>
+      <div class="lw-chart" id="vixChart"></div>
+    </div>
+
+    <div class="chart-panel">
+      <div class="chart-title">M2 Money Supply ($ billions)</div>
+      <div class="lw-chart" id="m2Chart"></div>
+    </div>
+
+    <div class="chart-panel full-width">
+      <div class="chart-title">Fed Funds Rate (%)</div>
+      <div class="lw-chart" id="fedChart"></div>
+    </div>
+
+  </div>
+
+  <!-- ── Sector + Breadth ── -->
+  <div class="breadth-grid">
+
+    <div class="chart-panel">
+      <div class="section-header">
+        <span class="section-title">Sector Rotation</span>
+        <span class="section-sub">1-month return, sorted</span>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="sectorChart"></canvas>
+      </div>
+    </div>
+
+    <div class="chart-panel">
+      <div class="section-header">
+        <span class="section-title">S&amp;P 500 Breadth</span>
+        <span class="section-sub" id="breadthRegimeLabel">—</span>
+      </div>
+      <div id="breadthBars"></div>
+
+      <div style="margin-top: 18px; border-top: 1px solid #1e1e1e; padding-top: 14px;">
+        <div class="section-title" style="margin-bottom: 10px; font-size: 11px;">Sector % Above 200MA</div>
+        <div id="sectorBreadthBars"></div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<script>
+'use strict';
+
+const TOKEN_KEY = 'st_token';
+
+// ── Auth guard ───────────────────────────────────────────────────────────────
+function getToken() {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+async function apiFetch(url) {
+  const token = getToken();
+  if (!token) {
+    window.location.href = '/login';
+    throw new Error('Not authenticated');
+  }
+  const resp = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (resp.status === 401) {
+    window.location.href = '/login';
+    throw new Error('Session expired');
+  }
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`${resp.status}: ${text}`);
+  }
+  return resp.json();
+}
+
+// ── LW Chart factory ─────────────────────────────────────────────────────────
+function makeLWChart(containerId, opts = {}) {
+  const el = document.getElementById(containerId);
+  const chart = LightweightCharts.createChart(el, {
+    width: el.clientWidth,
+    height: 220,
+    layout: { background: { color: '#111' }, textColor: '#888' },
+    grid: { vertLines: { color: '#1a1a1a' }, horzLines: { color: '#1a1a1a' } },
+    rightPriceScale: { borderColor: '#1e1e1e' },
+    timeScale: { borderColor: '#1e1e1e', timeVisible: true },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    ...opts,
+  });
+  // Resize observer
+  new ResizeObserver(() => chart.applyOptions({ width: el.clientWidth })).observe(el);
+  return chart;
+}
+
+// Convert [{date, value}] → LW format [{time, value}]
+function toSeries(data) {
+  return data.map(d => ({ time: d.date, value: d.value }));
+}
+
+// Color by value (for yields/spread)
+function colorLine(v, neutral = '#7eb8f5') {
+  if (v === null || v === undefined) return neutral;
+  return v >= 0 ? '#26a65b' : '#e05252';
+}
+
+// ── Stat cards ───────────────────────────────────────────────────────────────
+function buildStatCards(macro, vix, breadth) {
+  const vixCurrent = vix.current;
+  const zone = vix.zone;
+  const zoneClass = `zone-${zone}`;
+  const spread = macro.yield_spread_now;
+  const inverted = macro.yield_inverted;
+
+  const cards = [
+    {
+      label: 'VIX',
+      value: vixCurrent?.toFixed(2) ?? '—',
+      sub: `<span class="vix-badge ${zoneClass}">${zone.replace('_', ' ')}</span>`,
+    },
+    {
+      label: 'Fed Funds',
+      value: `${macro.fed_rate ?? '—'}%`,
+      sub: `2yr: ${macro.yield_2yr ?? '—'}%  |  10yr: ${macro.yield_10yr ?? '—'}%`,
+    },
+    {
+      label: 'Yield Spread',
+      value: spread != null ? `${spread > 0 ? '+' : ''}${spread.toFixed(3)}%` : '—',
+      sub: inverted ? '<span class="stat-warn">⚠ Inverted</span>' : 'Normal curve',
+      cls: inverted ? 'stat-warn' : (spread >= 0 ? 'stat-up' : 'stat-down'),
+    },
+    {
+      label: 'M2 Supply',
+      value: macro.m2_current != null ? `$${macro.m2_current.toFixed(0)}B` : '—',
+      sub: `Trend: ${macro.m2_trend ?? '—'}`,
+    },
+    {
+      label: 'S&P 500 Breadth',
+      value: `${breadth.pct_above_200ma ?? '—'}%`,
+      sub: `Above 200MA  |  Regime: <strong>${breadth.regime ?? '—'}</strong>`,
+      cls: breadth.pct_above_200ma >= 60 ? 'stat-up' : breadth.pct_above_200ma >= 40 ? '' : 'stat-down',
+    },
+    {
+      label: 'A/D Ratio',
+      value: breadth.ad_ratio ?? '—',
+      sub: `${breadth.advancing ?? 0} adv / ${breadth.declining ?? 0} dec`,
+      cls: breadth.ad_ratio >= 1 ? 'stat-up' : 'stat-down',
+    },
+  ];
+
+  const row = document.getElementById('statRow');
+  row.innerHTML = cards.map(c => `
+    <div class="stat-card">
+      <div class="stat-label">${c.label}</div>
+      <div class="stat-value ${c.cls || ''}">${c.value}</div>
+      <div class="stat-sub">${c.sub || ''}</div>
+    </div>`).join('');
+}
+
+// ── Sector bar chart (Chart.js) ──────────────────────────────────────────────
+let sectorChartInst = null;
+
+function buildSectorChart(sectors) {
+  const sorted = [...sectors].sort((a, b) => (b.ret_1m ?? -999) - (a.ret_1m ?? -999));
+  const labels = sorted.map(s => s.ticker);
+  const data   = sorted.map(s => s.ret_1m ?? 0);
+  const colors = data.map(v => v >= 0 ? 'rgba(38,166,91,0.75)' : 'rgba(224,82,82,0.75)');
+
+  const ctx = document.getElementById('sectorChart').getContext('2d');
+  if (sectorChartInst) sectorChartInst.destroy();
+  sectorChartInst = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: '1M Return (%)',
+        data,
+        backgroundColor: colors,
+        borderRadius: 3,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const s = sorted[ctx.dataIndex];
+              return [
+                ` 1M: ${s.ret_1m != null ? s.ret_1m.toFixed(2) + '%' : 'N/A'}`,
+                ` 5D: ${s.ret_5d != null ? s.ret_5d.toFixed(2) + '%' : 'N/A'}`,
+                ` 3M: ${s.ret_3m != null ? s.ret_3m.toFixed(2) + '%' : 'N/A'}`,
+                ` ${s.name}`,
+              ];
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { color: '#1a1a1a' },
+          ticks: { color: '#666', font: { size: 10 } },
+        },
+        y: {
+          grid: { color: '#1a1a1a' },
+          ticks: { color: '#aaa', font: { size: 11, family: 'JetBrains Mono' } },
+        },
+      },
+    },
+  });
+}
+
+// ── Breadth bars ─────────────────────────────────────────────────────────────
+function barHtml(label, pct, color = '#26a65b') {
+  return `
+    <div class="breadth-bar-row">
+      <div class="breadth-bar-label">${label}</div>
+      <div class="breadth-bar-track">
+        <div class="breadth-bar-fill" style="width:${Math.min(pct, 100)}%;background:${color};"></div>
+      </div>
+      <div class="breadth-bar-pct">${pct}%</div>
+    </div>`;
+}
+
+function buildBreadth(breadth) {
+  const regime = breadth.regime ?? 'Unknown';
+  document.getElementById('breadthRegimeLabel').textContent = `Regime: ${regime}`;
+
+  const main = document.getElementById('breadthBars');
+  main.innerHTML = [
+    barHtml('Above 200MA', breadth.pct_above_200ma ?? 0, '#26a65b'),
+    barHtml('Above 50MA',  breadth.pct_above_50ma  ?? 0, '#7eb8f5'),
+  ].join('');
+
+  const secEl = document.getElementById('sectorBreadthBars');
+  const rows = (breadth.sector_breadth ?? []).slice(0, 12);
+  secEl.innerHTML = rows.map(s => {
+    const pct = s.pct_above_200 ?? 0;
+    const color = pct >= 70 ? '#26a65b' : pct >= 50 ? '#7eb8f5' : pct >= 30 ? '#f0a500' : '#e05252';
+    return barHtml(s.sector?.substring(0, 14) ?? '—', pct, color);
+  }).join('');
+}
+
+// ── Main load ────────────────────────────────────────────────────────────────
+async function loadAll() {
+  document.getElementById('statRow').innerHTML =
+    '<div class="loading-overlay" style="flex:1">Loading market data…</div>';
+
+  try {
+    const data = await apiFetch('/api/charts/all');
+    const { macro, vix: vixObj, sectors, breadth } = data;
+
+    // Stat cards
+    buildStatCards(macro, { current: vixObj.at(-1)?.value, zone: (() => {
+      const v = vixObj.at(-1)?.value;
+      return v > 30 ? 'extreme_fear' : v > 20 ? 'fear' : v > 15 ? 'neutral' : 'complacency';
+    })() }, breadth);
+
+    // ── LW Charts ──────────────────────────────────────────────────────────
+
+    // 10yr + 2yr yields (two series on one chart)
+    const yieldChart = makeLWChart('yieldChart');
+    const s10 = yieldChart.addLineSeries({ color: '#f0a500', lineWidth: 2, title: '10yr' });
+    const s2  = yieldChart.addLineSeries({ color: '#7eb8f5', lineWidth: 2, title: '2yr' });
+    s10.setData(toSeries(macro.dgs10 ?? []));
+    s2.setData(toSeries(macro.dgs2 ?? []));
+    yieldChart.timeScale().fitContent();
+
+    // Yield spread
+    const spreadChart = makeLWChart('spreadChart');
+    const spreadSeries = spreadChart.addBaselineSeries({
+      baseValue: { type: 'price', price: 0 },
+      topLineColor: '#26a65b', topFillColor1: 'rgba(38,166,91,0.15)', topFillColor2: 'rgba(38,166,91,0.02)',
+      bottomLineColor: '#e05252', bottomFillColor1: 'rgba(224,82,82,0.02)', bottomFillColor2: 'rgba(224,82,82,0.15)',
+      lineWidth: 2, title: 'Spread',
+    });
+    spreadSeries.setData(toSeries(macro.yield_spread ?? []));
+    spreadChart.timeScale().fitContent();
+
+    // VIX
+    const vixChart = makeLWChart('vixChart');
+    const vixSeries = vixChart.addAreaSeries({
+      lineColor: '#f0a500', topColor: 'rgba(240,165,0,0.25)', bottomColor: 'rgba(240,165,0,0.02)',
+      lineWidth: 2, title: 'VIX',
+    });
+    vixSeries.setData(toSeries(vixObj));
+
+    // Add horizontal reference lines
+    [20, 30].forEach(level => {
+      const ref = vixChart.addLineSeries({ color: '#333', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed });
+      const firstDate = vixObj[0]?.date;
+      const lastDate  = vixObj.at(-1)?.date;
+      if (firstDate && lastDate) ref.setData([{ time: firstDate, value: level }, { time: lastDate, value: level }]);
+    });
+    vixChart.timeScale().fitContent();
+
+    // M2
+    const m2Chart = makeLWChart('m2Chart');
+    const m2Series = m2Chart.addAreaSeries({
+      lineColor: '#26a65b', topColor: 'rgba(38,166,91,0.2)', bottomColor: 'rgba(38,166,91,0.02)',
+      lineWidth: 2, title: 'M2',
+    });
+    m2Series.setData(toSeries(macro.m2 ?? []));
+    m2Chart.timeScale().fitContent();
+
+    // Fed Funds
+    const fedChart = makeLWChart('fedChart');
+    fedChart.applyOptions({ height: 160 });
+    document.getElementById('fedChart').style.height = '160px';
+    const fedSeries = fedChart.addLineSeries({ color: '#7eb8f5', lineWidth: 2, title: 'Fed Funds' });
+    fedSeries.setData(toSeries(macro.fedfunds ?? []));
+    fedChart.timeScale().fitContent();
+
+    // ── Chart.js sector chart ──────────────────────────────────────────────
+    buildSectorChart(sectors ?? []);
+
+    // ── Breadth bars ───────────────────────────────────────────────────────
+    buildBreadth(breadth ?? {});
+
+  } catch (err) {
+    document.getElementById('statRow').innerHTML =
+      `<div class="error-msg">Error loading chart data: ${err.message}</div>`;
+    console.error(err);
+  }
+}
+
+document.getElementById('btnRefresh').addEventListener('click', loadAll);
+loadAll();
+</script>
+</body>
+</html>

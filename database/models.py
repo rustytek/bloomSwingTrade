@@ -71,3 +71,13 @@ class AICache(Base):
     ticker = Column(String(16), primary_key=True)
     analysis_json = Column(Text, nullable=False)
     analyzed_at = Column(DateTime, default=utcnow)
+
+
+class ReportCache(Base):
+    __tablename__ = "report_cache"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    report_markdown = Column(Text, nullable=False)
+    generated_at = Column(DateTime, default=utcnow)
+    triggered_by = Column(String(16), default="user")   # "user" | "schedule"

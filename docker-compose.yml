@@ -27,10 +27,18 @@ services:
       - HOST=0.0.0.0
       - PORT=8443
 
-      # ── AI Provider (none | anthropic | openai) ───────────────────────────
+      # ── AI Provider (none | anthropic | openai | ollama) ─────────────────
       - AI_PROVIDER=${AI_PROVIDER:-none}
       - AI_API_KEY=${AI_API_KEY:-}
       - AI_MODEL=${AI_MODEL:-}
+
+      # ── FRED API ─────────────────────────────────────────────────────────
+      - FRED_API_KEY=${FRED_API_KEY:-}
+
+      # ── Ollama (local LLM) ────────────────────────────────────────────────
+      - OLLAMA_URL=${OLLAMA_URL:-http://192.168.10.21:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen35-moe:latest}
+      - REPORT_MODEL=${REPORT_MODEL:-deepseek-r1:8b}
 
       # ── Cache TTLs (seconds) ──────────────────────────────────────────────
       - QUOTE_CACHE_TTL=${QUOTE_CACHE_TTL:-900}

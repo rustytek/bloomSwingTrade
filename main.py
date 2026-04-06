@@ -17,6 +17,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from config import get_settings
 from database.db import engine
@@ -29,6 +31,7 @@ from api.screener import router as screener_router
 from api.watchlist import router as watchlist_router
 from api.portfolio import router as portfolio_router
 from api.ai import router as ai_router
+from api.charts import router as charts_router
 from generate_ssl import generate_ssl_cert
 from services.universe import UNIVERSE
 from services.market_data import refresh_universe, cleanup_old_entries, invalidate_legacy_cache
@@ -37,6 +40,25 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+_scheduler = AsyncIOScheduler()
+
+
+async def _scheduled_report_job():
+    """Generate the daily report for the admin user at 05:30."""
+    from services.report_service import generate_daily_report
+    db = SessionLocal()
+    try:
+        admin = db.query(User).filter(User.is_admin.is_(True)).first()
+        if admin:
+            logger.info("Scheduler: generating daily report for admin user %s", admin.username)
+            await generate_daily_report(db, admin.id, triggered_by="schedule")
+            logger.info("Scheduler: daily report complete")
+        else:
+            logger.warning("Scheduler: no admin user found — skipping report")
+    except Exception as e:
+        logger.error("Scheduler: report generation failed: %s", e)
+    finally:
+        db.close()
 
 
 def init_db():
@@ -71,14 +93,27 @@ async def lifespan(app: FastAPI):
     import asyncio
     asyncio.create_task(refresh_universe(UNIVERSE, db_factory=SessionLocal))
     logger.info(f"Background universe refresh started for {len(UNIVERSE)} tickers")
+
+    # Schedule daily report at 05:30 local server time
+    _scheduler.add_job(
+        _scheduled_report_job,
+        CronTrigger(hour=5, minute=30),
+        id="daily_report",
+        replace_existing=True,
+    )
+    _scheduler.start()
+    logger.info("Scheduler started — daily report will run at 05:30")
+
     yield
+
+    _scheduler.shutdown(wait=False)
     logger.info("SwingTrader shutting down.")
 
 
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.4.0",
+    version="1.5.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -100,6 +135,7 @@ app.include_router(screener_router)
 app.include_router(watchlist_router)
 app.include_router(portfolio_router)
 app.include_router(ai_router)
+app.include_router(charts_router)
 
 
 # ── Static files (React SPA) ─────────────────────────────────────────────────
@@ -110,6 +146,16 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 @app.get("/login")
 async def login_page():
     return FileResponse(os.path.join(STATIC_DIR, "login.html"))
+
+
+@app.get("/report")
+async def report_page():
+    return FileResponse(os.path.join(STATIC_DIR, "report.html"))
+
+
+@app.get("/charts")
+async def charts_page():
+    return FileResponse(os.path.join(STATIC_DIR, "charts.html"))
 
 
 @app.get("/")

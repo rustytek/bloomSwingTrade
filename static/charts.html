@@ -221,8 +221,8 @@
         </div>
       </div>
       <div class="panel">
-        <div class="panel-title">Sector % Above 200MA</div>
-        <div id="sectorBreadthBars"></div>
+        <div class="panel-title">Sector % Above 200MA <span class="panel-sub">from screener cache · refreshes with screener</span></div>
+        <div id="sectorBreadthBars"><div class="muted" style="font-size:12px;padding:10px;">Loading…</div></div>
       </div>
     </div>
   </div>
@@ -248,7 +248,7 @@
         <div style="display:none; color:#666; font-size:12px; padding:20px; text-align:center;">Sector cycle image unavailable</div>
       </div>
       <div class="panel">
-        <div class="panel-title">SPDR Sector Performance <span class="panel-sub">sorted by 1M return</span></div>
+        <div class="panel-title">SPDR Sector Performance <span class="panel-sub">in sector cycle order</span></div>
         <div class="canvas-wrap" style="height:320px;">
           <canvas id="sectorSpdrChart"></canvas>
         </div>
@@ -297,7 +297,7 @@
     </div>
 
     <div class="controls-bar">
-      <span class="ctrl-label">Source</span>
+      <span class="ctrl-label">Perf Chart Source</span>
       <button class="src-btn" id="srcBoth" onclick="setSource('both')">Both</button>
       <button class="src-btn active" id="srcWatchlist" onclick="setSource('watchlist')">★ Watchlist</button>
       <button class="src-btn" id="srcPortfolio" onclick="setSource('portfolio')">💼 Portfolio</button>
@@ -323,17 +323,42 @@
       <div id="perfLegend" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; font-size:12px;"></div>
     </div>
 
-    <!-- Annualized Returns + Correlation Matrix -->
-    <div class="grid2">
+    <!-- Legend row (between perf chart and the tables below) -->
+    <div id="splitLegend" style="display:flex; align-items:center; gap:24px; padding:8px 4px; margin-bottom:4px; font-size:12px; flex-wrap:wrap;">
+      <span style="display:flex;align-items:center;gap:6px;">
+        <span style="width:14px;height:14px;background:#f0a500;display:inline-flex;align-items:center;justify-content:center;font-size:9px;border-radius:2px;color:#000;font-weight:800;">💼</span>
+        <span style="color:#ccc;">Portfolio tickers</span>
+      </span>
+      <span style="display:flex;align-items:center;gap:6px;">
+        <span style="width:14px;height:14px;background:#3b9eff;display:inline-flex;align-items:center;justify-content:center;font-size:9px;border-radius:2px;color:#000;font-weight:800;">★</span>
+        <span style="color:#ccc;">Watchlist tickers</span>
+      </span>
+      <span style="color:#555; font-size:11px;">Sorted by 1M annualized return · Heat map: green = high return, red = loss</span>
+    </div>
+
+    <!-- Annualized Returns: Portfolio left, Watchlist right -->
+    <div class="grid2" style="margin-bottom:16px;">
       <div class="panel">
-        <div class="panel-title">Annualized Returns <span class="panel-sub">7D · 1M · 3M · 1Y</span></div>
-        <div id="annLoadMsg" class="loading" style="display:none;">Loading…</div>
-        <div id="annTable"></div>
+        <div class="panel-title">💼 Portfolio — Annualized Returns <span class="panel-sub">7D · 1M · 3M · 1Y</span></div>
+        <div id="annTablePort"></div>
       </div>
       <div class="panel">
-        <div class="panel-title">Correlation Matrix <span class="panel-sub">r &gt; 0.7 green · r &lt; −0.7 red</span></div>
-        <div id="corrMsg" class="muted" style="font-size:12px; padding:8px;">Loading…</div>
-        <div class="corr-wrap" id="corrMatrix"></div>
+        <div class="panel-title">★ Watchlist — Annualized Returns <span class="panel-sub">7D · 1M · 3M · 1Y</span></div>
+        <div id="annTableWatch"></div>
+      </div>
+    </div>
+
+    <!-- Correlation Matrix: Portfolio left, Watchlist right -->
+    <div class="grid2">
+      <div class="panel">
+        <div class="panel-title">💼 Portfolio — Correlation Matrix <span class="panel-sub">r &gt; 0.7 green · r &lt; −0.7 red</span></div>
+        <div id="corrMsgPort" class="muted" style="font-size:12px; padding:8px;">Loading…</div>
+        <div class="corr-wrap" id="corrMatrixPort"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">★ Watchlist — Correlation Matrix <span class="panel-sub">r &gt; 0.7 green · r &lt; −0.7 red</span></div>
+        <div id="corrMsgWatch" class="muted" style="font-size:12px; padding:8px;">Loading…</div>
+        <div class="corr-wrap" id="corrMatrixWatch"></div>
       </div>
     </div>
   </div>
@@ -670,29 +695,57 @@ async function loadMacro() {
   }
 }
 
-// ── SPDR sector bar chart ─────────────────────────────────────────────────────
+// ── SPDR sector bar chart (vertical, sector cycle order) ─────────────────────
+const SECTOR_CYCLE_ORDER = ['XLK','XLY','XLC','XLI','XLB','XLE','XLP','XLV','XLU','XLF','XLRE'];
+const SECTOR_CYCLE_NAMES = {
+  XLK:'Technology', XLY:'Cons. Discr.', XLC:'Comm. Svcs', XLI:'Industrials',
+  XLB:'Materials', XLE:'Energy', XLP:'Cons. Staples', XLV:'Health Care',
+  XLU:'Utilities', XLF:'Financials', XLRE:'Real Estate',
+};
+
 function buildSectorSpdrChart(sectors) {
-  const sorted = [...sectors].sort((a,b) => (b.ret_1m ?? -999) - (a.ret_1m ?? -999));
-  const labels = sorted.map(s => s.ticker);
-  const data   = sorted.map(s => s.ret_1m ?? 0);
-  const colors = data.map(v => v >= 0 ? 'rgba(38,166,91,.75)' : 'rgba(224,82,82,.75)');
+  const byTicker = Object.fromEntries(sectors.map(s => [s.ticker, s]));
+  // Build in cycle order, include any sector ETF not in the fixed list at the end
+  const ordered = SECTOR_CYCLE_ORDER
+    .filter(t => byTicker[t])
+    .map(t => byTicker[t]);
+  // Append any extras not in cycle order
+  sectors.forEach(s => {
+    if (!SECTOR_CYCLE_ORDER.includes(s.ticker)) ordered.push(s);
+  });
+
+  const labels = ordered.map(s => SECTOR_CYCLE_NAMES[s.ticker] || s.ticker);
+  const data   = ordered.map(s => s.ret_1m ?? 0);
+  const colors = data.map(v => v >= 0 ? 'rgba(38,166,91,.8)' : 'rgba(224,82,82,.8)');
+
   const ctx = document.getElementById('sectorSpdrChart').getContext('2d');
   if (sectorSpdrChartInst) sectorSpdrChartInst.destroy();
   sectorSpdrChartInst = new Chart(ctx, {
     type: 'bar',
-    data: { labels, datasets: [{ label: '1M %', data, backgroundColor: colors, borderRadius: 3 }] },
+    data: { labels, datasets: [{ label: '1M %', data, backgroundColor: colors, borderRadius: 4 }] },
     options: {
-      responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+      responsive: true, maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: ctx => {
-          const s = sorted[ctx.dataIndex];
-          return [` 1M: ${s.ret_1m?.toFixed(2)??'N/A'}%`, ` 5D: ${s.ret_5d?.toFixed(2)??'N/A'}%`, ` 3M: ${s.ret_3m?.toFixed(2)??'N/A'}%`, ` ${s.name}`];
+        tooltip: { callbacks: { label: ctx2 => {
+          const s = ordered[ctx2.dataIndex];
+          return [
+            ` ${SECTOR_CYCLE_NAMES[s.ticker] || s.ticker} (${s.ticker})`,
+            ` 1M: ${s.ret_1m?.toFixed(2)??'N/A'}%`,
+            ` 5D: ${s.ret_5d?.toFixed(2)??'N/A'}%`,
+            ` 3M: ${s.ret_3m?.toFixed(2)??'N/A'}%`,
+          ];
         }}},
       },
       scales: {
-        x: { grid: { color: '#1a1a1a' }, ticks: { color: '#777', font: { size: 11 } } },
-        y: { grid: { color: '#1a1a1a' }, ticks: { color: '#bbb', font: { size: 12, family: 'JetBrains Mono' } } },
+        x: {
+          grid: { color: '#1a1a1a' },
+          ticks: { color: '#bbb', font: { size: 11, family: 'Inter' }, maxRotation: 35 },
+        },
+        y: {
+          grid: { color: '#1a1a1a' },
+          ticks: { color: '#999', font: { size: 11 }, callback: v => `${v > 0 ? '+' : ''}${v}%` },
+        },
       },
     },
   });
@@ -800,22 +853,17 @@ async function fetchMissingHistories(tickers) {
 }
 
 async function loadPortfolioAnalytics() {
-  const tickers = getActiveTickers();
-  document.getElementById('tickerCount').textContent = `${tickers.length} ticker${tickers.length !== 1 ? 's' : ''}`;
+  // Always fetch for both sources independently
+  const allTickers = [...new Set([...portfolioTickers, ...watchlistTickers])];
+  const activeTickers = getActiveTickers(); // for perf chart
+  document.getElementById('tickerCount').textContent =
+    `${portfolioTickers.length} portfolio · ${watchlistTickers.length} watchlist`;
 
-  if (!tickers.length) {
-    document.getElementById('annTable').innerHTML = '<div class="muted" style="font-size:12px; padding:10px;">No tickers in selected source.</div>';
-    document.getElementById('corrMsg').textContent = 'No tickers in selected source.';
-    document.getElementById('corrMatrix').innerHTML = '';
-    renderPerfChart();
-    return;
-  }
-
-  await fetchMissingHistories(tickers);
+  await fetchMissingHistories(allTickers);
   renderPerfChart();
   renderAnnReturns();
   renderCorrMatrix();
-  renderWyckoffSignals(tickers);
+  renderWyckoffSignals(allTickers);
 }
 
 // ── Performance chart ─────────────────────────────────────────────────────────
@@ -903,62 +951,46 @@ function calcAnnRet(bars, n) {
   return (Math.pow(r, 252 / s.length) - 1) * 100;
 }
 
-function renderAnnReturns() {
-  const tickers = getActiveTickers();
+function annTableHtml(tickers, emptyMsg) {
   const PERIODS = [
     { label: '7D',  bars: 7  },
     { label: '1M',  bars: 21 },
     { label: '3M',  bars: 63 },
     { label: '1Y',  bars: 252 },
   ];
-
   const rows = tickers.map(ticker => ({
     ticker,
-    source: portfolioTickers.includes(ticker) ? (watchlistTickers.includes(ticker) ? 'both' : 'port') : 'watch',
     values: PERIODS.map(p => calcAnnRet(histories[ticker] || [], p.bars)),
   })).filter(r => r.values.some(v => v != null))
-    .sort((a,b) => (b.values[1] ?? -999) - (a.values[1] ?? -999)); // sort by 1M
+    .sort((a,b) => (b.values[1] ?? -999) - (a.values[1] ?? -999));
 
-  if (!rows.length) {
-    document.getElementById('annTable').innerHTML = '<div class="muted" style="font-size:12px;padding:10px;">No history data available yet.</div>';
-    return;
-  }
+  if (!rows.length) return `<div class="muted" style="font-size:12px;padding:10px;">${emptyMsg}</div>`;
 
-  const srcIcon = s => s === 'port' ? '💼' : s === 'watch' ? '★' : '★💼';
+  return `<table style="width:100%;border-collapse:collapse;font-size:12px;">
+    <thead><tr style="border-bottom:1px solid #1e1e1e;">
+      <th style="padding:6px 8px;text-align:left;color:#777;font-size:11px;">Ticker</th>
+      ${PERIODS.map(p => `<th style="padding:6px 8px;text-align:right;color:#777;font-size:11px;">${p.label} Ann%</th>`).join('')}
+    </tr></thead>
+    <tbody>${rows.map(r => `
+      <tr style="border-bottom:1px solid #141414;">
+        <td style="padding:6px 8px;font-family:JetBrains Mono,monospace;font-weight:600;color:#e0e0e0;">${r.ticker}</td>
+        ${r.values.map(v => `<td style="padding:6px 8px;text-align:right;font-family:JetBrains Mono,monospace;font-size:12px;background:${retColor(v)};color:${v == null ? '#555' : Math.abs(v) > 30 ? '#fff' : '#e0e0e0'};">
+          ${v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
+        </td>`).join('')}
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
 
-  document.getElementById('annTable').innerHTML = `
-    <table style="width:100%;border-collapse:collapse;font-size:12px;">
-      <thead><tr style="border-bottom:1px solid #1e1e1e;">
-        <th style="padding:6px 8px;text-align:left;color:#666;font-size:11px;">Ticker</th>
-        ${PERIODS.map(p => `<th style="padding:6px 8px;text-align:right;color:#666;font-size:11px;">${p.label} Ann%</th>`).join('')}
-      </tr></thead>
-      <tbody>${rows.map(r => `
-        <tr style="border-bottom:1px solid #141414;">
-          <td style="padding:6px 8px;font-family:JetBrains Mono,monospace;font-weight:600;color:#e0e0e0;">
-            ${srcIcon(r.source)} ${r.ticker}
-          </td>
-          ${r.values.map(v => `<td style="padding:6px 8px;text-align:right;font-family:JetBrains Mono,monospace;font-size:12px;background:${retColor(v)};color:${v == null ? '#555' : Math.abs(v) > 30 ? '#fff' : '#ddd'};">
-            ${v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
-          </td>`).join('')}
-        </tr>`).join('')}
-      </tbody>
-    </table>`;
+function renderAnnReturns() {
+  document.getElementById('annTablePort').innerHTML  = annTableHtml(portfolioTickers, 'No portfolio positions.');
+  document.getElementById('annTableWatch').innerHTML = annTableHtml(watchlistTickers,  'No watchlist items.');
 }
 
 // ── Correlation matrix ────────────────────────────────────────────────────────
-function renderCorrMatrix() {
-  const tickers = getActiveTickers();
-  const N = annPeriodBars;
-  const el = document.getElementById('corrMatrix');
-  const msg = document.getElementById('corrMsg');
-
+function buildCorrMatrixHtml(tickers, N) {
   const valid = tickers.filter(t => (histories[t] || []).slice(-N).length >= 5);
-  if (valid.length < 2) {
-    msg.textContent = valid.length < 2 ? 'Need ≥ 2 tickers with history to compute matrix.' : '';
-    el.innerHTML = '';
-    return;
-  }
-  msg.textContent = '';
+  if (valid.length < 2) return { msg: 'Need ≥ 2 tickers with price history to compute matrix.', html: '' };
 
   const returns = {};
   valid.forEach(t => {
@@ -968,9 +1000,9 @@ function renderCorrMatrix() {
   const minLen = Math.min(...Object.values(returns).map(a => a.length));
   valid.forEach(t => { returns[t] = returns[t].slice(0, minLen); });
 
-  const matrix = valid.map((t1, i) =>
-    valid.map((t2, j) => {
-      if (i === j) return 1;
+  const matrix = valid.map((t1) =>
+    valid.map((t2) => {
+      if (t1 === t2) return 1;
       const a = returns[t1], b = returns[t2];
       const ma = a.reduce((s,v)=>s+v,0)/a.length, mb = b.reduce((s,v)=>s+v,0)/b.length;
       let num = 0, d1 = 0, d2 = 0;
@@ -980,21 +1012,33 @@ function renderCorrMatrix() {
     })
   );
 
-  const cellSz = Math.max(40, Math.min(60, Math.floor(480 / valid.length)));
-  el.innerHTML = `<div style="display:flex;flex-direction:column;gap:2px;padding:4px;">
+  const cellSz = Math.max(36, Math.min(58, Math.floor(460 / valid.length)));
+  const html = `<div style="display:flex;flex-direction:column;gap:2px;padding:4px;overflow-x:auto;">
     <div style="display:flex;gap:2px;padding-left:${cellSz+4}px;">
-      ${valid.map(t => `<div style="width:${cellSz}px;text-align:center;font-size:10px;color:#666;font-family:JetBrains Mono,monospace;overflow:hidden;text-overflow:ellipsis;">${t}</div>`).join('')}
+      ${valid.map(t => `<div style="width:${cellSz}px;text-align:center;font-size:10px;color:#888;font-family:JetBrains Mono,monospace;overflow:hidden;text-overflow:ellipsis;flex-shrink:0;">${t}</div>`).join('')}
     </div>
     ${valid.map((t1, i) => `
       <div style="display:flex;gap:2px;align-items:center;">
-        <div style="width:${cellSz}px;text-align:right;font-size:11px;color:#aaa;font-family:JetBrains Mono,monospace;padding-right:4px;flex-shrink:0;">${t1}</div>
+        <div style="width:${cellSz}px;text-align:right;font-size:11px;color:#bbb;font-family:JetBrains Mono,monospace;padding-right:4px;flex-shrink:0;">${t1}</div>
         ${valid.map((t2, j) => {
           const v = matrix[i][j];
           const bg = corrColor(v), fg = corrTextColor(v);
-          return `<div style="width:${cellSz}px;height:32px;display:flex;align-items:center;justify-content:center;background:${bg};color:${fg};font-size:10px;font-family:JetBrains Mono,monospace;border-radius:2px;" title="${t1}/${t2}: ${v.toFixed(3)}">${v.toFixed(2)}</div>`;
+          return `<div style="width:${cellSz}px;height:30px;display:flex;align-items:center;justify-content:center;background:${bg};color:${fg};font-size:10px;font-family:JetBrains Mono,monospace;border-radius:2px;flex-shrink:0;" title="${t1}/${t2}: ${v.toFixed(3)}">${v.toFixed(2)}</div>`;
         }).join('')}
       </div>`).join('')}
   </div>`;
+  return { msg: '', html };
+}
+
+function renderCorrMatrix() {
+  const N = annPeriodBars;
+  const portResult  = buildCorrMatrixHtml(portfolioTickers, N);
+  const watchResult = buildCorrMatrixHtml(watchlistTickers, N);
+
+  document.getElementById('corrMsgPort').textContent  = portResult.msg;
+  document.getElementById('corrMatrixPort').innerHTML = portResult.html;
+  document.getElementById('corrMsgWatch').textContent  = watchResult.msg;
+  document.getElementById('corrMatrixWatch').innerHTML = watchResult.html;
 }
 
 // ── Wyckoff signals table ─────────────────────────────────────────────────────
@@ -1004,7 +1048,7 @@ async function renderWyckoffSignals(tickers) {
   try {
     const body = JSON.stringify({ tickers });
     const token = localStorage.getItem('st_token');
-    const resp = await fetch('/api/screener/run', {
+    const resp = await fetch('/api/screener', {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body,
     });

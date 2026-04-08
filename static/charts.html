@@ -6,89 +6,124 @@
   <title>SwingTrader — Market Charts</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
-  <!-- Lightweight Charts (TradingView OSS) -->
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #0d0d0d; color: #e0e0e0; font-family: 'Inter', sans-serif; font-size: 13px; }
+    body { background: #0d0d0d; color: #d8d8d8; font-family: 'Inter', sans-serif; font-size: 14px; line-height: 1.5; }
 
     /* ── Topbar ── */
-    .topbar { display: flex; align-items: center; gap: 10px; padding: 0 16px; height: 44px; background: #111; border-bottom: 1px solid #1e1e1e; flex-shrink: 0; }
+    .topbar { display: flex; align-items: center; gap: 10px; padding: 0 16px; height: 46px; background: #111; border-bottom: 1px solid #1e1e1e; flex-shrink: 0; position: sticky; top: 0; z-index: 50; }
     .logo { display: flex; align-items: center; gap: 8px; text-decoration: none; }
-    .logo-icon { width: 26px; height: 26px; background: #f0a500; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 800; color: #000; font-family: 'JetBrains Mono', monospace; }
-    .logo-text { font-weight: 700; font-size: 13px; letter-spacing: .08em; color: #fff; font-family: 'JetBrains Mono', monospace; }
-    .topbar-sep { width: 1px; height: 20px; background: #222; }
-    .topbar-title { font-size: 12px; color: #555; }
+    .logo-icon { width: 28px; height: 28px; background: #f0a500; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 800; color: #000; font-family: 'JetBrains Mono', monospace; }
+    .logo-text { font-weight: 700; font-size: 14px; letter-spacing: .08em; color: #fff; font-family: 'JetBrains Mono', monospace; }
+    .topbar-sep { width: 1px; height: 22px; background: #282828; }
+    .topbar-title { font-size: 13px; color: #777; }
     .spacer { flex: 1; }
-    .btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 3px; border: none; font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; text-decoration: none; white-space: nowrap; }
-    .btn-ghost { background: transparent; color: #aaa; border: 1px solid #2a2a2a; }
+
+    .btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 3px; border: none; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; text-decoration: none; white-space: nowrap; transition: opacity .15s; }
+    .btn-ghost { background: transparent; color: #999; border: 1px solid #2a2a2a; }
     .btn-ghost:hover { background: #1a1a1a; color: #ddd; }
     .btn-primary { background: #f0a500; color: #000; }
-    .btn-primary:hover { opacity: 0.85; }
+    .btn-primary:hover { opacity: .85; }
+    .btn-active { background: #f0a500 !important; color: #000 !important; }
+    .period-group { display: flex; gap: 2px; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 4px; padding: 2px; }
+    .period-btn { padding: 3px 10px; border-radius: 3px; border: none; font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; background: transparent; color: #888; transition: all .15s; }
+    .period-btn.active { background: #f0a500; color: #000; }
+    .period-btn:hover:not(.active) { background: #252525; color: #ccc; }
 
-    /* ── Layout ── */
-    .page { padding: 20px; display: grid; gap: 20px; max-width: 1600px; margin: 0 auto; }
+    /* ── Page layout ── */
+    .page { padding: 20px; max-width: 1700px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+
+    /* ── Section divider ── */
+    .section-divider { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+    .section-divider-line { flex: 1; height: 1px; background: linear-gradient(to right, #282828, transparent); }
+    .section-divider-title { font-size: 13px; font-weight: 700; color: #f0a500; letter-spacing: .06em; white-space: nowrap; }
+    .section-divider-sub { font-size: 12px; color: #666; }
 
     /* ── Stat cards ── */
-    .stat-row { display: flex; gap: 12px; flex-wrap: wrap; }
-    .stat-card { background: #111; border: 1px solid #1e1e1e; border-radius: 6px; padding: 14px 18px; flex: 1; min-width: 150px; }
-    .stat-label { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 4px; }
+    .stat-row { display: flex; gap: 10px; flex-wrap: wrap; }
+    .stat-card { background: #111; border: 1px solid #1e1e1e; border-radius: 6px; padding: 14px 18px; flex: 1; min-width: 140px; }
+    .stat-label { font-size: 11px; color: #777; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 5px; }
     .stat-value { font-size: 22px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #e0e0e0; }
-    .stat-sub { font-size: 11px; color: #666; margin-top: 3px; }
-    .stat-up { color: #26a65b; }
-    .stat-down { color: #e05252; }
-    .stat-warn { color: #f0a500; }
-
-    /* ── Section headers ── */
-    .section-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-    .section-title { font-size: 13px; font-weight: 700; color: #e0e0e0; }
-    .section-sub { font-size: 11px; color: #555; }
+    .stat-sub { font-size: 12px; color: #888; margin-top: 4px; }
+    .up { color: #26a65b; }
+    .down { color: #e05252; }
+    .warn { color: #f0a500; }
+    .muted { color: #888; }
 
     /* ── Chart panels ── */
-    .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .chart-panel { background: #111; border: 1px solid #1e1e1e; border-radius: 6px; padding: 16px; }
-    .chart-panel.full-width { grid-column: 1 / -1; }
-    .chart-title { font-size: 12px; font-weight: 600; color: #ccc; margin-bottom: 12px; }
-    .chart-container { position: relative; }
-    .lw-chart { width: 100%; height: 220px; }
-    .canvas-wrap { position: relative; height: 260px; }
-
-    /* ── Breadth bars ── */
-    .breadth-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .breadth-bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-    .breadth-bar-label { width: 110px; font-size: 11px; color: #aaa; text-align: right; flex-shrink: 0; }
-    .breadth-bar-track { flex: 1; background: #1a1a1a; border-radius: 2px; height: 14px; overflow: hidden; }
-    .breadth-bar-fill { height: 100%; border-radius: 2px; transition: width 0.4s ease; }
-    .breadth-bar-pct { width: 36px; font-size: 11px; color: #aaa; font-family: 'JetBrains Mono', monospace; }
-
-    /* ── Sector heatmap ── */
-    .sector-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    .sector-table th { text-align: left; padding: 5px 8px; font-weight: 600; color: #555; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid #1e1e1e; }
-    .sector-table td { padding: 6px 8px; border-bottom: 1px solid #141414; }
-    .sector-table tr:hover td { background: #161616; }
-    .pct-cell { font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+    .full-w { grid-column: 1 / -1; }
+    .panel { background: #111; border: 1px solid #1e1e1e; border-radius: 6px; padding: 16px; }
+    .panel-title { font-size: 13px; font-weight: 600; color: #ccc; margin-bottom: 12px; }
+    .panel-sub { font-size: 12px; color: #777; font-weight: 400; margin-left: 6px; }
+    .lw-chart { width: 100%; height: 240px; }
 
     /* ── VIX zone badge ── */
-    .vix-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+    .vix-badge { display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
     .zone-extreme_fear { background: #5c0a0a; color: #ff6b6b; }
-    .zone-fear { background: #3d2200; color: #f0a500; }
-    .zone-neutral { background: #1a2a1a; color: #26a65b; }
-    .zone-complacency { background: #0a1a3c; color: #7eb8f5; }
+    .zone-fear         { background: #3d2200; color: #f0a500; }
+    .zone-neutral      { background: #1a2a1a; color: #26a65b; }
+    .zone-complacency  { background: #0a1a3c; color: #7eb8f5; }
+
+    /* ── Breadth bars ── */
+    .bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+    .bar-label { width: 130px; font-size: 12px; color: #999; text-align: right; flex-shrink: 0; }
+    .bar-track { flex: 1; background: #1a1a1a; border-radius: 2px; height: 15px; overflow: hidden; }
+    .bar-fill  { height: 100%; border-radius: 2px; transition: width .4s ease; }
+    .bar-pct   { width: 42px; font-size: 12px; color: #999; font-family: 'JetBrains Mono', monospace; }
+
+    /* ── ETF group table ── */
+    .etf-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .etf-table th { padding: 5px 8px; text-align: left; font-size: 11px; color: #666; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid #1e1e1e; }
+    .etf-table td { padding: 6px 8px; border-bottom: 1px solid #141414; }
+    .etf-table tr:hover td { background: #161616; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    .ret-cell { font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+
+    /* ── Wyckoff phase card ── */
+    .phase-card { padding: 20px; border-radius: 6px; border: 2px solid; display: flex; align-items: center; gap: 20px; }
+    .phase-icon { font-size: 36px; }
+    .phase-name { font-size: 22px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+    .phase-desc { font-size: 13px; color: #999; margin-top: 4px; }
+    .phase-signals { margin-top: 8px; font-size: 12px; }
+
+    /* ── Correlation matrix ── */
+    .corr-cell { width: 56px; height: 36px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-family: 'JetBrains Mono', monospace; font-weight: 600; border-radius: 3px; cursor: default; }
+    .corr-wrap { overflow-x: auto; }
+
+    /* ── Canvas charts ── */
+    .canvas-wrap { position: relative; }
+
+    /* ── Source / period controls ── */
+    .controls-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; padding: 10px 14px; background: #0f0f0f; border: 1px solid #1a1a1a; border-radius: 5px; }
+    .ctrl-label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: .06em; }
+    .src-btn { padding: 4px 12px; border-radius: 3px; border: 1px solid #2a2a2a; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; background: #1a1a1a; color: #888; transition: all .15s; }
+    .src-btn.active { background: #f0a500; color: #000; border-color: #f0a500; }
+    .spy-toggle { padding: 4px 12px; border-radius: 3px; border: 1px solid #2a2a2a; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; transition: all .15s; }
+    .spy-toggle.on  { background: #1a3a1a; color: #26a65b; border-color: #26a65b; }
+    .spy-toggle.off { background: #1a1a1a; color: #555; }
+
+    /* ── Sector cycle grid ── */
+    .cycle-grid { display: grid; grid-template-columns: 480px 1fr; gap: 20px; align-items: start; }
+    .cycle-img { width: 100%; border-radius: 4px; border: 1px solid #1e1e1e; display: block; }
 
     /* ── Loading / Error ── */
-    .loading-overlay { display: flex; align-items: center; justify-content: center; height: 200px; color: #444; font-size: 13px; }
-    .error-msg { color: #e05252; font-size: 12px; padding: 10px; }
+    .loading { color: #555; font-size: 13px; padding: 30px; text-align: center; }
+    .err { color: #e05252; font-size: 12px; padding: 16px; }
 
-    @media (max-width: 900px) {
-      .charts-grid, .breadth-grid { grid-template-columns: 1fr; }
-      .charts-grid .full-width { grid-column: 1; }
+    @media (max-width: 1000px) {
+      .grid2, .grid3, .cycle-grid { grid-template-columns: 1fr; }
+      .full-w { grid-column: 1; }
+      .cycle-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
 
+<!-- ── Topbar ─────────────────────────────────────────────────────────────── -->
 <div class="topbar">
   <a href="/" class="logo">
     <div class="logo-icon">ST</div>
@@ -97,362 +132,966 @@
   <div class="topbar-sep"></div>
   <span class="topbar-title">Market Charts</span>
   <div class="topbar-sep"></div>
-  <a href="/report" class="btn btn-ghost" style="text-decoration:none;">&#x1F4C4; Report</a>
+  <a href="/report" class="btn btn-ghost" style="text-decoration:none;">📄 Report</a>
   <div class="spacer"></div>
-  <button class="btn btn-primary" id="btnRefresh">&#x21BB; Refresh</button>
+  <!-- Period buttons (apply to all LW Charts) -->
+  <div class="period-group" id="periodGroup">
+    <button class="period-btn" data-days="7">7D</button>
+    <button class="period-btn" data-days="14">14D</button>
+    <button class="period-btn active" data-days="30">30D</button>
+    <button class="period-btn" data-days="90">90D</button>
+    <button class="period-btn" data-days="182">6M</button>
+    <button class="period-btn" data-days="365">1Y</button>
+    <button class="period-btn" data-days="0">All</button>
+  </div>
+  <!-- SPY Toggle -->
+  <button class="spy-toggle on" id="spyToggle">SPY Benchmark</button>
+  <button class="btn btn-primary" id="btnRefresh">↻ Refresh</button>
 </div>
 
-<div class="page">
+<!-- ── Page ───────────────────────────────────────────────────────────────── -->
+<div class="page" id="page">
 
-  <!-- ── Stat cards ── -->
-  <div class="stat-row" id="statRow">
-    <div class="stat-card"><div class="stat-label">Loading…</div><div class="stat-value">—</div></div>
+  <!-- ════════════════════════════════════════════════════════════════════════
+       SECTION 1 — MACRO & LIQUIDITY
+       ════════════════════════════════════════════════════════════════════════ -->
+  <div>
+    <div class="section-divider">
+      <span class="section-divider-title">🏛️ MACRO &amp; LIQUIDITY</span>
+      <span class="section-divider-sub">FRED API — M2, Fed Funds, Treasury Yields</span>
+      <div class="section-divider-line"></div>
+    </div>
+    <div class="stat-row" id="macroStatRow">
+      <div class="loading">Loading macro data…</div>
+    </div>
+    <div style="margin-top:16px" class="grid2">
+      <div class="panel">
+        <div class="panel-title">10yr &amp; 2yr Treasury Yields <span class="panel-sub">gold = 10yr · blue = 2yr</span></div>
+        <div class="lw-chart" id="yieldChart"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">Yield Spread: 10yr − 2yr <span class="panel-sub">green = normal · red = inverted</span></div>
+        <div class="lw-chart" id="spreadChart"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">M2 Money Supply <span class="panel-sub">billions USD</span></div>
+        <div class="lw-chart" id="m2Chart"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">Federal Funds Rate <span class="panel-sub">%</span></div>
+        <div class="lw-chart" id="fedChart"></div>
+      </div>
+    </div>
   </div>
 
-  <!-- ── Top row: Yields + VIX ── -->
-  <div class="charts-grid">
-
-    <div class="chart-panel">
-      <div class="chart-title">10yr &amp; 2yr Treasury Yields (%)</div>
-      <div class="lw-chart" id="yieldChart"></div>
+  <!-- ════════════════════════════════════════════════════════════════════════
+       SECTION 2 — VOLATILITY & FEAR (VIX)
+       ════════════════════════════════════════════════════════════════════════ -->
+  <div>
+    <div class="section-divider">
+      <span class="section-divider-title">📊 VOLATILITY &amp; FEAR</span>
+      <span class="section-divider-sub">CBOE VIX — 90-day daily history</span>
+      <div class="section-divider-line"></div>
     </div>
-
-    <div class="chart-panel">
-      <div class="chart-title">Yield Spread: 10yr − 2yr (bps)</div>
-      <div class="lw-chart" id="spreadChart"></div>
+    <div class="stat-row" id="vixStatRow" style="margin-bottom:16px">
+      <div class="loading">Loading VIX data…</div>
     </div>
-
-    <div class="chart-panel">
-      <div class="chart-title">VIX — Volatility Index (90 days)</div>
+    <div class="panel">
+      <div class="panel-title">VIX — CBOE Volatility Index <span class="panel-sub">20 = fear threshold · 30 = extreme fear</span></div>
       <div class="lw-chart" id="vixChart"></div>
     </div>
-
-    <div class="chart-panel">
-      <div class="chart-title">M2 Money Supply ($ billions)</div>
-      <div class="lw-chart" id="m2Chart"></div>
-    </div>
-
-    <div class="chart-panel full-width">
-      <div class="chart-title">Fed Funds Rate (%)</div>
-      <div class="lw-chart" id="fedChart"></div>
-    </div>
-
   </div>
 
-  <!-- ── Sector + Breadth ── -->
-  <div class="breadth-grid">
-
-    <div class="chart-panel">
-      <div class="section-header">
-        <span class="section-title">Sector Rotation</span>
-        <span class="section-sub">1-month return, sorted</span>
-      </div>
-      <div class="canvas-wrap">
-        <canvas id="sectorChart"></canvas>
-      </div>
+  <!-- ════════════════════════════════════════════════════════════════════════
+       SECTION 3 — MARKET BREADTH
+       ════════════════════════════════════════════════════════════════════════ -->
+  <div>
+    <div class="section-divider">
+      <span class="section-divider-title">📈 MARKET BREADTH</span>
+      <span class="section-divider-sub">S&amp;P 500 — computed from screener cache</span>
+      <div class="section-divider-line"></div>
     </div>
-
-    <div class="chart-panel">
-      <div class="section-header">
-        <span class="section-title">S&amp;P 500 Breadth</span>
-        <span class="section-sub" id="breadthRegimeLabel">—</span>
+    <div class="grid2">
+      <div class="panel">
+        <div class="panel-title">Overall Breadth</div>
+        <div id="breadthMain"></div>
+        <div style="margin-top:16px; padding-top:14px; border-top:1px solid #1e1e1e;">
+          <div style="font-size:12px; font-weight:600; color:#ccc; margin-bottom:10px;">Advance / Decline Stats</div>
+          <div id="breadthStats"></div>
+        </div>
       </div>
-      <div id="breadthBars"></div>
-
-      <div style="margin-top: 18px; border-top: 1px solid #1e1e1e; padding-top: 14px;">
-        <div class="section-title" style="margin-bottom: 10px; font-size: 11px;">Sector % Above 200MA</div>
+      <div class="panel">
+        <div class="panel-title">Sector % Above 200MA</div>
         <div id="sectorBreadthBars"></div>
       </div>
     </div>
-
   </div>
 
-</div>
+  <!-- ════════════════════════════════════════════════════════════════════════
+       SECTION 4 — SECTOR ROTATION & CYCLE
+       ════════════════════════════════════════════════════════════════════════ -->
+  <div>
+    <div class="section-divider">
+      <span class="section-divider-title">🔄 SECTOR ROTATION &amp; CYCLE</span>
+      <span class="section-divider-sub">SPDR Sector ETFs — 5D / 1M / 3M returns</span>
+      <div class="section-divider-line"></div>
+    </div>
+
+    <!-- Sector cycle reference image + SPDR bar chart -->
+    <div class="cycle-grid" style="margin-bottom:16px;">
+      <div class="panel" style="padding:12px;">
+        <div class="panel-title" style="margin-bottom:8px;">Sector Cycle Reference</div>
+        <img class="cycle-img"
+          src="https://chartschool.stockcharts.com/~gitbook/image?url=https%3A%2F%2F436553459-files.gitbook.io%2F%7E%2Ffiles%2Fv0%2Fb%2Fgitbook-x-prod.appspot.com%2Fo%2Fspaces%252FERtrZrZOhufFzk6ZQO4B%252Fuploads%252FqFILaNHLDTXbqQIdsNt7%252Fsectorcycle.png%3Falt%3Dmedia%26token%3Db63cf92c-c3bb-46a2-9a12-d0e3a4ebc47f&width=768&dpr=3&quality=100&sign=81a6faa3&sv=2"
+          alt="Sector Cycle Chart"
+          onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+        <div style="display:none; color:#666; font-size:12px; padding:20px; text-align:center;">Sector cycle image unavailable</div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">SPDR Sector Performance <span class="panel-sub">sorted by 1M return</span></div>
+        <div class="canvas-wrap" style="height:320px;">
+          <canvas id="sectorSpdrChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sector ETF table (full SPDRs) -->
+    <div class="panel" style="margin-bottom:16px;">
+      <div class="panel-title">SPDR Sector ETFs — Detailed Returns</div>
+      <div id="sectorTable"></div>
+    </div>
+
+    <!-- International ETFs -->
+    <div class="grid2" style="margin-bottom:16px;">
+      <div class="panel">
+        <div class="panel-title">International ETFs</div>
+        <div id="intlTable"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">Commodity ETFs</div>
+        <div id="cmdtyTable"></div>
+      </div>
+    </div>
+
+    <!-- Style ETFs + Sector Indices -->
+    <div class="grid2">
+      <div class="panel">
+        <div class="panel-title">Style &amp; Size ETFs</div>
+        <div id="styleTable"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">Sector Indices</div>
+        <div id="indicesTable"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════════════
+       SECTION 5 — PORTFOLIO ANALYTICS
+       ════════════════════════════════════════════════════════════════════════ -->
+  <div>
+    <div class="section-divider">
+      <span class="section-divider-title">💼 PORTFOLIO ANALYTICS</span>
+      <span class="section-divider-sub">Portfolio + Watchlist vs SPY benchmark</span>
+      <div class="section-divider-line"></div>
+    </div>
+
+    <div class="controls-bar">
+      <span class="ctrl-label">Source</span>
+      <button class="src-btn" id="srcBoth" onclick="setSource('both')">Both</button>
+      <button class="src-btn active" id="srcWatchlist" onclick="setSource('watchlist')">★ Watchlist</button>
+      <button class="src-btn" id="srcPortfolio" onclick="setSource('portfolio')">💼 Portfolio</button>
+      <div style="width:1px; height:20px; background:#2a2a2a; margin:0 4px;"></div>
+      <span class="ctrl-label">Period</span>
+      <div class="period-group" id="annPeriodGroup">
+        <button class="period-btn" data-ann="7">7D</button>
+        <button class="period-btn active" data-ann="30">30D</button>
+        <button class="period-btn" data-ann="90">90D</button>
+        <button class="period-btn" data-ann="182">6M</button>
+        <button class="period-btn" data-ann="252">1Y</button>
+      </div>
+      <div style="flex:1"></div>
+      <span id="tickerCount" class="muted" style="font-size:12px;"></span>
+    </div>
+
+    <!-- Performance line chart -->
+    <div class="panel" style="margin-bottom:16px;">
+      <div class="panel-title">Normalized Performance <span class="panel-sub">% return from period start, SPY in gray</span></div>
+      <div class="canvas-wrap" style="height:300px;">
+        <canvas id="perfChart"></canvas>
+      </div>
+      <div id="perfLegend" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; font-size:12px;"></div>
+    </div>
+
+    <!-- Annualized Returns + Correlation Matrix -->
+    <div class="grid2">
+      <div class="panel">
+        <div class="panel-title">Annualized Returns <span class="panel-sub">7D · 1M · 3M · 1Y</span></div>
+        <div id="annLoadMsg" class="loading" style="display:none;">Loading…</div>
+        <div id="annTable"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">Correlation Matrix <span class="panel-sub">r &gt; 0.7 green · r &lt; −0.7 red</span></div>
+        <div id="corrMsg" class="muted" style="font-size:12px; padding:8px;">Loading…</div>
+        <div class="corr-wrap" id="corrMatrix"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════════════
+       SECTION 6 — WYCKOFF CYCLE ANALYSIS
+       ════════════════════════════════════════════════════════════════════════ -->
+  <div>
+    <div class="section-divider">
+      <span class="section-divider-title">📉 WYCKOFF CYCLE ANALYSIS</span>
+      <span class="section-divider-sub">Phase detection · Volume signals · A/D momentum</span>
+      <div class="section-divider-line"></div>
+    </div>
+
+    <!-- Phase indicator card -->
+    <div id="wyckoffPhaseCard" style="margin-bottom:16px;">
+      <div class="loading">Loading Wyckoff analysis…</div>
+    </div>
+
+    <!-- Wyckoff charts grid -->
+    <div class="grid2" style="margin-bottom:16px;">
+      <div class="panel">
+        <div class="panel-title">SPY Price <span class="panel-sub">vs portfolio period</span></div>
+        <div class="lw-chart" id="wyckoffSpyChart"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">VIX Trend <span class="panel-sub">fear cycle overlay</span></div>
+        <div class="lw-chart" id="wyckoffVixChart"></div>
+      </div>
+    </div>
+
+    <!-- Volume signal table from portfolio/watchlist -->
+    <div class="panel">
+      <div class="panel-title">Wyckoff Volume Signals <span class="panel-sub">vol_r vs price change — from screener cache</span></div>
+      <div id="wyckoffSignals" class="loading">Loading signals…</div>
+    </div>
+  </div>
+
+</div><!-- end .page -->
 
 <script>
 'use strict';
 
-const TOKEN_KEY = 'st_token';
-
-// ── Auth guard ───────────────────────────────────────────────────────────────
-function getToken() {
-  return localStorage.getItem(TOKEN_KEY);
-}
-
+// ── Auth ─────────────────────────────────────────────────────────────────────
 async function apiFetch(url) {
-  const token = getToken();
-  if (!token) {
-    window.location.href = '/login';
-    throw new Error('Not authenticated');
-  }
-  const resp = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (resp.status === 401) {
-    window.location.href = '/login';
-    throw new Error('Session expired');
-  }
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`${resp.status}: ${text}`);
-  }
+  const token = localStorage.getItem('st_token');
+  if (!token) { window.location.href = '/login'; throw new Error('Not authenticated'); }
+  const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (resp.status === 401) { window.location.href = '/login'; throw new Error('Session expired'); }
+  if (!resp.ok) { const t = await resp.text(); throw new Error(`${resp.status}: ${t}`); }
   return resp.json();
 }
 
-// ── LW Chart factory ─────────────────────────────────────────────────────────
-function makeLWChart(containerId, opts = {}) {
-  const el = document.getElementById(containerId);
+// ── State ─────────────────────────────────────────────────────────────────────
+let globalPeriodDays = 30;    // current LW chart visible period
+let showSPY = true;           // SPY benchmark toggle
+let annPeriodBars = 30;       // portfolio analytics period (bars)
+let portfolioSource = 'watchlist'; // 'watchlist' | 'portfolio' | 'both'
+let allLWCharts = [];         // all LW chart instances (for period sync)
+let portfolioTickers = [];
+let watchlistTickers = [];
+let histories = {};           // ticker → [{date, close, volume}]
+let spyBars = [];
+const CMP_COLORS = ['#f0a500','#3b9eff','#00d26a','#ff4d4d','#a855f7','#06b6d4','#f97316','#ec4899','#84cc16','#f43f5e','#8b5cf6','#14b8a6','#fb923c','#c084fc','#34d399','#fbbf24','#60a5fa','#4ade80'];
+
+// ── LW Chart factory ──────────────────────────────────────────────────────────
+function makeLWChart(id, height = 240) {
+  const el = document.getElementById(id);
+  if (!el) return null;
+  el.style.height = height + 'px';
   const chart = LightweightCharts.createChart(el, {
-    width: el.clientWidth,
-    height: 220,
-    layout: { background: { color: '#111' }, textColor: '#888' },
+    width: el.clientWidth, height,
+    layout: { background: { color: '#111' }, textColor: '#999' },
     grid: { vertLines: { color: '#1a1a1a' }, horzLines: { color: '#1a1a1a' } },
     rightPriceScale: { borderColor: '#1e1e1e' },
     timeScale: { borderColor: '#1e1e1e', timeVisible: true },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-    ...opts,
   });
-  // Resize observer
   new ResizeObserver(() => chart.applyOptions({ width: el.clientWidth })).observe(el);
+  allLWCharts.push(chart);
   return chart;
 }
 
-// Convert [{date, value}] → LW format [{time, value}]
 function toSeries(data) {
-  return data.map(d => ({ time: d.date, value: d.value }));
+  return (data || []).map(d => ({ time: d.date, value: d.value }));
 }
 
-// Color by value (for yields/spread)
-function colorLine(v, neutral = '#7eb8f5') {
-  if (v === null || v === undefined) return neutral;
-  return v >= 0 ? '#26a65b' : '#e05252';
-}
-
-// ── Stat cards ───────────────────────────────────────────────────────────────
-function buildStatCards(macro, vix, breadth) {
-  const vixCurrent = vix.current;
-  const zone = vix.zone;
-  const zoneClass = `zone-${zone}`;
-  const spread = macro.yield_spread_now;
-  const inverted = macro.yield_inverted;
-
-  const cards = [
-    {
-      label: 'VIX',
-      value: vixCurrent?.toFixed(2) ?? '—',
-      sub: `<span class="vix-badge ${zoneClass}">${zone.replace('_', ' ')}</span>`,
-    },
-    {
-      label: 'Fed Funds',
-      value: `${macro.fed_rate ?? '—'}%`,
-      sub: `2yr: ${macro.yield_2yr ?? '—'}%  |  10yr: ${macro.yield_10yr ?? '—'}%`,
-    },
-    {
-      label: 'Yield Spread',
-      value: spread != null ? `${spread > 0 ? '+' : ''}${spread.toFixed(3)}%` : '—',
-      sub: inverted ? '<span class="stat-warn">⚠ Inverted</span>' : 'Normal curve',
-      cls: inverted ? 'stat-warn' : (spread >= 0 ? 'stat-up' : 'stat-down'),
-    },
-    {
-      label: 'M2 Supply',
-      value: macro.m2_current != null ? `$${macro.m2_current.toFixed(0)}B` : '—',
-      sub: `Trend: ${macro.m2_trend ?? '—'}`,
-    },
-    {
-      label: 'S&P 500 Breadth',
-      value: `${breadth.pct_above_200ma ?? '—'}%`,
-      sub: `Above 200MA  |  Regime: <strong>${breadth.regime ?? '—'}</strong>`,
-      cls: breadth.pct_above_200ma >= 60 ? 'stat-up' : breadth.pct_above_200ma >= 40 ? '' : 'stat-down',
-    },
-    {
-      label: 'A/D Ratio',
-      value: breadth.ad_ratio ?? '—',
-      sub: `${breadth.advancing ?? 0} adv / ${breadth.declining ?? 0} dec`,
-      cls: breadth.ad_ratio >= 1 ? 'stat-up' : 'stat-down',
-    },
-  ];
-
-  const row = document.getElementById('statRow');
-  row.innerHTML = cards.map(c => `
-    <div class="stat-card">
-      <div class="stat-label">${c.label}</div>
-      <div class="stat-value ${c.cls || ''}">${c.value}</div>
-      <div class="stat-sub">${c.sub || ''}</div>
-    </div>`).join('');
-}
-
-// ── Sector bar chart (Chart.js) ──────────────────────────────────────────────
-let sectorChartInst = null;
-
-function buildSectorChart(sectors) {
-  const sorted = [...sectors].sort((a, b) => (b.ret_1m ?? -999) - (a.ret_1m ?? -999));
-  const labels = sorted.map(s => s.ticker);
-  const data   = sorted.map(s => s.ret_1m ?? 0);
-  const colors = data.map(v => v >= 0 ? 'rgba(38,166,91,0.75)' : 'rgba(224,82,82,0.75)');
-
-  const ctx = document.getElementById('sectorChart').getContext('2d');
-  if (sectorChartInst) sectorChartInst.destroy();
-  sectorChartInst = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [{
-        label: '1M Return (%)',
-        data,
-        backgroundColor: colors,
-        borderRadius: 3,
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      indexAxis: 'y',
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: ctx => {
-              const s = sorted[ctx.dataIndex];
-              return [
-                ` 1M: ${s.ret_1m != null ? s.ret_1m.toFixed(2) + '%' : 'N/A'}`,
-                ` 5D: ${s.ret_5d != null ? s.ret_5d.toFixed(2) + '%' : 'N/A'}`,
-                ` 3M: ${s.ret_3m != null ? s.ret_3m.toFixed(2) + '%' : 'N/A'}`,
-                ` ${s.name}`,
-              ];
-            },
-          },
-        },
-      },
-      scales: {
-        x: {
-          grid: { color: '#1a1a1a' },
-          ticks: { color: '#666', font: { size: 10 } },
-        },
-        y: {
-          grid: { color: '#1a1a1a' },
-          ticks: { color: '#aaa', font: { size: 11, family: 'JetBrains Mono' } },
-        },
-      },
-    },
+// ── Period control ────────────────────────────────────────────────────────────
+function applyPeriodToAll(days) {
+  if (days === 0) {
+    allLWCharts.forEach(c => { try { c.timeScale().fitContent(); } catch(e) {} });
+    return;
+  }
+  const now = new Date();
+  const from = new Date(now);
+  from.setDate(from.getDate() - days);
+  const fromStr = from.toISOString().split('T')[0];
+  const toStr   = now.toISOString().split('T')[0];
+  allLWCharts.forEach(c => {
+    try { c.timeScale().setVisibleRange({ from: fromStr, to: toStr }); } catch(e) {}
   });
 }
 
-// ── Breadth bars ─────────────────────────────────────────────────────────────
+document.getElementById('periodGroup').addEventListener('click', e => {
+  const btn = e.target.closest('.period-btn');
+  if (!btn) return;
+  document.querySelectorAll('#periodGroup .period-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  globalPeriodDays = parseInt(btn.dataset.days);
+  applyPeriodToAll(globalPeriodDays);
+});
+
+// ── SPY Toggle ────────────────────────────────────────────────────────────────
+document.getElementById('spyToggle').addEventListener('click', function() {
+  showSPY = !showSPY;
+  this.textContent = 'SPY Benchmark';
+  this.className = 'spy-toggle ' + (showSPY ? 'on' : 'off');
+  renderPerfChart();
+});
+
+// ── Source selector ───────────────────────────────────────────────────────────
+function setSource(src) {
+  portfolioSource = src;
+  document.querySelectorAll('[id^="src"]').forEach(b => b.classList.remove('active'));
+  document.getElementById('src' + src.charAt(0).toUpperCase() + src.slice(1))?.classList.add('active');
+  loadPortfolioAnalytics();
+}
+
+// ── Ann period selector ───────────────────────────────────────────────────────
+document.getElementById('annPeriodGroup').addEventListener('click', e => {
+  const btn = e.target.closest('.period-btn');
+  if (!btn) return;
+  document.querySelectorAll('#annPeriodGroup .period-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  annPeriodBars = parseInt(btn.dataset.ann);
+  renderAnnReturns();
+  renderCorrMatrix();
+  renderPerfChart();
+});
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function fmtRet(v, digits = 2) {
+  if (v == null) return '<span class="muted">—</span>';
+  const cls = v > 0 ? 'up' : v < 0 ? 'down' : 'muted';
+  return `<span class="${cls}">${v > 0 ? '+' : ''}${v.toFixed(digits)}%</span>`;
+}
+function retColor(v) {
+  if (v == null) return '#1a1a1a';
+  const c = Math.max(-60, Math.min(100, v));
+  if (c >= 0) { const t = c/100; return `rgb(${Math.round(26*(1-t))},${Math.round(26+t*184)},${Math.round(26+t*54)})`; }
+  const t = -c/60; return `rgb(${Math.round(26+t*204)},${Math.round(26*(1-t))},${Math.round(26*(1-t))})`;
+}
+function corrColor(v) {
+  if (v > 0.7)  return '#00d26a';
+  if (v > 0.3)  return '#4a7a4a';
+  if (v > -0.3) return '#3a3a3a';
+  if (v > -0.7) return '#7a4a1a';
+  return '#7a1a1a';
+}
+function corrTextColor(v) {
+  return Math.abs(v) > 0.3 ? '#fff' : '#888';
+}
+
+// ── ETF table renderer ────────────────────────────────────────────────────────
+function etfTableHtml(items) {
+  if (!items || !items.length) return '<div class="muted" style="font-size:12px;padding:10px;">No data available</div>';
+  return `<table class="etf-table">
+    <thead><tr>
+      <th>Ticker</th><th>Name</th><th>Price</th><th>5D</th><th>1M</th><th>3M</th>
+    </tr></thead>
+    <tbody>${items.map(s => `<tr>
+      <td class="mono" style="font-weight:600;color:#e0e0e0;">${s.ticker}</td>
+      <td style="color:#aaa;">${s.name}</td>
+      <td class="mono">${s.price ?? '—'}</td>
+      <td class="ret-cell">${fmtRet(s.ret_5d)}</td>
+      <td class="ret-cell">${fmtRet(s.ret_1m)}</td>
+      <td class="ret-cell">${fmtRet(s.ret_3m)}</td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+// ── Breadth bar ───────────────────────────────────────────────────────────────
 function barHtml(label, pct, color = '#26a65b') {
-  return `
-    <div class="breadth-bar-row">
-      <div class="breadth-bar-label">${label}</div>
-      <div class="breadth-bar-track">
-        <div class="breadth-bar-fill" style="width:${Math.min(pct, 100)}%;background:${color};"></div>
-      </div>
-      <div class="breadth-bar-pct">${pct}%</div>
-    </div>`;
+  return `<div class="bar-row">
+    <div class="bar-label">${label}</div>
+    <div class="bar-track"><div class="bar-fill" style="width:${Math.min(pct,100)}%;background:${color};"></div></div>
+    <div class="bar-pct">${pct}%</div>
+  </div>`;
 }
 
-function buildBreadth(breadth) {
-  const regime = breadth.regime ?? 'Unknown';
-  document.getElementById('breadthRegimeLabel').textContent = `Regime: ${regime}`;
+// ─────────────────────────────────────────────────────────────────────────────
+// MACRO & VIX load
+// ─────────────────────────────────────────────────────────────────────────────
+let chartsData = null;
+let sectorSpdrChartInst = null;
 
-  const main = document.getElementById('breadthBars');
-  main.innerHTML = [
-    barHtml('Above 200MA', breadth.pct_above_200ma ?? 0, '#26a65b'),
-    barHtml('Above 50MA',  breadth.pct_above_50ma  ?? 0, '#7eb8f5'),
-  ].join('');
-
-  const secEl = document.getElementById('sectorBreadthBars');
-  const rows = (breadth.sector_breadth ?? []).slice(0, 12);
-  secEl.innerHTML = rows.map(s => {
-    const pct = s.pct_above_200 ?? 0;
-    const color = pct >= 70 ? '#26a65b' : pct >= 50 ? '#7eb8f5' : pct >= 30 ? '#f0a500' : '#e05252';
-    return barHtml(s.sector?.substring(0, 14) ?? '—', pct, color);
-  }).join('');
-}
-
-// ── Main load ────────────────────────────────────────────────────────────────
-async function loadAll() {
-  document.getElementById('statRow').innerHTML =
-    '<div class="loading-overlay" style="flex:1">Loading market data…</div>';
-
+async function loadMacro() {
   try {
-    const data = await apiFetch('/api/charts/all');
-    const { macro, vix: vixObj, sectors, breadth } = data;
+    chartsData = await apiFetch('/api/charts/all');
+    const { macro, vix: vixArr, sectors, breadth, etf_groups } = chartsData;
+    const vixCurrent = vixArr?.at(-1)?.value;
+    const vixZone = vixCurrent > 30 ? 'extreme_fear' : vixCurrent > 20 ? 'fear' : vixCurrent > 15 ? 'neutral' : 'complacency';
+    const spread = macro?.yield_spread_now ?? 0;
+    const inverted = macro?.yield_inverted;
 
-    // Stat cards
-    buildStatCards(macro, { current: vixObj.at(-1)?.value, zone: (() => {
-      const v = vixObj.at(-1)?.value;
-      return v > 30 ? 'extreme_fear' : v > 20 ? 'fear' : v > 15 ? 'neutral' : 'complacency';
-    })() }, breadth);
+    // ── Macro stat cards ────────────────────────────────────────────────
+    document.getElementById('macroStatRow').innerHTML = [
+      { label: 'Fed Funds', value: `${macro?.fed_rate ?? '—'}%`, sub: 'Target rate', cls: '' },
+      { label: '2yr Yield', value: `${macro?.yield_2yr ?? '—'}%`, sub: 'Treasury', cls: '' },
+      { label: '10yr Yield', value: `${macro?.yield_10yr ?? '—'}%`, sub: 'Treasury', cls: '' },
+      { label: 'Yield Spread', value: spread != null ? `${spread > 0 ? '+' : ''}${spread.toFixed(3)}%` : '—',
+        sub: inverted ? '<span class="warn">⚠ Inverted</span>' : 'Normal curve',
+        cls: inverted ? 'warn' : spread >= 0 ? 'up' : 'down' },
+      { label: 'M2 Supply', value: macro?.m2_current != null ? `$${macro.m2_current.toFixed(0)}B` : '—',
+        sub: `Trend: ${macro?.m2_trend ?? '—'}`, cls: '' },
+    ].map(c => `<div class="stat-card"><div class="stat-label">${c.label}</div>
+      <div class="stat-value ${c.cls}">${c.value}</div>
+      <div class="stat-sub">${c.sub}</div></div>`).join('');
 
-    // ── LW Charts ──────────────────────────────────────────────────────────
+    // ── VIX stat card ───────────────────────────────────────────────────
+    const breadthPct = breadth?.pct_above_200ma ?? 0;
+    document.getElementById('vixStatRow').innerHTML = [
+      { label: 'VIX', value: vixCurrent?.toFixed(2) ?? '—',
+        sub: `<span class="vix-badge zone-${vixZone}">${vixZone.replace('_',' ')}</span>`,
+        cls: vixCurrent > 25 ? 'down' : vixCurrent > 18 ? 'warn' : 'up' },
+      { label: 'S&P 500 Breadth', value: `${breadthPct}%`,
+        sub: `Above 200MA — Regime: <b>${breadth?.regime ?? '—'}</b>`,
+        cls: breadthPct >= 60 ? 'up' : breadthPct >= 40 ? 'warn' : 'down' },
+      { label: 'A/D Ratio', value: breadth?.ad_ratio ?? '—',
+        sub: `${breadth?.advancing ?? 0} adv / ${breadth?.declining ?? 0} dec`,
+        cls: (breadth?.ad_ratio ?? 0) >= 1 ? 'up' : 'down' },
+    ].map(c => `<div class="stat-card"><div class="stat-label">${c.label}</div>
+      <div class="stat-value ${c.cls}">${c.value}</div>
+      <div class="stat-sub">${c.sub}</div></div>`).join('');
 
-    // 10yr + 2yr yields (two series on one chart)
+    // ── LW Charts ───────────────────────────────────────────────────────
     const yieldChart = makeLWChart('yieldChart');
-    const s10 = yieldChart.addLineSeries({ color: '#f0a500', lineWidth: 2, title: '10yr' });
-    const s2  = yieldChart.addLineSeries({ color: '#7eb8f5', lineWidth: 2, title: '2yr' });
-    s10.setData(toSeries(macro.dgs10 ?? []));
-    s2.setData(toSeries(macro.dgs2 ?? []));
-    yieldChart.timeScale().fitContent();
+    if (yieldChart) {
+      const s10 = yieldChart.addLineSeries({ color: '#f0a500', lineWidth: 2, title: '10yr' });
+      const s2  = yieldChart.addLineSeries({ color: '#7eb8f5', lineWidth: 2, title: '2yr'  });
+      s10.setData(toSeries(macro?.dgs10));
+      s2.setData(toSeries(macro?.dgs2));
+    }
 
-    // Yield spread
     const spreadChart = makeLWChart('spreadChart');
-    const spreadSeries = spreadChart.addBaselineSeries({
-      baseValue: { type: 'price', price: 0 },
-      topLineColor: '#26a65b', topFillColor1: 'rgba(38,166,91,0.15)', topFillColor2: 'rgba(38,166,91,0.02)',
-      bottomLineColor: '#e05252', bottomFillColor1: 'rgba(224,82,82,0.02)', bottomFillColor2: 'rgba(224,82,82,0.15)',
-      lineWidth: 2, title: 'Spread',
-    });
-    spreadSeries.setData(toSeries(macro.yield_spread ?? []));
-    spreadChart.timeScale().fitContent();
+    if (spreadChart) {
+      const ss = spreadChart.addBaselineSeries({
+        baseValue: { type: 'price', price: 0 },
+        topLineColor: '#26a65b', topFillColor1: 'rgba(38,166,91,.15)', topFillColor2: 'rgba(38,166,91,.02)',
+        bottomLineColor: '#e05252', bottomFillColor1: 'rgba(224,82,82,.02)', bottomFillColor2: 'rgba(224,82,82,.15)',
+        lineWidth: 2,
+      });
+      ss.setData(toSeries(macro?.yield_spread));
+    }
 
-    // VIX
-    const vixChart = makeLWChart('vixChart');
-    const vixSeries = vixChart.addAreaSeries({
-      lineColor: '#f0a500', topColor: 'rgba(240,165,0,0.25)', bottomColor: 'rgba(240,165,0,0.02)',
-      lineWidth: 2, title: 'VIX',
-    });
-    vixSeries.setData(toSeries(vixObj));
-
-    // Add horizontal reference lines
-    [20, 30].forEach(level => {
-      const ref = vixChart.addLineSeries({ color: '#333', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed });
-      const firstDate = vixObj[0]?.date;
-      const lastDate  = vixObj.at(-1)?.date;
-      if (firstDate && lastDate) ref.setData([{ time: firstDate, value: level }, { time: lastDate, value: level }]);
-    });
-    vixChart.timeScale().fitContent();
-
-    // M2
     const m2Chart = makeLWChart('m2Chart');
-    const m2Series = m2Chart.addAreaSeries({
-      lineColor: '#26a65b', topColor: 'rgba(38,166,91,0.2)', bottomColor: 'rgba(38,166,91,0.02)',
-      lineWidth: 2, title: 'M2',
-    });
-    m2Series.setData(toSeries(macro.m2 ?? []));
-    m2Chart.timeScale().fitContent();
+    if (m2Chart) {
+      const ms = m2Chart.addAreaSeries({ lineColor: '#26a65b', topColor: 'rgba(38,166,91,.2)', bottomColor: 'rgba(38,166,91,.02)', lineWidth: 2 });
+      ms.setData(toSeries(macro?.m2));
+    }
 
-    // Fed Funds
     const fedChart = makeLWChart('fedChart');
-    fedChart.applyOptions({ height: 160 });
-    document.getElementById('fedChart').style.height = '160px';
-    const fedSeries = fedChart.addLineSeries({ color: '#7eb8f5', lineWidth: 2, title: 'Fed Funds' });
-    fedSeries.setData(toSeries(macro.fedfunds ?? []));
-    fedChart.timeScale().fitContent();
+    if (fedChart) {
+      const fs = fedChart.addLineSeries({ color: '#7eb8f5', lineWidth: 2 });
+      fs.setData(toSeries(macro?.fedfunds));
+    }
 
-    // ── Chart.js sector chart ──────────────────────────────────────────────
-    buildSectorChart(sectors ?? []);
+    // ── VIX LW Chart ────────────────────────────────────────────────────
+    const vixChart = makeLWChart('vixChart');
+    if (vixChart) {
+      const vs = vixChart.addAreaSeries({ lineColor: '#f0a500', topColor: 'rgba(240,165,0,.25)', bottomColor: 'rgba(240,165,0,.02)', lineWidth: 2 });
+      vs.setData(toSeries(vixArr));
+      // Reference lines
+      [20, 30].forEach(level => {
+        const ref = vixChart.addLineSeries({ color: '#333', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed });
+        const fd = vixArr?.[0]?.date, ld = vixArr?.at(-1)?.date;
+        if (fd && ld) ref.setData([{ time: fd, value: level }, { time: ld, value: level }]);
+      });
+    }
 
-    // ── Breadth bars ───────────────────────────────────────────────────────
-    buildBreadth(breadth ?? {});
+    // Apply 30d default after all charts are loaded
+    setTimeout(() => applyPeriodToAll(globalPeriodDays), 100);
 
-  } catch (err) {
-    document.getElementById('statRow').innerHTML =
-      `<div class="error-msg">Error loading chart data: ${err.message}</div>`;
+    // ── Breadth bars ────────────────────────────────────────────────────
+    document.getElementById('breadthMain').innerHTML = [
+      barHtml('Above 200MA', breadth?.pct_above_200ma ?? 0, '#26a65b'),
+      barHtml('Above 50MA',  breadth?.pct_above_50ma  ?? 0, '#7eb8f5'),
+    ].join('');
+    document.getElementById('breadthStats').innerHTML = `
+      <div style="font-size:13px; color:#ccc; margin-bottom:4px;">Advancing: <span class="up">${breadth?.advancing ?? 0}</span></div>
+      <div style="font-size:13px; color:#ccc; margin-bottom:4px;">Declining: <span class="down">${breadth?.declining ?? 0}</span></div>
+      <div style="font-size:13px; color:#ccc;">A/D Ratio: <span class="${(breadth?.ad_ratio??0)>=1?'up':'down'}">${breadth?.ad_ratio ?? '—'}</span></div>
+    `;
+    const secBreadthEl = document.getElementById('sectorBreadthBars');
+    secBreadthEl.innerHTML = (breadth?.sector_breadth ?? []).map(s => {
+      const pct = s.pct_above_200 ?? 0;
+      const color = pct >= 70 ? '#26a65b' : pct >= 50 ? '#7eb8f5' : pct >= 30 ? '#f0a500' : '#e05252';
+      return barHtml((s.sector ?? '').substring(0, 16), pct, color);
+    }).join('');
+
+    // ── SPDR bar chart ───────────────────────────────────────────────────
+    buildSectorSpdrChart(sectors ?? []);
+
+    // ── Sector ETF table ─────────────────────────────────────────────────
+    document.getElementById('sectorTable').innerHTML = etfTableHtml(sectors ?? []);
+
+    // ── ETF Group tables ─────────────────────────────────────────────────
+    if (etf_groups) {
+      document.getElementById('intlTable').innerHTML  = etfTableHtml(etf_groups.international ?? []);
+      document.getElementById('cmdtyTable').innerHTML = etfTableHtml(etf_groups.commodities ?? []);
+      document.getElementById('styleTable').innerHTML = etfTableHtml(etf_groups.style ?? []);
+      document.getElementById('indicesTable').innerHTML = etfTableHtml(etf_groups.sector_indices ?? []);
+    } else {
+      // Fallback: load separately
+      try {
+        const eg = await apiFetch('/api/charts/etf-groups');
+        document.getElementById('intlTable').innerHTML  = etfTableHtml(eg.international ?? []);
+        document.getElementById('cmdtyTable').innerHTML = etfTableHtml(eg.commodities ?? []);
+        document.getElementById('styleTable').innerHTML = etfTableHtml(eg.style ?? []);
+        document.getElementById('indicesTable').innerHTML = etfTableHtml(eg.sector_indices ?? []);
+      } catch(e) {
+        ['intlTable','cmdtyTable','styleTable','indicesTable'].forEach(id => {
+          document.getElementById(id).innerHTML = `<div class="err">ETF data unavailable: ${e.message}</div>`;
+        });
+      }
+    }
+
+    // ── Wyckoff phase ────────────────────────────────────────────────────
+    renderWyckoffPhase(vixCurrent, breadth, vixArr);
+
+  } catch(err) {
+    document.getElementById('macroStatRow').innerHTML = `<div class="err">Error: ${err.message}</div>`;
     console.error(err);
   }
 }
 
-document.getElementById('btnRefresh').addEventListener('click', loadAll);
-loadAll();
+// ── SPDR sector bar chart ─────────────────────────────────────────────────────
+function buildSectorSpdrChart(sectors) {
+  const sorted = [...sectors].sort((a,b) => (b.ret_1m ?? -999) - (a.ret_1m ?? -999));
+  const labels = sorted.map(s => s.ticker);
+  const data   = sorted.map(s => s.ret_1m ?? 0);
+  const colors = data.map(v => v >= 0 ? 'rgba(38,166,91,.75)' : 'rgba(224,82,82,.75)');
+  const ctx = document.getElementById('sectorSpdrChart').getContext('2d');
+  if (sectorSpdrChartInst) sectorSpdrChartInst.destroy();
+  sectorSpdrChartInst = new Chart(ctx, {
+    type: 'bar',
+    data: { labels, datasets: [{ label: '1M %', data, backgroundColor: colors, borderRadius: 3 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => {
+          const s = sorted[ctx.dataIndex];
+          return [` 1M: ${s.ret_1m?.toFixed(2)??'N/A'}%`, ` 5D: ${s.ret_5d?.toFixed(2)??'N/A'}%`, ` 3M: ${s.ret_3m?.toFixed(2)??'N/A'}%`, ` ${s.name}`];
+        }}},
+      },
+      scales: {
+        x: { grid: { color: '#1a1a1a' }, ticks: { color: '#777', font: { size: 11 } } },
+        y: { grid: { color: '#1a1a1a' }, ticks: { color: '#bbb', font: { size: 12, family: 'JetBrains Mono' } } },
+      },
+    },
+  });
+}
+
+// ── Wyckoff phase renderer ────────────────────────────────────────────────────
+function renderWyckoffPhase(vix, breadth, vixArr) {
+  const pct200 = breadth?.pct_above_200ma ?? 50;
+  const adRatio = breadth?.ad_ratio ?? 1;
+  const regime  = breadth?.regime ?? 'Unknown';
+
+  // Compute VIX trend (compare last 5 vs previous 5)
+  let vixTrend = 'flat';
+  if (vixArr && vixArr.length >= 10) {
+    const recent = vixArr.slice(-5).reduce((s,d) => s+d.value, 0) / 5;
+    const prior  = vixArr.slice(-10,-5).reduce((s,d) => s+d.value, 0) / 5;
+    vixTrend = recent > prior * 1.05 ? 'rising' : recent < prior * 0.95 ? 'falling' : 'flat';
+  }
+
+  // Wyckoff phase determination
+  let phase, icon, borderColor, bgColor, desc, signals;
+  if (vix > 30 && pct200 < 35) {
+    phase = 'SELLING CLIMAX'; icon = '💥'; borderColor = '#e05252'; bgColor = '#1a0a0a';
+    desc  = 'Panic selling, extreme fear — potential bottom formation. Watch for high volume reversals.';
+    signals = ['⚠ Extreme VIX &gt; 30', '⚠ Breadth severely oversold &lt; 35%', '→ Monitor for accumulation signs'];
+  } else if (vix > 25 && pct200 < 50 && vixTrend === 'rising') {
+    phase = 'MARKDOWN'; icon = '📉'; borderColor = '#e05252'; bgColor = '#150a0a';
+    desc  = 'Prices declining on fear. Volume pressure to downside. Wait for climax before re-entry.';
+    signals = ['⚠ VIX elevated &amp; rising', '⚠ Breadth deteriorating', '→ Reduce exposure, protect gains'];
+  } else if (vix > 20 && pct200 >= 40 && pct200 < 60 && vixTrend === 'falling') {
+    phase = 'SPRING / RETEST'; icon = '🌱'; borderColor = '#f0a500'; bgColor = '#12100a';
+    desc  = 'Potential spring or secondary test. Breadth stabilizing as fear subsides. High alert zone.';
+    signals = ['→ VIX elevated but falling', '→ Breadth near 50% threshold', '→ Watch for volume confirmation'];
+  } else if (vix <= 20 && pct200 >= 40 && pct200 < 60 && adRatio >= 1) {
+    phase = 'ACCUMULATION'; icon = '🏗️'; borderColor = '#7eb8f5'; bgColor = '#0a101a';
+    desc  = 'Quiet accumulation zone. Smart money absorbing supply. Look for tightening price ranges on low volume.';
+    signals = ['→ VIX normalizing', '→ Breadth recovering toward 50%', '→ A/D ratio positive'];
+  } else if (vix <= 20 && pct200 >= 60 && pct200 < 75 && vixTrend !== 'rising') {
+    phase = 'MARKUP'; icon = '🚀'; borderColor = '#26a65b'; bgColor = '#0a150a';
+    desc  = 'Uptrend in progress. Breadth broad, volume supportive. Ride winners, add to strength.';
+    signals = ['✓ VIX low and stable', '✓ Breadth 60–75% above 200MA', '✓ A/D ratio favorable'];
+  } else if (vix < 16 && pct200 > 70 && vixTrend !== 'rising') {
+    phase = 'DISTRIBUTION'; icon = '⚠️'; borderColor = '#f0a500'; bgColor = '#12100a';
+    desc  = 'Complacency zone. Smart money distributing. Risk/reward deteriorating — tighten stops.';
+    signals = ['⚠ VIX complacency &lt; 16', '⚠ Breadth extended &gt; 70%', '→ Consider reducing high-beta positions'];
+  } else {
+    phase = 'NEUTRAL / TRANSITION'; icon = '⚖️'; borderColor = '#555'; bgColor = '#111';
+    desc  = 'Mixed signals. No clear Wyckoff phase. Monitor breadth + VIX trend for confirmation.';
+    signals = ['→ Mixed VIX / breadth signals', '→ Watch A/D line direction', '→ Maintain current positioning'];
+  }
+
+  document.getElementById('wyckoffPhaseCard').innerHTML = `
+    <div class="phase-card" style="background:${bgColor}; border-color:${borderColor};">
+      <div class="phase-icon">${icon}</div>
+      <div style="flex:1">
+        <div class="phase-name" style="color:${borderColor};">${phase}</div>
+        <div class="phase-desc">${desc}</div>
+        <div class="phase-signals" style="color:#999; margin-top:8px;">${signals.join(' &nbsp;·&nbsp; ')}</div>
+      </div>
+      <div style="text-align:right; font-size:12px; color:#777; line-height:2;">
+        <div>VIX: <span style="color:#e0e0e0; font-family:JetBrains Mono;">${vix?.toFixed(2) ?? '—'}</span></div>
+        <div>Breadth: <span style="color:#e0e0e0; font-family:JetBrains Mono;">${pct200}%</span></div>
+        <div>A/D: <span style="color:#e0e0e0; font-family:JetBrains Mono;">${adRatio}</span></div>
+        <div>Regime: <span style="color:${borderColor}; font-family:JetBrains Mono; font-weight:700;">${regime}</span></div>
+      </div>
+    </div>`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PORTFOLIO ANALYTICS
+// ─────────────────────────────────────────────────────────────────────────────
+let perfChartInst = null;
+let annChartInst  = null;
+
+async function loadPortfolioBase() {
+  try {
+    const [portResp, watchResp, spyResp] = await Promise.all([
+      apiFetch('/api/portfolio'),
+      apiFetch('/api/watchlist'),
+      apiFetch('/api/stocks/SPY/history'),
+    ]);
+    portfolioTickers = (portResp.positions ?? []).map(p => p.ticker);
+    watchlistTickers = (watchResp ?? []).map(w => w.ticker);
+    spyBars = spyResp.bars ?? [];
+  } catch(e) {
+    console.warn('Portfolio/watchlist load error:', e);
+  }
+}
+
+function getActiveTickers() {
+  if (portfolioSource === 'portfolio') return portfolioTickers;
+  if (portfolioSource === 'watchlist') return watchlistTickers;
+  return [...new Set([...portfolioTickers, ...watchlistTickers])];
+}
+
+async function fetchMissingHistories(tickers) {
+  const missing = tickers.filter(t => !histories[t]);
+  if (!missing.length) return;
+  await Promise.all(missing.map(async t => {
+    try {
+      const d = await apiFetch(`/api/stocks/${t}/history`);
+      histories[t] = d.bars ?? [];
+    } catch(e) { histories[t] = []; }
+  }));
+}
+
+async function loadPortfolioAnalytics() {
+  const tickers = getActiveTickers();
+  document.getElementById('tickerCount').textContent = `${tickers.length} ticker${tickers.length !== 1 ? 's' : ''}`;
+
+  if (!tickers.length) {
+    document.getElementById('annTable').innerHTML = '<div class="muted" style="font-size:12px; padding:10px;">No tickers in selected source.</div>';
+    document.getElementById('corrMsg').textContent = 'No tickers in selected source.';
+    document.getElementById('corrMatrix').innerHTML = '';
+    renderPerfChart();
+    return;
+  }
+
+  await fetchMissingHistories(tickers);
+  renderPerfChart();
+  renderAnnReturns();
+  renderCorrMatrix();
+  renderWyckoffSignals(tickers);
+}
+
+// ── Performance chart ─────────────────────────────────────────────────────────
+function renderPerfChart() {
+  const tickers = getActiveTickers();
+  const N = annPeriodBars;
+  const allLines = [];
+
+  tickers.forEach((ticker, i) => {
+    const bars = (histories[ticker] || []).slice(-N);
+    if (bars.length < 2) return;
+    const base = bars[0].close;
+    allLines.push({
+      ticker, color: CMP_COLORS[i % CMP_COLORS.length],
+      pct: bars.map(b => ((b.close - base) / base) * 100),
+    });
+  });
+
+  // SPY
+  let spyLine = null;
+  if (showSPY && spyBars.length > 0) {
+    const bars = spyBars.slice(-N);
+    if (bars.length >= 2) {
+      const base = bars[0].close;
+      spyLine = { ticker: 'SPY', color: '#555', pct: bars.map(b => ((b.close - base)/base)*100) };
+    }
+  }
+
+  const allPcts = [...allLines.flatMap(l => l.pct), ...(spyLine ? spyLine.pct : [])];
+  const yMin = allPcts.length ? Math.floor(Math.min(...allPcts) - 2) : -10;
+  const yMax = allPcts.length ? Math.ceil(Math.max(...allPcts)  + 2) : 10;
+
+  const ctx = document.getElementById('perfChart').getContext('2d');
+  if (perfChartInst) perfChartInst.destroy();
+
+  const datasets = [...allLines.map(l => ({
+    label: l.ticker, data: l.pct, borderColor: l.color,
+    backgroundColor: 'transparent', borderWidth: 2, pointRadius: 0, tension: 0.3,
+  }))];
+  if (spyLine) {
+    datasets.push({
+      label: 'SPY', data: spyLine.pct, borderColor: '#555',
+      backgroundColor: 'transparent', borderWidth: 1.5, borderDash: [4,3], pointRadius: 0, tension: 0.3,
+    });
+  }
+
+  // Labels: just bar indices mapped to rough dates
+  const labels = Array.from({ length: Math.max(...datasets.map(d => d.data.length), 1) }, (_, i) => i);
+
+  perfChartInst = new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { mode: 'index', intersect: false,
+          callbacks: { label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y >= 0 ? '+' : ''}${ctx.parsed.y.toFixed(2)}%` }
+        },
+      },
+      scales: {
+        x: { display: false },
+        y: { min: yMin, max: yMax, grid: { color: '#1a1a1a' }, ticks: { color: '#888', font: { size: 11 }, callback: v => `${v > 0 ? '+' : ''}${v}%` } },
+      },
+    },
+  });
+
+  // Legend
+  const legendEl = document.getElementById('perfLegend');
+  legendEl.innerHTML = [...allLines, ...(spyLine ? [spyLine] : [])].map(l =>
+    `<span style="display:flex;align-items:center;gap:4px;">
+      <span style="width:18px;height:3px;background:${l.color};display:inline-block;border-radius:2px;${l.ticker==='SPY'?'opacity:.6;':''}" ></span>
+      <span style="color:${l.color};font-family:JetBrains Mono,monospace;font-size:12px;font-weight:600;">${l.ticker}</span>
+      ${allLines.find(x=>x.ticker===l.ticker) ? `<span style="font-size:11px;color:#666;">${((l.pct.at(-1))>=0?'+':'') + (l.pct.at(-1)??0).toFixed(1)}%</span>` : ''}
+    </span>`
+  ).join('');
+}
+
+// ── Annualized returns table ───────────────────────────────────────────────────
+function calcAnnRet(bars, n) {
+  const s = bars.slice(-n);
+  if (s.length < 2) return null;
+  const r = s.at(-1).close / s[0].close;
+  if (r <= 0) return null;
+  return (Math.pow(r, 252 / s.length) - 1) * 100;
+}
+
+function renderAnnReturns() {
+  const tickers = getActiveTickers();
+  const PERIODS = [
+    { label: '7D',  bars: 7  },
+    { label: '1M',  bars: 21 },
+    { label: '3M',  bars: 63 },
+    { label: '1Y',  bars: 252 },
+  ];
+
+  const rows = tickers.map(ticker => ({
+    ticker,
+    source: portfolioTickers.includes(ticker) ? (watchlistTickers.includes(ticker) ? 'both' : 'port') : 'watch',
+    values: PERIODS.map(p => calcAnnRet(histories[ticker] || [], p.bars)),
+  })).filter(r => r.values.some(v => v != null))
+    .sort((a,b) => (b.values[1] ?? -999) - (a.values[1] ?? -999)); // sort by 1M
+
+  if (!rows.length) {
+    document.getElementById('annTable').innerHTML = '<div class="muted" style="font-size:12px;padding:10px;">No history data available yet.</div>';
+    return;
+  }
+
+  const srcIcon = s => s === 'port' ? '💼' : s === 'watch' ? '★' : '★💼';
+
+  document.getElementById('annTable').innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead><tr style="border-bottom:1px solid #1e1e1e;">
+        <th style="padding:6px 8px;text-align:left;color:#666;font-size:11px;">Ticker</th>
+        ${PERIODS.map(p => `<th style="padding:6px 8px;text-align:right;color:#666;font-size:11px;">${p.label} Ann%</th>`).join('')}
+      </tr></thead>
+      <tbody>${rows.map(r => `
+        <tr style="border-bottom:1px solid #141414;">
+          <td style="padding:6px 8px;font-family:JetBrains Mono,monospace;font-weight:600;color:#e0e0e0;">
+            ${srcIcon(r.source)} ${r.ticker}
+          </td>
+          ${r.values.map(v => `<td style="padding:6px 8px;text-align:right;font-family:JetBrains Mono,monospace;font-size:12px;background:${retColor(v)};color:${v == null ? '#555' : Math.abs(v) > 30 ? '#fff' : '#ddd'};">
+            ${v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
+          </td>`).join('')}
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+// ── Correlation matrix ────────────────────────────────────────────────────────
+function renderCorrMatrix() {
+  const tickers = getActiveTickers();
+  const N = annPeriodBars;
+  const el = document.getElementById('corrMatrix');
+  const msg = document.getElementById('corrMsg');
+
+  const valid = tickers.filter(t => (histories[t] || []).slice(-N).length >= 5);
+  if (valid.length < 2) {
+    msg.textContent = valid.length < 2 ? 'Need ≥ 2 tickers with history to compute matrix.' : '';
+    el.innerHTML = '';
+    return;
+  }
+  msg.textContent = '';
+
+  const returns = {};
+  valid.forEach(t => {
+    const bars = (histories[t] || []).slice(-N);
+    returns[t] = bars.slice(1).map((b, i) => (b.close - bars[i].close) / bars[i].close);
+  });
+  const minLen = Math.min(...Object.values(returns).map(a => a.length));
+  valid.forEach(t => { returns[t] = returns[t].slice(0, minLen); });
+
+  const matrix = valid.map((t1, i) =>
+    valid.map((t2, j) => {
+      if (i === j) return 1;
+      const a = returns[t1], b = returns[t2];
+      const ma = a.reduce((s,v)=>s+v,0)/a.length, mb = b.reduce((s,v)=>s+v,0)/b.length;
+      let num = 0, d1 = 0, d2 = 0;
+      for (let k=0; k<minLen; k++) { num += (a[k]-ma)*(b[k]-mb); d1 += (a[k]-ma)**2; d2 += (b[k]-mb)**2; }
+      const r = num / (Math.sqrt(d1)*Math.sqrt(d2));
+      return isNaN(r) ? 0 : r;
+    })
+  );
+
+  const cellSz = Math.max(40, Math.min(60, Math.floor(480 / valid.length)));
+  el.innerHTML = `<div style="display:flex;flex-direction:column;gap:2px;padding:4px;">
+    <div style="display:flex;gap:2px;padding-left:${cellSz+4}px;">
+      ${valid.map(t => `<div style="width:${cellSz}px;text-align:center;font-size:10px;color:#666;font-family:JetBrains Mono,monospace;overflow:hidden;text-overflow:ellipsis;">${t}</div>`).join('')}
+    </div>
+    ${valid.map((t1, i) => `
+      <div style="display:flex;gap:2px;align-items:center;">
+        <div style="width:${cellSz}px;text-align:right;font-size:11px;color:#aaa;font-family:JetBrains Mono,monospace;padding-right:4px;flex-shrink:0;">${t1}</div>
+        ${valid.map((t2, j) => {
+          const v = matrix[i][j];
+          const bg = corrColor(v), fg = corrTextColor(v);
+          return `<div style="width:${cellSz}px;height:32px;display:flex;align-items:center;justify-content:center;background:${bg};color:${fg};font-size:10px;font-family:JetBrains Mono,monospace;border-radius:2px;" title="${t1}/${t2}: ${v.toFixed(3)}">${v.toFixed(2)}</div>`;
+        }).join('')}
+      </div>`).join('')}
+  </div>`;
+}
+
+// ── Wyckoff signals table ─────────────────────────────────────────────────────
+async function renderWyckoffSignals(tickers) {
+  const el = document.getElementById('wyckoffSignals');
+  // Fetch screener data to get vol_r and chg_pct
+  try {
+    const body = JSON.stringify({ tickers });
+    const token = localStorage.getItem('st_token');
+    const resp = await fetch('/api/screener/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body,
+    });
+    if (!resp.ok) throw new Error(`${resp.status}`);
+    const data = await resp.json();
+    const stocks = data.results ?? data ?? [];
+
+    if (!stocks.length) { el.innerHTML = '<div class="muted" style="font-size:12px;padding:10px;">No screener data available.</div>'; return; }
+
+    const classified = stocks.map(s => {
+      const volR = s.vol_r, chg = s.chg_pct;
+      let signal = 'Neutral', color = '#555', icon = '—';
+      if (chg > 0 && volR > 1.2) { signal = 'Accumulation Breakout'; color = '#26a65b'; icon = '🟢'; }
+      else if (chg > 0 && volR < 0.85) { signal = 'Distribution (Top)'; color = '#e05252'; icon = '🔴'; }
+      else if (chg < 0 && volR > 1.2) { signal = 'Panic / Supply';      color = '#e05252'; icon = '🔴'; }
+      else if (chg < 0 && volR < 0.85) { signal = 'Low-Vol Pullback';   color = '#f0a500'; icon = '🟡'; }
+      else if (chg > 0) { signal = 'Bullish (normal vol)'; color = '#4a8a4a'; icon = '🟢'; }
+      else if (chg < 0) { signal = 'Bearish (normal vol)'; color = '#8a4a4a'; icon = '🔴'; }
+      return { ...s, signal, signalColor: color, icon };
+    }).sort((a,b) => {
+      const order = { 'Accumulation Breakout': 0, 'Distribution (Top)': 1, 'Panic / Supply': 2, 'Low-Vol Pullback': 3 };
+      return (order[a.signal] ?? 99) - (order[b.signal] ?? 99);
+    });
+
+    el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead><tr style="border-bottom:1px solid #1e1e1e;">
+        <th style="padding:6px 8px;text-align:left;color:#666;font-size:11px;">Ticker</th>
+        <th style="padding:6px 8px;text-align:right;color:#666;font-size:11px;">Price</th>
+        <th style="padding:6px 8px;text-align:right;color:#666;font-size:11px;">Chg%</th>
+        <th style="padding:6px 8px;text-align:right;color:#666;font-size:11px;">Vol Ratio</th>
+        <th style="padding:6px 8px;text-align:right;color:#666;font-size:11px;">RSI</th>
+        <th style="padding:6px 8px;text-align:left;color:#666;font-size:11px;">Wyckoff Signal</th>
+      </tr></thead>
+      <tbody>${classified.map(s => `<tr style="border-bottom:1px solid #141414;">
+        <td style="padding:6px 8px;font-family:JetBrains Mono,monospace;font-weight:600;color:#e0e0e0;">${s.ticker}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:JetBrains Mono,monospace;">${s.price?.toFixed(2) ?? '—'}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:JetBrains Mono,monospace;" class="${(s.chg_pct??0)>=0?'up':'down'}">${s.chg_pct != null ? `${s.chg_pct >= 0 ? '+' : ''}${s.chg_pct.toFixed(2)}%` : '—'}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:JetBrains Mono,monospace;color:${(s.vol_r??1)>1.15?'#f0a500':(s.vol_r??1)<0.85?'#7eb8f5':'#999'};">${s.vol_r?.toFixed(2) ?? '—'}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:JetBrains Mono,monospace;color:${(s.rsi??50)>70?'#e05252':(s.rsi??50)<30?'#26a65b':'#999'};">${s.rsi?.toFixed(0) ?? '—'}</td>
+        <td style="padding:6px 8px;color:${s.signalColor};">${s.icon} ${s.signal}</td>
+      </tr>`).join('')}
+      </tbody></table>`;
+  } catch(e) {
+    el.innerHTML = `<div class="err">Could not load Wyckoff signals: ${e.message}</div>`;
+  }
+}
+
+// ── Wyckoff LW charts ─────────────────────────────────────────────────────────
+function buildWyckoffCharts() {
+  // SPY price chart
+  const spyChart = makeLWChart('wyckoffSpyChart');
+  if (spyChart && spyBars.length) {
+    const ss = spyChart.addAreaSeries({ lineColor: '#7eb8f5', topColor: 'rgba(126,184,245,.15)', bottomColor: 'rgba(126,184,245,.02)', lineWidth: 2 });
+    ss.setData(spyBars.map(b => ({ time: b.date, value: b.close })));
+  }
+
+  // VIX for Wyckoff section (reuse chartsData)
+  const vixArr = chartsData?.vix ?? [];
+  const wVixChart = makeLWChart('wyckoffVixChart');
+  if (wVixChart && vixArr.length) {
+    const vs = wVixChart.addAreaSeries({ lineColor: '#f0a500', topColor: 'rgba(240,165,0,.2)', bottomColor: 'rgba(240,165,0,.02)', lineWidth: 2 });
+    vs.setData(toSeries(vixArr));
+    [20, 30].forEach(level => {
+      const ref = wVixChart.addLineSeries({ color: '#333', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed });
+      const fd = vixArr[0]?.date, ld = vixArr.at(-1)?.date;
+      if (fd && ld) ref.setData([{ time: fd, value: level }, { time: ld, value: level }]);
+    });
+  }
+
+  setTimeout(() => applyPeriodToAll(globalPeriodDays), 150);
+}
+
+// ── Main init ─────────────────────────────────────────────────────────────────
+async function init() {
+  await Promise.all([loadMacro(), loadPortfolioBase()]);
+  await loadPortfolioAnalytics();
+  buildWyckoffCharts();
+}
+
+document.getElementById('btnRefresh').addEventListener('click', () => {
+  allLWCharts = [];
+  histories = {};
+  document.querySelectorAll('.lw-chart').forEach(el => { el.innerHTML = ''; });
+  init();
+});
+
+init();
 </script>
 </body>
 </html>

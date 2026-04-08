@@ -86,11 +86,15 @@ ETFS = [
     "TLT","IEF","SHY","HYG","LQD","BND","AGG","BNDX","VCSH","VCIT",
     # Commodities
     "GLD","SLV","USO","UNG","DBA","PDBC","IAU",
+    "GSG","COMT","DBC","GCC","USCI",
     # International
     "EFA","EEM","FXI","EWJ","EWZ","MCHI","INDA","EWU","EWG","EWC",
+    "VXUS","FDT","IEMG","AVDV","SCHY","EFV","VGK","VPL",
     # Dividend / factor
     "DVY","VYM","SDY","NOBL","HDV","DGRO",
     "IWF","IWD","VUG","VTV","MTUM","VLUE",
+    # Style / size
+    "SPYG","SPYV","MDYG","MDYV","SLYG","SLYV","IWC",
     # Leveraged (popular)
     "TQQQ","SOXL","UPRO","SPXL","TECL",
     # Volatility / alternatives

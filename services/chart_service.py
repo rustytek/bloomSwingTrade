@@ -204,6 +204,111 @@ async def get_sector_data() -> list[dict]:
     return data
 
 
+# ── ETF Groups (international / commodities / style / sector indices) ─────────
+
+ETF_GROUPS = {
+    "international": {
+        "SPY":  "S&P 500 (benchmark)",
+        "VXUS": "All-World ex-US",
+        "VEA":  "Developed Markets",
+        "VGK":  "Europe",
+        "VPL":  "Pacific",
+        "VWO":  "Emerging Mkts",
+        "IEMG": "Core Emerging Mkts",
+        "FDT":  "Dev Mkts ex-US SC",
+        "AVDV": "Intl Small Value",
+        "SCHY": "Intl Dividend",
+        "EFV":  "Intl Value",
+    },
+    "commodities": {
+        "GLD":  "Gold",
+        "SLV":  "Silver",
+        "GSG":  "S&P GSCI Cmdty",
+        "COMT": "PIMCO Cmdty",
+        "DBC":  "DB Commodity",
+        "PDBC": "Optimum Yield",
+        "GCC":  "Continuous Cmdty",
+        "USCI": "US Commodity Idx",
+        "USO":  "Crude Oil",
+        "UNG":  "Natural Gas",
+        "GDX":  "Gold Miners",
+        "GDXJ": "Jr Gold Miners",
+    },
+    "style": {
+        "SPY":  "S&P 500",
+        "SPYG": "S&P 500 Growth",
+        "SPYV": "S&P 500 Value",
+        "QQQ":  "Nasdaq 100",
+        "IWM":  "Russell 2000",
+        "MDYG": "MidCap Growth",
+        "MDYV": "MidCap Value",
+        "SLYG": "SmallCap Growth",
+        "SLYV": "SmallCap Value",
+        "IWC":  "Micro Cap",
+    },
+    "sector_indices": {
+        "^SOX":    "Philadelphia Semiconductor",
+        "^BKX":    "KBW Banking Index",
+        "^XAU":    "Gold/Silver Mining",
+        "^OSX":    "PHLX Oil Service",
+        "^BTK":    "AMEX Biotech",
+        "^XBD":    "AMEX Broker/Dealer",
+        "^DRG":    "NYSE Arca Pharma",
+        "^DJUSRT": "DJ US Retail",
+    },
+}
+
+
+async def get_etf_group_data() -> dict:
+    """Returns 5d/1m/3m returns for all ETF groups, cached 6 hours."""
+    cached = _cache_get("etf_groups")
+    if cached is not None:
+        return cached
+
+    def _fetch_one(ticker: str):
+        try:
+            hist = yf.Ticker(ticker).history(period="3mo", interval="1d", auto_adjust=True)
+            if hist.empty:
+                return ticker, None
+            closes = hist["Close"].dropna()
+            if len(closes) < 2:
+                return ticker, None
+            c = closes.values
+            return ticker, {
+                "price":  round(float(c[-1]), 2),
+                "ret_5d": round((c[-1] / c[-6]  - 1) * 100, 2) if len(c) >= 6  else None,
+                "ret_1m": round((c[-1] / c[-22] - 1) * 100, 2) if len(c) >= 22 else None,
+                "ret_3m": round((c[-1] / c[0]   - 1) * 100, 2),
+            }
+        except Exception as e:
+            logger.warning("ETF group fetch error %s: %s", ticker, e)
+            return ticker, None
+
+    def _fetch():
+        # Collect all unique tickers across all groups
+        all_tickers = list({t for g in ETF_GROUPS.values() for t in g})
+        prices: dict = {}
+        # Use a thread pool for parallel fetches
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for ticker, data in pool.map(_fetch_one, all_tickers):
+                if data:
+                    prices[ticker] = data
+
+        result = {}
+        for group_name, etfs in ETF_GROUPS.items():
+            items = []
+            for ticker, name in etfs.items():
+                if ticker in prices:
+                    items.append({"ticker": ticker, "name": name, **prices[ticker]})
+            result[group_name] = sorted(items, key=lambda x: x.get("ret_1m") or -999, reverse=True)
+        return result
+
+    data = await asyncio.to_thread(_fetch)
+    _cache_set("etf_groups", data)
+    return data
+
+
 # ── Market breadth (screener DB — no external API) ────────────────────────────
 
 def get_breadth_data(db: Session) -> dict:
@@ -279,10 +384,11 @@ def get_breadth_data(db: Session) -> dict:
 # ── Convenience: everything in one async call ─────────────────────────────────
 
 async def get_all_chart_data(db: Session) -> dict:
-    macro, vix, sectors = await asyncio.gather(
+    macro, vix, sectors, etf_groups = await asyncio.gather(
         get_macro_data(),
         get_vix_data(),
         get_sector_data(),
+        get_etf_group_data(),
     )
     breadth = get_breadth_data(db)
-    return {"macro": macro, "vix": vix, "sectors": sectors, "breadth": breadth}
+    return {"macro": macro, "vix": vix, "sectors": sectors, "breadth": breadth, "etf_groups": etf_groups}

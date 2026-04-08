@@ -1850,6 +1850,10 @@
       const [showPresets, setShowPresets] = useState(false);
       const [showCols, setShowCols] = useState(false);
       const [dragCol, setDragCol] = useState(null);
+      const [tickerText, setTickerText] = useState('');
+      useEffect(() => {
+        if (!filters.tickers || filters.tickers.length === 0) setTickerText('');
+      }, [filters.tickers]);
       const activeCount = useMemo(() => {
         const f = filters;
         return [f.pe_min, f.pe_max, f.fwd_pe_min, f.fwd_pe_max, f.eps_grw_min, f.eps_grw_max,
@@ -1931,6 +1935,18 @@
         <button onClick={() => setFilters(defFilters())} style={{ background: '#1a1a1a', color: '#ff4d4d', padding: '5px 10px', borderRadius: 3, fontSize: 11, border: '1px solid #2a2a2a' }}>
           Reset All
         </button>
+        <input
+          type="text"
+          placeholder="Ticker: AAPL,MSFT…"
+          value={tickerText}
+          onChange={e => {
+            const val = e.target.value;
+            setTickerText(val);
+            const tickers = val.split(/[,\s]+/).map(t => t.toUpperCase()).filter(Boolean);
+            setFilters(f => ({ ...f, tickers: tickers.length ? tickers : [] }));
+          }}
+          style={{ background: '#1a1a1a', color: '#ddd', border: '1px solid #2a2a2a', padding: '4px 8px', borderRadius: 3, fontSize: 11, width: 170, fontFamily: 'JetBrains Mono, monospace' }}
+        />
         <button onClick={onShowSave} style={{ background: '#1a1a1a', color: '#aaa', padding: '5px 10px', borderRadius: 3, fontSize: 11, border: '1px solid #2a2a2a' }}>
           Save ⭐
         </button>

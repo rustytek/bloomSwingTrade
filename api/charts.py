@@ -52,6 +52,16 @@ def breadth(db: Session = Depends(get_db), user: User = Depends(get_current_user
     return get_breadth_data(db)
 
 
+@router.get("/etf-groups")
+async def etf_groups(user: User = Depends(get_current_user)):
+    """International, commodity, style ETFs + sector indices: 5d/1m/3m returns."""
+    try:
+        from services.chart_service import get_etf_group_data
+        return await get_etf_group_data()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"ETF group fetch error: {e}")
+
+
 @router.get("/all")
 async def all_charts(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """All chart data in a single request — used by the dashboard on load."""

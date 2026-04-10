@@ -134,7 +134,7 @@ async def get_macro_data() -> dict:
 async def get_vix_data() -> list[dict]:
     """VIX 90-day daily history."""
     cached = _cache_get("vix")
-    if cached is not None:
+    if cached:  # truthy check — avoids serving a stale empty list
         return cached
 
     def _fetch():
@@ -171,32 +171,38 @@ SECTOR_ETFS = {
 async def get_sector_data() -> list[dict]:
     """5d / 1m / 3m returns for all sector ETFs."""
     cached = _cache_get("sectors")
-    if cached is not None:
+    if cached:  # truthy check — avoids serving a stale empty list
         return cached
 
+    def _fetch_one(item):
+        ticker, name = item
+        try:
+            hist = yf.Ticker(ticker).history(period="3mo", interval="1d", auto_adjust=True)
+            if hist.empty:
+                return None
+            closes = hist["Close"].dropna()
+            if len(closes) < 2:
+                return None
+            c = closes.values
+            return {
+                "ticker": ticker,
+                "name":   name,
+                "price":  round(float(c[-1]), 2),
+                "ret_5d": round((c[-1] / c[-6]  - 1) * 100, 2) if len(c) >= 6  else None,
+                "ret_1m": round((c[-1] / c[-22] - 1) * 100, 2) if len(c) >= 22 else None,
+                "ret_3m": round((c[-1] / c[0]   - 1) * 100, 2),
+            }
+        except Exception as e:
+            logger.warning("Sector fetch error %s: %s", ticker, e)
+            return None
+
     def _fetch():
-        tickers = list(SECTOR_ETFS.keys())
-        raw = yf.download(
-            tickers, period="3mo", interval="1d",
-            auto_adjust=True, group_by="ticker", progress=False,
-        )
+        from concurrent.futures import ThreadPoolExecutor
         results = []
-        for ticker, name in SECTOR_ETFS.items():
-            try:
-                closes = raw[ticker]["Close"].dropna() if len(tickers) > 1 else raw["Close"].dropna()
-                if len(closes) < 2:
-                    continue
-                c = closes.values
-                results.append({
-                    "ticker": ticker,
-                    "name":   name,
-                    "price":  round(float(c[-1]), 2),
-                    "ret_5d": round((c[-1] / c[-6]  - 1) * 100, 2) if len(c) >= 6  else None,
-                    "ret_1m": round((c[-1] / c[-22] - 1) * 100, 2) if len(c) >= 22 else None,
-                    "ret_3m": round((c[-1] / c[0]   - 1) * 100, 2),
-                })
-            except Exception as e:
-                logger.warning("Sector fetch error %s: %s", ticker, e)
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for result in pool.map(_fetch_one, SECTOR_ETFS.items()):
+                if result:
+                    results.append(result)
         return sorted(results, key=lambda x: x.get("ret_1m") or -999, reverse=True)
 
     data = await asyncio.to_thread(_fetch)
@@ -262,7 +268,7 @@ ETF_GROUPS = {
 async def get_etf_group_data() -> dict:
     """Returns 5d/1m/3m returns for all ETF groups, cached 6 hours."""
     cached = _cache_get("etf_groups")
-    if cached is not None:
+    if cached:  # truthy check — avoids serving a stale empty dict
         return cached
 
     def _fetch_one(ticker: str):

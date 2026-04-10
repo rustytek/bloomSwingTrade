@@ -109,21 +109,28 @@ class MockAIService(AIService):
     """
 
     async def analyze_stock(self, ticker: str, data: dict) -> dict:
+        rsi = data.get("rsi")
+        vs_ma200 = data.get("vs_ma200")
+        vs_ma50 = data.get("vs_ma50")
+        score = (data.get("score") or {}).get("o", 0)
         return {
             "summary": (
-                f"AI analysis for {ticker} is not yet configured. "
-                "Set AI_PROVIDER=anthropic (or openai) and AI_API_KEY in your .env file "
-                "to enable real AI-powered analysis."
+                f"Swing trading analysis for {ticker} requires a configured AI provider. "
+                "Set AI_PROVIDER=ollama (local), anthropic, or openai and the corresponding "
+                "API key in your .env to enable real AI-powered swing trading strategy analysis."
             ),
             "sentiment": "neutral",
             "confidence": 0.0,
             "key_factors": [
-                "Configure an AI provider to see key factors",
-                "Supports Anthropic Claude and OpenAI GPT models",
+                f"RSI: {round(rsi, 1) if rsi else '—'} — {'Neutral zone (40-65), good for entry' if rsi and 40 <= rsi <= 65 else 'Outside ideal swing entry zone' if rsi else 'N/A'}",
+                f"vs MA200: {'+' if vs_ma200 and vs_ma200 > 0 else ''}{round(vs_ma200, 1) if vs_ma200 else '—'}% — {'Above 200MA (uptrend)' if vs_ma200 and vs_ma200 > 0 else 'Below 200MA (downtrend)' if vs_ma200 else 'N/A'}",
+                f"Overall score: {score}/5 — configure an AI provider for a full swing trade plan",
             ],
+            "entry_strategy": "Configure an AI provider (Ollama/Anthropic/OpenAI) to see specific entry signals, price levels, and setup conditions.",
+            "exit_strategy": "Configure an AI provider to see profit targets, stop-loss levels, and trailing stop recommendations.",
             "ai_score": None,
-            "risks": ["AI provider not configured"],
-            "opportunities": ["Add AI_PROVIDER to .env to unlock this feature"],
+            "risks": ["AI provider not configured — set AI_PROVIDER in .env"],
+            "opportunities": ["Enable Ollama for local/free analysis, or add Anthropic/OpenAI key"],
         }
 
     async def generate_signals(self, ticker: str, technicals: dict) -> list[dict]:
@@ -176,12 +183,20 @@ class OllamaAIService(AIService):
 
     async def analyze_stock(self, ticker: str, data: dict) -> dict:
         system = (
-            "You are a professional stock analyst. Analyze the given stock data and respond "
-            "with a JSON object only — no markdown, no extra text. Keys: summary (str), "
-            "sentiment (bullish|bearish|neutral), confidence (0.0-1.0), key_factors ([str]), "
-            "ai_score (1-10 int), risks ([str]), opportunities ([str])."
+            "You are an expert swing trader. Analyze the given stock/ETF technical and fundamental data "
+            "and respond with a JSON object ONLY — no markdown, no extra text. "
+            "Required keys: "
+            "summary (string: 2-4 sentence swing trading outlook covering trend, momentum, and setup quality), "
+            "sentiment (bullish|bearish|neutral), "
+            "confidence (0.0-1.0), "
+            "key_factors (array of strings: specific observations about RSI level, MACD crossover, MA position, volume, 52W range, drawdown), "
+            "entry_strategy (string: ideal entry conditions — specific price level or signal trigger, e.g. 'Buy on pullback to MA50 if RSI drops below 50'), "
+            "exit_strategy (string: profit target and stop-loss levels, e.g. 'Target +8-12% near 52W high, stop at -4% below entry'), "
+            "ai_score (integer 1-10: swing trade quality score), "
+            "risks (array of 2-3 strings: key risks to this swing trade), "
+            "opportunities (array of 2-3 strings: specific catalysts or chart patterns supporting the trade)."
         )
-        user = f"Analyze {ticker}:\n{json.dumps(data, default=str)}"
+        user = f"Analyze {ticker} for swing trading:\n{json.dumps(data, default=str)}"
         try:
             raw = await self._chat(system, user)
             # Strip any markdown code fences the model may add

@@ -2,8 +2,21 @@
 Technical indicator calculations.
 Pure Python / numpy — mirrors the logic from the HTML template.
 """
+import math
 import numpy as np
 from typing import Optional
+
+
+def _safe(v):
+    """Return None if v is NaN, Inf, or not a number — ensures JSON safety."""
+    if v is None:
+        return None
+    try:
+        if math.isnan(v) or math.isinf(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return v
 
 
 def calc_ma(closes: list[float], period: int) -> list[Optional[float]]:
@@ -159,13 +172,16 @@ def compute_performance_metrics(
         spy_closes: SPY price history (same length requested); used for Info Ratio
         beta:      pre-computed beta from yfinance; used for Treynor
     """
+    _empty = {
+        "ann_ret": None, "vol": None, "sharpe": None,
+        "gain_sharpe": None, "sortino": None, "calmar": None,
+        "info_ratio": None, "treynor": None,
+        "vol_1m": None, "max_dd_1m": None,
+    }
+    # Strip NaN/Inf/zero prices before any calculation
+    closes = [c for c in closes if c and not math.isnan(c) and not math.isinf(c) and c > 0]
     if len(closes) < 2:
-        return {
-            "ann_ret": None, "vol": None, "sharpe": None,
-            "gain_sharpe": None, "sortino": None, "calmar": None,
-            "info_ratio": None, "treynor": None,
-            "vol_1m": None, "max_dd_1m": None,
-        }
+        return _empty
     arr = np.array(closes, dtype=float)
     n = len(arr)
     daily_ret = np.diff(arr) / arr[:-1]
@@ -237,7 +253,7 @@ def compute_performance_metrics(
                 max_dd_1m_raw = dd
         max_dd_1m = round(max_dd_1m_raw * 100, 2)  # as positive %
 
-    return {
+    raw = {
         "ann_ret": round(ann_ret_1m, 2) if ann_ret_1m is not None else None,
         "vol": round(vol, 2),
         "sharpe": round(sharpe, 3) if sharpe is not None else None,
@@ -249,3 +265,5 @@ def compute_performance_metrics(
         "vol_1m": round(vol_1m, 2) if vol_1m is not None else None,
         "max_dd_1m": max_dd_1m,
     }
+    # Final NaN/Inf guard — ensures JSON serialisation never fails
+    return {k: _safe(v) for k, v in raw.items()}

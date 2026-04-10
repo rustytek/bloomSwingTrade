@@ -5,6 +5,7 @@ All public methods are async-friendly (run blocking yfinance in thread pool).
 import asyncio
 import json
 import logging
+import math
 from datetime import datetime, timezone, timedelta
 from functools import partial
 from typing import Optional
@@ -251,7 +252,14 @@ def _enrich_with_technicals(quote: dict, history: list[dict]) -> dict:
         **perf,
     }
     enriched["score"] = compute_score(enriched)
-    return enriched
+
+    # Final NaN/Inf guard — prevents JSON serialisation failures from bad yfinance data
+    def _safe_val(v):
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            return None
+        return v
+
+    return {k: _safe_val(v) for k, v in enriched.items()}
 
 
 # ── Public async interface ─────────────────────────────────────────────────
@@ -482,11 +490,13 @@ def get_universe_status(db: Session, universe: list[str]) -> dict:
     latest = max((r.cached_at for r in rows if r.ticker in universe_set and r.cached_at), default=None)
     if latest:
         try:
-            from datetime import timezone
-            dt = latest.replace(tzinfo=timezone.utc) if latest.tzinfo is None else latest
-            last_updated_time = dt.astimezone().strftime("%I:%M %p").lstrip('0')
+            from datetime import timezone as _tz
+            dt = latest.replace(tzinfo=_tz.utc) if latest.tzinfo is None else latest
+            local_dt = dt.astimezone()
+            tz_name = local_dt.strftime("%Z")
+            last_updated_time = local_dt.strftime("%b %d, %I:%M %p").lstrip('0') + f" {tz_name}"
         except Exception:
-            last_updated_time = latest.strftime("%I:%M %p").lstrip('0')
+            last_updated_time = latest.strftime("%b %d, %I:%M %p").lstrip('0')
                  
     # Append the rate limiter status
     limit_status = limiter.get_status()

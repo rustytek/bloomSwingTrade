@@ -107,8 +107,29 @@
     .spy-toggle.off { background: #1a1a1a; color: #555; }
 
     /* ── Sector cycle grid ── */
-    .cycle-grid { display: grid; grid-template-columns: 480px 1fr; gap: 20px; align-items: start; }
+    .cycle-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
     .cycle-img { width: 100%; border-radius: 4px; border: 1px solid #1e1e1e; display: block; }
+
+    /* ── Chart description text ── */
+    .panel-desc { font-size: 11px; color: #666; margin-top: 10px; padding-top: 10px; border-top: 1px solid #1a1a1a; line-height: 1.65; }
+    .panel-desc strong { color: #888; }
+    .panel-desc .tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; margin: 0 2px; }
+    .tag-bull  { background: #0a2a0a; color: #26a65b; }
+    .tag-bear  { background: #2a0a0a; color: #e05252; }
+    .tag-warn  { background: #2a1a00; color: #f0a500; }
+    .tag-info  { background: #0a1a2a; color: #7eb8f5; }
+
+    /* ── Ticker link ── */
+    .ticker-link { color: #f0a500; text-decoration: none; font-weight: 600; cursor: pointer; font-family: 'JetBrains Mono', monospace; }
+    .ticker-link:hover { text-decoration: underline; color: #ffc233; }
+
+    /* ── Info icon ── */
+    .info-icon { display: inline-block; width: 14px; height: 14px; background: #222; border: 1px solid #333; border-radius: 50%; font-size: 9px; text-align: center; line-height: 14px; color: #666; cursor: help; margin-left: 5px; vertical-align: middle; }
+
+    /* ── Ticker detail modal tabs ── */
+    .td-tab { padding: 8px 16px; background: none; color: #555; border: none; border-bottom: 2px solid transparent; font-size: 12px; font-weight: 400; cursor: pointer; font-family: 'Inter', sans-serif; transition: all .15s; margin-bottom: -1px; }
+    .td-tab:hover { color: #ccc; }
+    .td-tab.active-tab { color: #f0a500; border-bottom-color: #f0a500; font-weight: 600; }
 
     /* ── Loading / Error ── */
     .loading { color: #555; font-size: 13px; padding: 30px; text-align: center; }
@@ -146,6 +167,7 @@
   </div>
   <!-- SPY Toggle -->
   <button class="spy-toggle on" id="spyToggle">SPY Benchmark</button>
+  <span id="lastUpdatedBadge" style="font-size:10px;color:#555;display:none;">Updated: <span id="lastUpdatedTime"></span></span>
   <button class="btn btn-primary" id="btnRefresh">↻ Refresh</button>
 </div>
 
@@ -166,20 +188,40 @@
     </div>
     <div style="margin-top:16px" class="grid2">
       <div class="panel">
-        <div class="panel-title">10yr &amp; 2yr Treasury Yields <span class="panel-sub">gold = 10yr · blue = 2yr</span></div>
+        <div class="panel-title" title="Treasury yields reflect the cost of borrowing. Rising 10yr yield = growth/inflation expectations. When 2yr > 10yr (inverted), it historically signals recession risk within 12-18 months. Watch for yield curve normalization as a bullish macro signal.">10yr &amp; 2yr Treasury Yields <span class="panel-sub">gold = 10yr · blue = 2yr</span></div>
         <div class="lw-chart" id="yieldChart"></div>
+        <div class="panel-desc">
+          <strong>What to watch:</strong> Rising 10yr yield signals growth/inflation expectations — good for banks, bad for long-duration growth stocks.
+          When <span class="tag tag-bear">2yr &gt; 10yr</span> the curve is <em>inverted</em> — a historically reliable recession signal within 12–18 months.
+          <span class="tag tag-bull">10yr &gt; 2yr</span> = normal, healthy lending environment. Watch for the spread crossing zero as a regime change indicator.
+        </div>
       </div>
       <div class="panel">
-        <div class="panel-title">Yield Spread: 10yr − 2yr <span class="panel-sub">green = normal · red = inverted</span></div>
+        <div class="panel-title" title="The yield spread (10yr minus 2yr) is the most watched recession indicator. Positive (green) = normal, healthy lending conditions. Negative/inverted (red) = banks have less incentive to lend, credit tightens. Re-inversion or deep inversion is bearish for equities.">Yield Spread: 10yr − 2yr <span class="panel-sub">green = normal · red = inverted</span></div>
         <div class="lw-chart" id="spreadChart"></div>
+        <div class="panel-desc">
+          <strong>What to watch:</strong> <span class="tag tag-bull">Positive spread</span> = banks profit lending long-term → credit availability is healthy.
+          <span class="tag tag-bear">Negative / inverted</span> = banks have less incentive to lend, credit tightens → historically precedes recessions.
+          The re-steepening after inversion (spread rising back toward 0) is often the period when recession actually hits — not the inversion itself.
+        </div>
       </div>
       <div class="panel">
-        <div class="panel-title">M2 Money Supply <span class="panel-sub">billions USD</span></div>
+        <div class="panel-title" title="M2 is the broadest measure of money supply (cash + checking + savings + money market). Expanding M2 adds liquidity to the system — historically bullish for risk assets. Contracting M2 (rare) drains liquidity and pressures valuations.">M2 Money Supply <span class="panel-sub">billions USD</span></div>
         <div class="lw-chart" id="m2Chart"></div>
+        <div class="panel-desc">
+          <strong>What to watch:</strong> <span class="tag tag-bull">Rising M2</span> = more liquidity in the financial system — bullish for equities, especially growth stocks and crypto.
+          <span class="tag tag-bear">Falling M2</span> = liquidity draining — bearish for risk assets, supports cash/bonds.
+          M2 rate-of-change (acceleration) matters more than level. A slowdown in growth can precede pullbacks even while M2 is still rising.
+        </div>
       </div>
       <div class="panel">
-        <div class="panel-title">Federal Funds Rate <span class="panel-sub">%</span></div>
+        <div class="panel-title" title="The Federal Funds Rate is the overnight lending rate set by the Fed. It is the primary tool of monetary policy. Rate hikes raise the discount rate for all future cash flows — compressing equity valuations, especially for growth stocks. Rate cuts act as a liquidity stimulus.">Federal Funds Rate <span class="panel-sub">%</span></div>
         <div class="lw-chart" id="fedChart"></div>
+        <div class="panel-desc">
+          <strong>What to watch:</strong> <span class="tag tag-bear">Rising rates</span> = tighter policy — raises the discount rate for stocks, pressures valuations, especially growth/tech.
+          <span class="tag tag-bull">Cutting cycle</span> = monetary stimulus — historically bullish for equities and real estate.
+          The <em>peak</em> of a rate cycle is key: equities often rally before the first cut as markets price in easing. The rate level vs. inflation (real rate) matters most.
+        </div>
       </div>
     </div>
   </div>
@@ -197,8 +239,16 @@
       <div class="loading">Loading VIX data…</div>
     </div>
     <div class="panel">
-      <div class="panel-title">VIX — CBOE Volatility Index <span class="panel-sub">20 = fear threshold · 30 = extreme fear</span></div>
+      <div class="panel-title" title="The VIX measures implied volatility (fear) in the S&amp;P 500 options market. What to look for: VIX below 15 = complacency (market may be overextended). VIX 15-20 = neutral. VIX above 20 = elevated fear (potential buy opportunity as fear spikes are often contrarian). VIX above 30 = extreme fear (panic — often marks bottoms). Rising VIX + falling price = sellers in control. Falling VIX + rising price = healthy uptrend.">VIX — CBOE Volatility Index <span class="panel-sub">20 = fear threshold · 30 = extreme fear</span></div>
       <div class="lw-chart" id="vixChart"></div>
+      <div class="panel-desc">
+        <strong>Reading the VIX:</strong>
+        <span class="tag tag-warn">VIX &lt; 15</span> Complacency — market may be overextended, risk/reward deteriorating.
+        <span class="tag tag-info">VIX 15–20</span> Neutral — normal market environment.
+        <span class="tag tag-warn">VIX 20–30</span> Elevated fear — contrarian buy zone, watch for reversals.
+        <span class="tag tag-bear">VIX &gt; 30</span> Extreme fear / panic — often marks short-term bottoms.
+        <br><strong>Key patterns:</strong> Rising VIX + falling price = sellers in control. Falling VIX + rising price = healthy uptrend. VIX spike + quick reversal = panic washout (bullish). VIX rising slowly while price rises = distribution warning.
+      </div>
     </div>
   </div>
 
@@ -213,16 +263,31 @@
     </div>
     <div class="grid2">
       <div class="panel">
-        <div class="panel-title">Overall Breadth</div>
+        <div class="panel-title" title="Market breadth measures how many S&P 500 stocks are participating in the trend. High breadth (>70% above 200MA) = broad bull market. Low breadth (<30%) = bear market. Divergence — price rising but breadth falling — is an early warning sign of a failing rally.">Overall Breadth</div>
         <div id="breadthMain"></div>
         <div style="margin-top:16px; padding-top:14px; border-top:1px solid #1e1e1e;">
           <div style="font-size:12px; font-weight:600; color:#ccc; margin-bottom:10px;">Advance / Decline Stats</div>
           <div id="breadthStats"></div>
         </div>
+        <div class="panel-desc">
+          <strong>What to watch:</strong>
+          <span class="tag tag-bull">&gt;70% above 200MA</span> Bull market — broad participation.
+          <span class="tag tag-info">50–70%</span> Healthy uptrend.
+          <span class="tag tag-warn">30–50%</span> Neutral / mixed signals.
+          <span class="tag tag-bear">&lt;30%</span> Bear market breadth — most stocks in downtrends.
+          <br><strong>A/D Ratio:</strong> Advancing vs. declining stocks today. A/D &gt; 1.5 = strong buying pressure. &lt; 0.7 = broad selling. Watch for breadth diverging from price (price up, A/D declining) as an early warning.
+        </div>
       </div>
       <div class="panel">
-        <div class="panel-title">Sector % Above 200MA <span class="panel-sub">from screener cache · refreshes with screener</span></div>
+        <div class="panel-title" title="Shows what percentage of stocks in each S&P 500 sector are trading above their 200-day moving average. Sectors with high breadth (green bars) are in strong uptrends. Sectors with low breadth (red bars) are in downtrends or correcting. Compare across sectors to spot rotation — money moving from weak to strong sectors.">Sector % Above 200MA <span class="panel-sub">from screener cache · refreshes with screener</span></div>
         <div id="sectorBreadthBars"><div class="muted" style="font-size:12px;padding:10px;">Loading…</div></div>
+        <div class="panel-desc">
+          <strong>What to watch:</strong> Bars show % of stocks within each sector trading above their 200-day moving average.
+          <span class="tag tag-bull">Green (&gt;70%)</span> sector is in a strong uptrend — favorable for swing longs.
+          <span class="tag tag-warn">Yellow (30–70%)</span> mixed — select stocks only.
+          <span class="tag tag-bear">Red (&lt;30%)</span> sector in downtrend — avoid or short candidates.
+          Sectors improving from low readings signal early rotation opportunities.
+        </div>
       </div>
     </div>
   </div>
@@ -240,7 +305,7 @@
     <!-- Sector cycle reference image + SPDR bar chart -->
     <div class="cycle-grid" style="margin-bottom:16px;">
       <div class="panel" style="padding:12px;">
-        <div class="panel-title" style="margin-bottom:8px;">Sector Cycle Reference</div>
+        <div class="panel-title" style="margin-bottom:8px;" title="The Stacey sector rotation model shows which sectors lead vs. lag during different economic cycle phases. Early recovery: Financials &amp; Consumer Discretionary lead. Expansion: Technology &amp; Industrials. Late cycle: Materials &amp; Energy. Contraction: Utilities, Healthcare &amp; Consumer Staples. Compare with the SPDR performance chart to identify the current market phase and rotate accordingly.">Sector Cycle Reference</div>
         <img class="cycle-img"
           src="https://chartschool.stockcharts.com/~gitbook/image?url=https%3A%2F%2F436553459-files.gitbook.io%2F%7E%2Ffiles%2Fv0%2Fb%2Fgitbook-x-prod.appspot.com%2Fo%2Fspaces%252FERtrZrZOhufFzk6ZQO4B%252Fuploads%252FqFILaNHLDTXbqQIdsNt7%252Fsectorcycle.png%3Falt%3Dmedia%26token%3Db63cf92c-c3bb-46a2-9a12-d0e3a4ebc47f&width=768&dpr=3&quality=100&sign=81a6faa3&sv=2"
           alt="Sector Cycle Chart"
@@ -248,40 +313,54 @@
         <div style="display:none; color:#666; font-size:12px; padding:20px; text-align:center;">Sector cycle image unavailable</div>
       </div>
       <div class="panel">
-        <div class="panel-title">SPDR Sector Performance <span class="panel-sub">in sector cycle order</span></div>
+        <div class="panel-title" title="1-month returns for the 11 SPDR sector ETFs, arranged in sector cycle order. What to look for: Leading sectors (strongest bars) reveal the current cycle phase. Lagging sectors may be bottoming for rotation trades. A broad positive sweep = expansion. Energy &amp; Materials leading = late cycle. Utilities &amp; Healthcare leading = defensive/contraction phase.">SPDR Sector Performance <span class="panel-sub">in sector cycle order</span></div>
         <div class="canvas-wrap" style="height:320px;">
           <canvas id="sectorSpdrChart"></canvas>
+        </div>
+        <div class="panel-desc">
+          <strong>How to read:</strong> Bars are ordered by the economic sector cycle (left = early recovery, right = late cycle/defensive).
+          Leading sectors (tallest green bars) reveal the current market phase.
+          <span class="tag tag-bull">Early cycle</span> Tech, Discretionary, Comm. Services lead.
+          <span class="tag tag-info">Mid cycle</span> Industrials, Materials, Energy accelerate.
+          <span class="tag tag-warn">Late cycle</span> Energy leads, defensive sectors (Staples, Healthcare, Utilities) starting to outperform.
+          <span class="tag tag-bear">Contraction</span> Utilities, Healthcare, Staples dominate — rotate defensive.
+          <br>Hover over bars for 5D / 1M / 3M returns.
         </div>
       </div>
     </div>
 
     <!-- Sector ETF table (full SPDRs) -->
     <div class="panel" style="margin-bottom:16px;">
-      <div class="panel-title">SPDR Sector ETFs — Detailed Returns</div>
+      <div class="panel-title" title="Detailed return table for all 11 SPDR sector ETFs. Click any ticker to view it in the screener. Compare 5D, 1M, and 3M returns to identify momentum and rotation. Strong 1M + weak 5D may signal a pullback in an uptrend — potential entry. Weak 1M + improving 5D may signal early rotation.">SPDR Sector ETFs — Detailed Returns <span class="panel-sub">click ticker to view in screener</span></div>
       <div id="sectorTable"></div>
+      <div class="panel-desc"><strong>Tip:</strong> Rank sectors by 1M return to see leadership. Compare 5D vs 1M: improving 5D in a lagging sector signals early rotation. Click any ticker to open in the screener.</div>
     </div>
 
     <!-- International ETFs -->
     <div class="grid2" style="margin-bottom:16px;">
       <div class="panel">
-        <div class="panel-title">International ETFs</div>
+        <div class="panel-title" title="International ETF returns. Compare vs SPY (S&P 500 benchmark listed first) to gauge relative strength. Strong international outperformance relative to SPY suggests global broadening — often mid/late cycle. VWO (Emerging Markets) and VEA (Developed) are key risk-on/risk-off gauges.">International ETFs <span class="panel-sub">click ticker to view</span></div>
         <div id="intlTable"></div>
+        <div class="panel-desc"><strong>What to watch:</strong> International outperforming SPY = global risk-on. EMs (VWO) leading = late cycle / commodity bull. Developed markets (VEA) leading = rotation away from US growth premium.</div>
       </div>
       <div class="panel">
-        <div class="panel-title">Commodity ETFs</div>
+        <div class="panel-title" title="Commodity ETF returns. GLD (Gold) leads in risk-off / inflation regimes. USO (Crude Oil) and GSG (broad commodities) lead in late-cycle expansions. Strong commodities + weak tech = late cycle / inflationary environment. Watch GLD vs USO divergence for safe-haven vs growth signals.">Commodity ETFs <span class="panel-sub">click ticker to view</span></div>
         <div id="cmdtyTable"></div>
+        <div class="panel-desc"><strong>What to watch:</strong> <span class="tag tag-bull">GLD leading</span> = safe-haven demand / inflation hedge. <span class="tag tag-warn">USO / energy leading</span> = late-cycle inflation. Commodities broadly outperforming = monetary debasement / supply shock.</div>
       </div>
     </div>
 
     <!-- Style ETFs + Sector Indices -->
     <div class="grid2">
       <div class="panel">
-        <div class="panel-title">Style &amp; Size ETFs</div>
+        <div class="panel-title" title="Style and market-cap ETFs. Growth (SPYG, QQQ) outperforms in early/mid cycle when rates are low. Value (SPYV) outperforms in late cycle / rising rate environments. Small caps (IWM) lead in early recovery when credit conditions ease. Large-cap growth vs. small-cap value spread is a key risk appetite gauge.">Style &amp; Size ETFs <span class="panel-sub">click ticker to view</span></div>
         <div id="styleTable"></div>
+        <div class="panel-desc"><strong>Key signals:</strong> <span class="tag tag-bull">IWM leading SPY</span> = risk-on, small cap breadth expanding — bullish. <span class="tag tag-bear">IWM lagging</span> = risk-off, large-cap defensiveness. QQQ vs SPY spread shows growth vs. value preference. Micro-cap (IWC) leading = max risk appetite.</div>
       </div>
       <div class="panel">
-        <div class="panel-title">Sector Indices</div>
+        <div class="panel-title" title="Key sector index performance (not ETFs — these are index values). SOX (semiconductors) is a leading indicator for tech and economic growth. BKX (banks) leads financials and reflects credit conditions. Watch semis and banks for early cycle signals — they often lead the broad market by 3-6 months.">Sector Indices <span class="panel-sub">leading indicators</span></div>
         <div id="indicesTable"></div>
+        <div class="panel-desc"><strong>Key signals:</strong> <span class="tag tag-bull">SOX (semis) leading</span> = tech cycle healthy, early-cycle growth signal. <span class="tag tag-warn">BKX (banks) lagging</span> = credit stress, watch yield curve. XAU (gold miners) vs GLD divergence reveals miner-specific risk vs. metal price. These indices often lead the broad market by weeks.</div>
       </div>
     </div>
   </div>
@@ -316,11 +395,16 @@
 
     <!-- Performance line chart -->
     <div class="panel" style="margin-bottom:16px;">
-      <div class="panel-title">Normalized Performance <span class="panel-sub">% return from period start, SPY in gray</span></div>
+      <div class="panel-title" title="Normalized performance chart: all tickers rebased to 0% at the start of the selected period. This shows relative return — how much better or worse each position performed vs. the start date and vs. SPY. Tickers above the SPY line (gray) are outperforming the benchmark. Look for consistent outperformers and avoid positions that persistently lag SPY.">Normalized Performance <span class="panel-sub">% return from period start · SPY benchmark in gray</span></div>
       <div class="canvas-wrap" style="height:300px;">
         <canvas id="perfChart"></canvas>
       </div>
       <div id="perfLegend" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; font-size:12px;"></div>
+      <div class="panel-desc">
+        <strong>What to watch:</strong> All lines rebased to 0% at the period start. Lines <em>above</em> the gray SPY line are outperforming the benchmark — these are your alpha generators.
+        Lines below SPY are dragging portfolio returns — consider cutting or reducing. Converging lines = correlation risk (positions moving together, no diversification benefit).
+        Use the period buttons to see short-term (7D) momentum vs. longer-term (3M, 1Y) trend quality.
+      </div>
     </div>
 
     <!-- Legend row (between perf chart and the tables below) -->
@@ -339,26 +423,30 @@
     <!-- Annualized Returns: Portfolio left, Watchlist right -->
     <div class="grid2" style="margin-bottom:16px;">
       <div class="panel">
-        <div class="panel-title">💼 Portfolio — Annualized Returns <span class="panel-sub">7D · 1M · 3M · 1Y</span></div>
+        <div class="panel-title" title="Annualized returns for portfolio positions across 4 time periods. Returns are annualized (projected to a full year rate) so you can compare short and long periods on the same scale. A stock up 2% in 1 month annualizes to ~27%. Heat map: green = strong returns, red = losses. Sort order: best 1M return at top.">💼 Portfolio — Annualized Returns <span class="panel-sub">7D · 1M · 3M · 1Y · sorted by 1M</span></div>
         <div id="annTablePort"></div>
+        <div class="panel-desc"><strong>How to use:</strong> All returns annualized for easy period-to-period comparison. Consistent high returns across multiple periods = strong trend. 7D much higher than 1M = short-term momentum spike (monitor for fade). 1Y negative while 1M positive = recovery from a downtrend — watch for continuation.</div>
       </div>
       <div class="panel">
-        <div class="panel-title">★ Watchlist — Annualized Returns <span class="panel-sub">7D · 1M · 3M · 1Y</span></div>
+        <div class="panel-title" title="Annualized returns for watchlist stocks across 4 time periods. Use this to rank and prioritize which watchlist names have the best momentum for potential entry. Heat map: green = strong returns, red = losses.">★ Watchlist — Annualized Returns <span class="panel-sub">7D · 1M · 3M · 1Y · sorted by 1M</span></div>
         <div id="annTableWatch"></div>
+        <div class="panel-desc"><strong>How to use:</strong> Rank watchlist by 1M momentum. Top performers with consistent 3M + 1Y track records are the highest-quality setups. Names improving from bottom (low 3M, higher 1M + 7D) are emerging leaders worth monitoring for entry signals.</div>
       </div>
     </div>
 
     <!-- Correlation Matrix: Portfolio left, Watchlist right -->
     <div class="grid2">
       <div class="panel">
-        <div class="panel-title">💼 Portfolio — Correlation Matrix <span class="panel-sub">r &gt; 0.7 green · r &lt; −0.7 red</span></div>
+        <div class="panel-title" title="Pearson correlation matrix for portfolio holdings. Correlation of 1.0 = perfectly correlated (move together). 0 = uncorrelated (no relationship). -1.0 = inverse (move opposite). High correlation (green, >0.7) = concentrated risk — if one falls, they all fall. Low or negative correlation = diversification benefit. Ideal: mix of low-correlated assets.">💼 Portfolio — Correlation Matrix <span class="panel-sub">r &gt; 0.7 = concentrated risk · r &lt; 0 = diversified</span></div>
         <div id="corrMsgPort" class="muted" style="font-size:12px; padding:8px;">Loading…</div>
         <div class="corr-wrap" id="corrMatrixPort"></div>
+        <div class="panel-desc"><strong>What to watch:</strong> <span class="tag tag-bull">r near 0</span> = true diversification. <span class="tag tag-warn">r &gt; 0.7</span> = high correlation — these positions are not truly diversified, they will move together in a downturn. <span class="tag tag-bear">Most positions &gt; 0.7</span> = concentrated portfolio, single-factor risk. Consider adding uncorrelated assets (bonds, commodities, international).</div>
       </div>
       <div class="panel">
-        <div class="panel-title">★ Watchlist — Correlation Matrix <span class="panel-sub">r &gt; 0.7 green · r &lt; −0.7 red</span></div>
+        <div class="panel-title" title="Pearson correlation matrix for watchlist stocks. Use this to avoid adding highly correlated names (adding two stocks that move together provides no diversification). Prefer adding names with low correlation to your existing portfolio for better risk-adjusted returns.">★ Watchlist — Correlation Matrix <span class="panel-sub">r &gt; 0.7 = correlated · r &lt; 0 = inverse</span></div>
         <div id="corrMsgWatch" class="muted" style="font-size:12px; padding:8px;">Loading…</div>
         <div class="corr-wrap" id="corrMatrixWatch"></div>
+        <div class="panel-desc"><strong>How to use:</strong> Before adding a watchlist name to your portfolio, check its correlation to existing holdings. High correlation to current positions = redundant risk. Low correlation names provide true diversification and can improve Sharpe ratio without sacrificing expected return.</div>
       </div>
     </div>
   </div>
@@ -381,23 +469,68 @@
     <!-- Wyckoff charts grid -->
     <div class="grid2" style="margin-bottom:16px;">
       <div class="panel">
-        <div class="panel-title">SPY Price <span class="panel-sub">vs portfolio period</span></div>
+        <div class="panel-title" title="SPY (S&P 500 ETF) price chart for the selected period. Use this to identify the current market structure: higher highs and higher lows = uptrend. Lower highs and lower lows = downtrend. Sideways range = accumulation or distribution. Compare with the VIX chart to the right for cycle context.">SPY Price <span class="panel-sub">S&P 500 — market structure reference</span></div>
         <div class="lw-chart" id="wyckoffSpyChart"></div>
+        <div class="panel-desc"><strong>What to watch:</strong> Higher highs + higher lows = uptrend (markup phase). Lower highs + lower lows = downtrend (markdown). Sideways range with volume spikes = accumulation (smart money buying) or distribution (smart money selling). Use the period selector above to zoom in on recent structure.</div>
       </div>
       <div class="panel">
-        <div class="panel-title">VIX Trend <span class="panel-sub">fear cycle overlay</span></div>
+        <div class="panel-title" title="VIX overlaid with the market cycle. In Wyckoff terms: VIX spikes at selling climaxes (SC) and secondary tests (ST). VIX falling from peak while price stabilizes = accumulation underway. VIX at lows while price is extended = distribution zone. Use together with SPY price to identify cycle turning points.">VIX Trend <span class="panel-sub">fear cycle — Wyckoff event overlay</span></div>
         <div class="lw-chart" id="wyckoffVixChart"></div>
+        <div class="panel-desc"><strong>Wyckoff events on VIX:</strong> <span class="tag tag-bear">VIX spike</span> = Selling Climax (SC) or Automatic Rally (AR) — potential bottom forming. <span class="tag tag-warn">VIX elevated but falling</span> = Secondary Test (ST) / Spring — accumulation phase. <span class="tag tag-bull">VIX low and stable</span> = Markup — ride positions. <span class="tag tag-warn">VIX rising slowly from lows</span> = Distribution starting — begin tightening stops.</div>
       </div>
     </div>
 
     <!-- Volume signal table from portfolio/watchlist -->
     <div class="panel">
-      <div class="panel-title">Wyckoff Volume Signals <span class="panel-sub">vol_r vs price change — from screener cache</span></div>
+      <div class="panel-title" title="Wyckoff volume analysis for your portfolio and watchlist stocks. Compares price change direction with volume ratio (recent 5-day avg vs 20-day avg). High volume on up days = institutional accumulation. High volume on down days = panic/supply. Low volume pullbacks in an uptrend = healthy — no selling pressure. Low volume on up days = weak rally, potential distribution.">Wyckoff Volume Signals <span class="panel-sub">vol_r = 5D avg vol ÷ 20D avg vol · from screener cache</span></div>
       <div id="wyckoffSignals" class="loading">Loading signals…</div>
+      <div class="panel-desc" style="margin-top:10px;">
+        <strong>Signal guide:</strong>
+        <span class="tag tag-bull">Accumulation Breakout</span> Price up + high volume (vol_r &gt; 1.2) — institutions buying, strong demand. Bullish continuation signal.
+        <span class="tag tag-bear">Panic / Supply</span> Price down + high volume — sellers in control, supply overwhelming demand. Wait for stabilization.
+        <span class="tag tag-warn">Low-Vol Pullback</span> Price down + low volume — healthy correction in an uptrend, no institutional selling. Potential buy-the-dip opportunity.
+        <span class="tag tag-bear">Distribution (Top)</span> Price up + low volume — weak rally, no institutional participation. Risk of reversal — tighten stops.
+      </div>
     </div>
   </div>
 
 </div><!-- end .page -->
+
+<!-- ── Ticker Detail Modal ──────────────────────────────────────────────────── -->
+<div id="tdModal" onclick="if(event.target===this)closeTickerModal()"
+  style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:2000;align-items:center;justify-content:center;padding:20px;">
+  <div style="width:min(96vw,960px);max-height:90vh;background:#111;border:1px solid #252525;border-radius:8px;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,.7);overflow:hidden;">
+
+    <!-- Modal header -->
+    <div style="padding:14px 20px;border-bottom:1px solid #1a1a1a;display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex-shrink:0;">
+      <button onclick="closeTickerModal()" style="background:#1a1a1a;color:#888;padding:4px 10px;border-radius:3px;font-size:12px;border:none;cursor:pointer;flex-shrink:0;">✕ Close</button>
+      <span id="tdTicker" style="font-size:20px;font-weight:700;color:#f0a500;font-family:'JetBrains Mono',monospace;"></span>
+      <span id="tdName" style="font-size:14px;color:#777;"></span>
+      <span id="tdSector" style="font-size:11px;color:#555;padding:2px 8px;background:#1a1a1a;border-radius:10px;"></span>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <span id="tdPrice" style="font-size:17px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#e0e0e0;"></span>
+        <span id="tdChg" style="font-size:13px;font-family:'JetBrains Mono',monospace;"></span>
+        <a id="tdYahoo" href="#" target="_blank" rel="noopener noreferrer"
+          style="background:#1a1a2a;color:#6c8ebf;padding:4px 9px;border-radius:3px;font-size:11px;text-decoration:none;border:1px solid #2a2a3a;font-weight:600;">Yahoo ↗</a>
+        <a id="tdGoogle" href="#" target="_blank" rel="noopener noreferrer"
+          style="background:#1a2a1a;color:#5b9e7a;padding:4px 9px;border-radius:3px;font-size:11px;text-decoration:none;border:1px solid #2a3a2a;font-weight:600;">Google ↗</a>
+      </div>
+    </div>
+
+    <!-- Modal tabs -->
+    <div style="display:flex;border-bottom:1px solid #1a1a1a;padding-left:16px;flex-shrink:0;">
+      <button onclick="switchTdTab('chart')"   id="tdTab-chart"   class="td-tab active-tab">📈 Chart</button>
+      <button onclick="switchTdTab('metrics')" id="tdTab-metrics" class="td-tab">📊 Metrics</button>
+      <button onclick="switchTdTab('signals')" id="tdTab-signals" class="td-tab">🎯 Signals</button>
+    </div>
+
+    <!-- Modal body -->
+    <div id="tdBody" style="flex:1;overflow-y:auto;padding:16px;min-height:200px;">
+      <div class="loading">Loading…</div>
+    </div>
+
+  </div>
+</div>
 
 <script>
 'use strict';
@@ -529,10 +662,12 @@ function etfTableHtml(items) {
     <thead><tr>
       <th>Ticker</th><th>Name</th><th>Price</th><th>5D</th><th>1M</th><th>3M</th>
     </tr></thead>
-    <tbody>${items.map(s => `<tr>
-      <td class="mono" style="font-weight:600;color:#e0e0e0;">${s.ticker}</td>
-      <td style="color:#aaa;">${s.name}</td>
-      <td class="mono">${s.price ?? '—'}</td>
+    <tbody>${items.map(s => `<tr title="Click ticker for full detail view">
+      <td class="mono">
+        <span class="ticker-link" onclick="openTickerDetail('${s.ticker}')" title="View ${s.ticker} detail">${s.ticker}</span>
+      </td>
+      <td style="color:#aaa;">${s.name || '<span class="muted">—</span>'}</td>
+      <td class="mono" style="color:#ccc;">${s.price != null ? s.price.toFixed(2) : '—'}</td>
       <td class="ret-cell">${fmtRet(s.ret_5d)}</td>
       <td class="ret-cell">${fmtRet(s.ret_1m)}</td>
       <td class="ret-cell">${fmtRet(s.ret_3m)}</td>
@@ -688,6 +823,14 @@ async function loadMacro() {
 
     // ── Wyckoff phase ────────────────────────────────────────────────────
     renderWyckoffPhase(vixCurrent, breadth, vixArr);
+
+    // ── Last updated timestamp (local time + timezone abbreviation) ───────
+    const now = new Date();
+    const tzAbbr = Intl.DateTimeFormat('en-US', { timeZoneName: 'short' })
+      .formatToParts(now).find(p => p.type === 'timeZoneName')?.value || '';
+    const ts = now.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit', hour12:true });
+    document.getElementById('lastUpdatedTime').textContent = `${ts} ${tzAbbr}`;
+    document.getElementById('lastUpdatedBadge').style.display = 'inline';
 
   } catch(err) {
     document.getElementById('macroStatRow').innerHTML = `<div class="err">Error: ${err.message}</div>`;
@@ -936,7 +1079,7 @@ function renderPerfChart() {
   legendEl.innerHTML = [...allLines, ...(spyLine ? [spyLine] : [])].map(l =>
     `<span style="display:flex;align-items:center;gap:4px;">
       <span style="width:18px;height:3px;background:${l.color};display:inline-block;border-radius:2px;${l.ticker==='SPY'?'opacity:.6;':''}" ></span>
-      <span style="color:${l.color};font-family:JetBrains Mono,monospace;font-size:12px;font-weight:600;">${l.ticker}</span>
+      <span class="ticker-link" onclick="openTickerDetail('${l.ticker}')" style="color:${l.color};font-family:JetBrains Mono,monospace;font-size:12px;font-weight:600;" title="View ${l.ticker} detail">${l.ticker}</span>
       ${allLines.find(x=>x.ticker===l.ticker) ? `<span style="font-size:11px;color:#666;">${((l.pct.at(-1))>=0?'+':'') + (l.pct.at(-1)??0).toFixed(1)}%</span>` : ''}
     </span>`
   ).join('');
@@ -972,8 +1115,10 @@ function annTableHtml(tickers, emptyMsg) {
       ${PERIODS.map(p => `<th style="padding:6px 8px;text-align:right;color:#777;font-size:11px;">${p.label} Ann%</th>`).join('')}
     </tr></thead>
     <tbody>${rows.map(r => `
-      <tr style="border-bottom:1px solid #141414;">
-        <td style="padding:6px 8px;font-family:JetBrains Mono,monospace;font-weight:600;color:#e0e0e0;">${r.ticker}</td>
+      <tr style="border-bottom:1px solid #141414;" title="Click ticker for full detail view">
+        <td style="padding:6px 8px;">
+          <span class="ticker-link" onclick="openTickerDetail('${r.ticker}')" title="View ${r.ticker} detail">${r.ticker}</span>
+        </td>
         ${r.values.map(v => `<td style="padding:6px 8px;text-align:right;font-family:JetBrains Mono,monospace;font-size:12px;background:${retColor(v)};color:${v == null ? '#555' : Math.abs(v) > 30 ? '#fff' : '#e0e0e0'};">
           ${v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
         </td>`).join('')}
@@ -1013,17 +1158,18 @@ function buildCorrMatrixHtml(tickers, N) {
   );
 
   const cellSz = Math.max(36, Math.min(58, Math.floor(460 / valid.length)));
+  const tickerStyle = `cursor:pointer;color:#f0a500;font-family:JetBrains Mono,monospace;overflow:hidden;text-overflow:ellipsis;flex-shrink:0;`;
   const html = `<div style="display:flex;flex-direction:column;gap:2px;padding:4px;overflow-x:auto;">
     <div style="display:flex;gap:2px;padding-left:${cellSz+4}px;">
-      ${valid.map(t => `<div style="width:${cellSz}px;text-align:center;font-size:10px;color:#888;font-family:JetBrains Mono,monospace;overflow:hidden;text-overflow:ellipsis;flex-shrink:0;">${t}</div>`).join('')}
+      ${valid.map(t => `<div style="width:${cellSz}px;text-align:center;font-size:10px;${tickerStyle}" onclick="openTickerDetail('${t}')" title="View ${t} detail">${t}</div>`).join('')}
     </div>
     ${valid.map((t1, i) => `
       <div style="display:flex;gap:2px;align-items:center;">
-        <div style="width:${cellSz}px;text-align:right;font-size:11px;color:#bbb;font-family:JetBrains Mono,monospace;padding-right:4px;flex-shrink:0;">${t1}</div>
+        <div style="width:${cellSz}px;text-align:right;font-size:11px;padding-right:4px;${tickerStyle}" onclick="openTickerDetail('${t1}')" title="View ${t1} detail">${t1}</div>
         ${valid.map((t2, j) => {
           const v = matrix[i][j];
           const bg = corrColor(v), fg = corrTextColor(v);
-          return `<div style="width:${cellSz}px;height:30px;display:flex;align-items:center;justify-content:center;background:${bg};color:${fg};font-size:10px;font-family:JetBrains Mono,monospace;border-radius:2px;flex-shrink:0;" title="${t1}/${t2}: ${v.toFixed(3)}">${v.toFixed(2)}</div>`;
+          return `<div style="width:${cellSz}px;height:30px;display:flex;align-items:center;justify-content:center;background:${bg};color:${fg};font-size:10px;font-family:JetBrains Mono,monospace;border-radius:2px;flex-shrink:0;" title="${t1}/${t2}: r=${v.toFixed(3)}">${v.toFixed(2)}</div>`;
         }).join('')}
       </div>`).join('')}
   </div>`;
@@ -1082,8 +1228,10 @@ async function renderWyckoffSignals(tickers) {
         <th style="padding:6px 8px;text-align:right;color:#666;font-size:11px;">RSI</th>
         <th style="padding:6px 8px;text-align:left;color:#666;font-size:11px;">Wyckoff Signal</th>
       </tr></thead>
-      <tbody>${classified.map(s => `<tr style="border-bottom:1px solid #141414;">
-        <td style="padding:6px 8px;font-family:JetBrains Mono,monospace;font-weight:600;color:#e0e0e0;">${s.ticker}</td>
+      <tbody>${classified.map(s => `<tr style="border-bottom:1px solid #141414;" title="Click ticker for full detail">
+        <td style="padding:6px 8px;">
+          <span class="ticker-link" onclick="openTickerDetail('${s.ticker}')" title="View ${s.ticker} detail">${s.ticker}</span>
+        </td>
         <td style="padding:6px 8px;text-align:right;font-family:JetBrains Mono,monospace;">${s.price?.toFixed(2) ?? '—'}</td>
         <td style="padding:6px 8px;text-align:right;font-family:JetBrains Mono,monospace;" class="${(s.chg_pct??0)>=0?'up':'down'}">${s.chg_pct != null ? `${s.chg_pct >= 0 ? '+' : ''}${s.chg_pct.toFixed(2)}%` : '—'}</td>
         <td style="padding:6px 8px;text-align:right;font-family:JetBrains Mono,monospace;color:${(s.vol_r??1)>1.15?'#f0a500':(s.vol_r??1)<0.85?'#7eb8f5':'#999'};">${s.vol_r?.toFixed(2) ?? '—'}</td>
@@ -1119,6 +1267,273 @@ function buildWyckoffCharts() {
   }
 
   setTimeout(() => applyPeriodToAll(globalPeriodDays), 150);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TICKER DETAIL MODAL  (openTickerDetail / closeTickerModal / switchTdTab)
+// ─────────────────────────────────────────────────────────────────────────────
+let _tdStock = null;
+let _tdHistory = null;
+let _tdTab = 'chart';
+let _tdChart = null;   // LightweightCharts instance inside the modal
+
+function closeTickerModal() {
+  document.getElementById('tdModal').style.display = 'none';
+  if (_tdChart) { try { _tdChart.remove(); } catch(e){} _tdChart = null; }
+  _tdStock = null; _tdHistory = null;
+}
+
+function switchTdTab(tab) {
+  _tdTab = tab;
+  document.querySelectorAll('.td-tab').forEach(b => b.classList.remove('active-tab'));
+  const btn = document.getElementById(`tdTab-${tab}`);
+  if (btn) btn.classList.add('active-tab');
+  _renderTdBody();
+}
+
+async function openTickerDetail(ticker) {
+  const modal = document.getElementById('tdModal');
+  modal.style.display = 'flex';
+  document.getElementById('tdBody').innerHTML = `<div class="loading">Loading <b style="color:#f0a500">${ticker}</b>…</div>`;
+  document.getElementById('tdTicker').textContent = ticker;
+  ['tdName','tdSector','tdPrice','tdChg'].forEach(id => document.getElementById(id).textContent = '');
+  document.getElementById('tdYahoo').href  = `https://finance.yahoo.com/quote/${ticker}`;
+  document.getElementById('tdGoogle').href = `https://www.google.com/finance/quote/${ticker}`;
+
+  _tdStock = null; _tdHistory = null; _tdTab = 'chart';
+  document.querySelectorAll('.td-tab').forEach(b => b.classList.remove('active-tab'));
+  document.getElementById('tdTab-chart')?.classList.add('active-tab');
+  if (_tdChart) { try { _tdChart.remove(); } catch(e){} _tdChart = null; }
+
+  try {
+    const [stock, hist] = await Promise.all([
+      apiFetch(`/api/stocks/${ticker}`),
+      apiFetch(`/api/stocks/${ticker}/history`).catch(() => ({ bars: [], indicators: {} })),
+    ]);
+    _tdStock = stock;
+    _tdHistory = hist.bars ?? [];
+    _tdIndicators = hist.indicators ?? {};
+
+    document.getElementById('tdTicker').textContent = ticker;
+    document.getElementById('tdName').textContent   = stock.name || '';
+    document.getElementById('tdSector').textContent = stock.sector && stock.sector !== 'Unknown' ? stock.sector : '';
+    if (stock.price != null) {
+      document.getElementById('tdPrice').textContent = '$' + stock.price.toFixed(2);
+    }
+    if (stock.chg_pct != null) {
+      const el = document.getElementById('tdChg');
+      el.textContent = (stock.chg_pct >= 0 ? '+' : '') + stock.chg_pct.toFixed(2) + '%';
+      el.style.color = stock.chg_pct >= 0 ? '#26a65b' : '#e05252';
+    }
+    _renderTdBody();
+  } catch(e) {
+    document.getElementById('tdBody').innerHTML = `<div class="err">Failed to load ${ticker}: ${e.message}</div>`;
+  }
+}
+
+let _tdIndicators = {};
+
+function _renderTdBody() {
+  if (!_tdStock) return;
+  const s = _tdStock;
+  const el = document.getElementById('tdBody');
+
+  // ── Chart tab ─────────────────────────────────────────────────────────────
+  if (_tdTab === 'chart') {
+    el.innerHTML = `
+      <div id="tdPriceChart" style="width:100%;height:280px;"></div>
+      <div id="tdRsiWrap" style="margin-top:6px;">
+        <div style="font-size:10px;color:#555;margin-bottom:2px;">RSI (14)</div>
+        <canvas id="tdRsiCanvas" height="60" style="width:100%;display:block;"></canvas>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:14px;" id="tdMetricGrid"></div>`;
+
+    setTimeout(() => {
+      // Price / candle chart
+      const chartEl = document.getElementById('tdPriceChart');
+      if (chartEl && _tdHistory?.length) {
+        if (_tdChart) { try { _tdChart.remove(); } catch(e){} }
+        _tdChart = LightweightCharts.createChart(chartEl, {
+          width: chartEl.clientWidth, height: 280,
+          layout: { background: { color: '#111' }, textColor: '#999' },
+          grid: { vertLines: { color: '#1a1a1a' }, horzLines: { color: '#1a1a1a' } },
+          rightPriceScale: { borderColor: '#1e1e1e' },
+          timeScale: { borderColor: '#1e1e1e' },
+          crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        });
+        const candle = _tdChart.addCandlestickSeries({
+          upColor: '#26a65b', downColor: '#e05252',
+          borderUpColor: '#26a65b', borderDownColor: '#e05252',
+          wickUpColor: '#26a65b', wickDownColor: '#e05252',
+        });
+        candle.setData(_tdHistory.map(b => ({ time: b.date, open: b.open, high: b.high, low: b.low, close: b.close })));
+
+        // MA50 + MA200 overlays
+        const ma50vals = _tdIndicators?.ma50;
+        const ma200vals = _tdIndicators?.ma200;
+        if (ma50vals?.length) {
+          const ma50s = _tdChart.addLineSeries({ color: '#7eb8f5', lineWidth: 1, title: 'MA50' });
+          ma50s.setData(_tdHistory.map((b,i) => ({ time: b.date, value: ma50vals[i] })).filter(d => d.value != null));
+        }
+        if (ma200vals?.length) {
+          const ma200s = _tdChart.addLineSeries({ color: '#f0a500', lineWidth: 1, title: 'MA200' });
+          ma200s.setData(_tdHistory.map((b,i) => ({ time: b.date, value: ma200vals[i] })).filter(d => d.value != null));
+        }
+        _tdChart.timeScale().fitContent();
+        new ResizeObserver(() => _tdChart?.applyOptions({ width: chartEl.clientWidth })).observe(chartEl);
+      }
+
+      // RSI mini chart (canvas)
+      const rsiCanvas = document.getElementById('tdRsiCanvas');
+      if (rsiCanvas && _tdIndicators?.rsi?.length) {
+        const rsi = _tdIndicators.rsi.filter(v => v != null);
+        if (rsi.length > 1) {
+          rsiCanvas.width = rsiCanvas.parentElement.clientWidth;
+          const ctx = rsiCanvas.getContext('2d');
+          const W = rsiCanvas.width, H = 60;
+          ctx.clearRect(0,0,W,H);
+          // zones
+          ctx.fillStyle='rgba(224,82,82,.07)'; ctx.fillRect(0, 0, W, H * (30/100));  // top = 100, RSI 70+ = top 30%
+          ctx.fillStyle='rgba(38,166,91,.07)'; ctx.fillRect(0, H * (30/100), W, H * (40/100));
+          // line
+          ctx.beginPath();
+          ctx.strokeStyle = '#f0a500'; ctx.lineWidth = 1.5;
+          rsi.forEach((v,i) => {
+            const x = (i / (rsi.length-1)) * W;
+            const y = H - (v / 100) * H;
+            i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+          });
+          ctx.stroke();
+          // levels
+          [30, 70].forEach(lvl => {
+            const y = H - (lvl / 100) * H;
+            ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 1; ctx.setLineDash([3,3]);
+            ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+            ctx.setLineDash([]);
+          });
+        }
+      }
+
+      // Quick metrics
+      const qm = document.getElementById('tdMetricGrid');
+      if (qm) {
+        const fmtPct = (v, plus=true) => v != null ? (plus && v >= 0 ? '+' : '') + v.toFixed(1) + '%' : '—';
+        const metrics = [
+          { lbl: 'RSI(14)', val: s.rsi?.toFixed(1) ?? '—', col: s.rsi > 70 ? '#e05252' : s.rsi < 30 ? '#26a65b' : '#ccc', tip: 'Relative Strength Index. >70 overbought, <30 oversold, 40-65 ideal swing zone.' },
+          { lbl: 'MACD', val: s.macd_sig ?? '—', col: s.macd_sig?.includes('Bullish') ? '#26a65b' : s.macd_sig?.includes('Bearish') ? '#e05252' : '#888', tip: 'MACD signal crossover. Bullish = upward momentum, Bearish = downward.' },
+          { lbl: 'vs MA50', val: fmtPct(s.vs_ma50), col: (s.vs_ma50 ?? 0) > 0 ? '#26a65b' : '#e05252', tip: '% above/below 50-day moving average. Above = near-term bullish.' },
+          { lbl: 'vs MA200', val: fmtPct(s.vs_ma200), col: (s.vs_ma200 ?? 0) > 0 ? '#26a65b' : '#e05252', tip: '% above/below 200-day MA. Above = in a long-term uptrend.' },
+          { lbl: '52W Position', val: s.p52w != null ? s.p52w.toFixed(0) + '%' : '—', col: '#ccc', tip: '0% = at 52-week low, 100% = at 52-week high. >70% = near highs (strength).' },
+          { lbl: 'Vol Ratio', val: s.vol_r?.toFixed(2) ?? '—', col: (s.vol_r ?? 1) > 1.2 ? '#f0a500' : '#ccc', tip: 'Volume ratio: 5-day avg ÷ 20-day avg. >1.2 = elevated volume (institutional interest).' },
+          { lbl: 'Sharpe', val: s.sharpe?.toFixed(2) ?? '—', col: (s.sharpe ?? 0) > 1 ? '#26a65b' : (s.sharpe ?? 0) < 0 ? '#e05252' : '#ccc', tip: 'Sharpe Ratio. >1 = good risk-adjusted return, >2 = excellent.' },
+          { lbl: 'Sortino', val: s.sortino?.toFixed(2) ?? '—', col: (s.sortino ?? 0) > 1 ? '#26a65b' : '#ccc', tip: 'Like Sharpe but only penalizes downside volatility. Prefer >1.' },
+          { lbl: 'Beta', val: s.beta?.toFixed(2) ?? '—', col: '#ccc', tip: 'Volatility vs S&P 500. 1.0 = market, >1 = more volatile, <1 = defensive.' },
+          { lbl: 'P/E', val: s.pe?.toFixed(1) ?? '—', col: '#ccc', tip: 'Price-to-Earnings. <15 = value, 15-25 = fair, >25 = growth premium.' },
+          { lbl: 'Trend', val: s.gc ? '🟢 Golden X' : s.dc ? '🔴 Death X' : '—', col: s.gc ? '#26a65b' : s.dc ? '#e05252' : '#777', tip: 'Golden Cross = MA50 > MA200 (bullish). Death Cross = MA50 < MA200 (bearish).' },
+          { lbl: 'Mkt Cap', val: s.mkt_cap ? (s.mkt_cap >= 1000 ? '$' + (s.mkt_cap/1000).toFixed(1) + 'T' : s.mkt_cap >= 1 ? '$' + s.mkt_cap.toFixed(1) + 'B' : '$' + (s.mkt_cap*1000).toFixed(0) + 'M') : '—', col: '#ccc', tip: 'Market capitalization.' },
+        ];
+        qm.innerHTML = metrics.map(m => `
+          <div title="${m.tip}" style="background:#141414;border-radius:4px;padding:10px 12px;cursor:help;">
+            <div style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${m.lbl}</div>
+            <div style="font-size:14px;font-weight:600;font-family:'JetBrains Mono',monospace;color:${m.col};">${m.val}</div>
+          </div>`).join('');
+      }
+    }, 50);
+
+  // ── Metrics tab ───────────────────────────────────────────────────────────
+  } else if (_tdTab === 'metrics') {
+    const pct = (v) => v != null ? (v >= 0 ? '+' : '') + v.toFixed(1) + '%' : null;
+    const cap = (v) => v ? (v >= 1000 ? '$' + (v/1000).toFixed(1) + 'T' : v >= 1 ? '$' + v.toFixed(1) + 'B' : '$' + (v*1000).toFixed(0) + 'M') : null;
+    const rows = [
+      ['Price', s.price != null ? '$' + s.price.toFixed(2) : null],
+      ['Change', s.chg_pct != null ? (s.chg_pct >= 0 ? '+' : '') + s.chg_pct.toFixed(2) + '%' : null],
+      ['Market Cap', cap(s.mkt_cap)],
+      ['Sector', s.sector && s.sector !== 'Unknown' ? s.sector : null],
+      ['Industry', s.industry || null],
+      ['P/E', s.pe?.toFixed(1)],
+      ['Forward P/E', s.fwd_pe?.toFixed(1)],
+      ['EPS Growth', pct(s.eps_grw)],
+      ['Revenue Growth', pct(s.rev_grw)],
+      ['Profit Margin', s.pm != null ? s.pm.toFixed(1) + '%' : null],
+      ['Debt / Equity', s.debt_eq?.toFixed(2)],
+      ['Free Cash Flow', s.fcf_pos != null ? (s.fcf_pos ? '✓ Positive' : '✗ Negative') : null],
+      ['Beta', s.beta?.toFixed(2)],
+      ['Dividend Yield', s.div != null ? s.div.toFixed(2) + '%' : null],
+      ['RSI(14)', s.rsi?.toFixed(1)],
+      ['MACD Signal', s.macd_sig],
+      ['vs MA50', pct(s.vs_ma50)],
+      ['vs MA200', pct(s.vs_ma200)],
+      ['52W Position', s.p52w != null ? s.p52w.toFixed(0) + '%' : null],
+      ['Volume Ratio', s.vol_r?.toFixed(2)],
+      ['Annualized Return', pct(s.ann_ret)],
+      ['Sharpe Ratio', s.sharpe?.toFixed(2)],
+      ['Sortino Ratio', s.sortino?.toFixed(2)],
+      ['Calmar Ratio', s.calmar?.toFixed(2)],
+      ['Information Ratio', s.info_ratio?.toFixed(2)],
+      ['Treynor Ratio', s.treynor?.toFixed(2)],
+      ['Max Drawdown 1M', s.max_dd_1m != null ? '-' + s.max_dd_1m.toFixed(1) + '%' : null],
+      ['Vol 1M', s.vol_1m != null ? s.vol_1m.toFixed(1) + '%' : null],
+    ].filter(([, v]) => v != null);
+
+    el.innerHTML = `
+      ${s.description ? `<div style="background:#141414;border-radius:4px;padding:12px;margin-bottom:14px;font-size:12px;color:#888;line-height:1.65;max-height:80px;overflow:hidden;">${s.description.substring(0,350)}${s.description.length>350?'…':''}</div>` : ''}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 32px;">
+        ${rows.map(([k,v]) => `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #1a1a1a;font-size:12px;">
+          <span style="color:#666;">${k}</span>
+          <span style="font-family:'JetBrains Mono',monospace;color:#c8c8c8;">${v}</span>
+        </div>`).join('')}
+      </div>`;
+
+  // ── Signals tab ───────────────────────────────────────────────────────────
+  } else if (_tdTab === 'signals') {
+    const cats = [
+      { cat: 'Fundamental', col: '#f0a500', tip: 'Valuation and balance sheet quality signals.', items: [
+        { lbl: 'P/E < 20', pass: s.pe != null && s.pe < 20, tip: 'Reasonably valued — P/E below 20' },
+        { lbl: 'Margin > 20%', pass: (s.pm || 0) > 20, tip: 'High profitability — net margin above 20%' },
+        { lbl: 'FCF Positive', pass: !!s.fcf_pos, tip: 'Generates free cash flow — cash-flow positive business' },
+        { lbl: 'D/E < 0.5', pass: s.debt_eq != null && s.debt_eq < 0.5, tip: 'Conservative balance sheet — debt-to-equity below 0.5' },
+        { lbl: 'EPS Growth > 20%', pass: (s.eps_grw || 0) > 20, tip: 'Strong earnings growth above 20% YoY' },
+      ]},
+      { cat: 'Technical', col: '#7eb8f5', tip: 'Price trend and momentum signals.', items: [
+        { lbl: 'RSI 40–65', pass: s.rsi >= 40 && s.rsi <= 65, tip: 'RSI in healthy swing zone — not overbought or oversold' },
+        { lbl: 'Above MA200', pass: (s.vs_ma200 || 0) > 0, tip: 'Price above 200-day moving average — long-term uptrend' },
+        { lbl: 'Above MA50', pass: (s.vs_ma50 || 0) > 0, tip: 'Price above 50-day moving average — near-term uptrend' },
+        { lbl: 'Golden Cross', pass: !!s.gc, tip: 'MA50 recently crossed above MA200 (bullish trend signal)' },
+        { lbl: 'No Death Cross', pass: !s.dc, tip: 'MA50 has not crossed below MA200 (no bearish trend signal)' },
+      ]},
+      { cat: 'Momentum', col: '#26a65b', tip: 'Volume, relative strength, and risk-adjusted return signals.', items: [
+        { lbl: 'Up Today', pass: (s.chg_pct || 0) > 0, tip: 'Positive price session today' },
+        { lbl: 'Vol Ratio > 1.2x', pass: (s.vol_r || 0) > 1.2, tip: 'Above-average volume — elevated institutional interest' },
+        { lbl: '52W Pos > 70%', pass: (s.p52w || 0) > 70, tip: 'Trading near 52-week highs — price strength' },
+        { lbl: 'Sharpe > 1', pass: (s.sharpe || 0) > 1, tip: 'Strong risk-adjusted return (Sharpe Ratio above 1)' },
+        { lbl: 'Beats SPY (InfoR)', pass: (s.info_ratio || 0) > 0, tip: 'Information Ratio positive — outperforming the SPY benchmark' },
+      ]},
+    ];
+    const totalPass = cats.flatMap(c => c.items).filter(i => i.pass).length;
+    const totalItems = cats.flatMap(c => c.items).length;
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px;padding:10px 14px;background:#141414;border-radius:4px;">
+        <div style="font-size:24px;font-weight:700;font-family:'JetBrains Mono',monospace;color:${totalPass >= 10 ? '#26a65b' : totalPass >= 7 ? '#f0a500' : '#e05252'};">${totalPass}/${totalItems}</div>
+        <div>
+          <div style="font-size:12px;color:#ccc;font-weight:600;">Signal Score</div>
+          <div style="font-size:11px;color:#555;">${totalPass >= 10 ? 'Strong setup' : totalPass >= 7 ? 'Moderate setup' : totalPass >= 4 ? 'Mixed signals' : 'Weak setup — exercise caution'}</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
+        ${cats.map(cat => `
+          <div style="background:#141414;border-radius:4px;padding:12px;">
+            <div title="${cat.tip}" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;cursor:help;">
+              <span style="font-size:12px;font-weight:600;color:#aaa;">${cat.cat}</span>
+              <span style="font-size:11px;color:${cat.col};font-family:'JetBrains Mono',monospace;">${cat.items.filter(i=>i.pass).length}/${cat.items.length}</span>
+            </div>
+            ${cat.items.map(item => `
+              <div title="${item.tip}" style="display:flex;align-items:center;gap:7px;padding:3px 0;cursor:help;">
+                <span style="font-size:14px;color:${item.pass ? cat.col : '#252525'};">●</span>
+                <span style="font-size:11px;color:${item.pass ? '#aaa' : '#3a3a3a'};">${item.lbl}</span>
+              </div>`).join('')}
+          </div>`).join('')}
+      </div>`;
+  }
 }
 
 // ── Main init ─────────────────────────────────────────────────────────────────

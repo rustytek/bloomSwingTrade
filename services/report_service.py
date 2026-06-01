@@ -337,8 +337,8 @@ async def _gather_context(user_id: int, db: Session) -> dict:
 # ── Ollama call ───────────────────────────────────────────────────────────────
 
 async def _call_ollama(system: str, user_msg: str, model: str | None = None) -> str:
-    url = settings.ollama_url.rstrip("/") + "/api/chat"
-    model = model or settings.report_model or settings.ollama_model
+    provider = settings.ai_provider.lower()
+    model = model or settings.report_model or settings.ai_model or settings.ollama_model
     payload = {
         "model": model,
         "stream": False,
@@ -347,6 +347,18 @@ async def _call_ollama(system: str, user_msg: str, model: str | None = None) -> 
             {"role": "user", "content": user_msg},
         ],
     }
+    if provider == "litellm":
+        url = (settings.litellm_url or settings.ollama_url).rstrip("/") + "/v1/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        api_key = settings.litellm_api_key or settings.ai_api_key
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+
+    url = settings.ollama_url.rstrip("/") + "/api/chat"
     async with httpx.AsyncClient(timeout=300.0) as client:
         resp = await client.post(url, json=payload)
         resp.raise_for_status()

@@ -30,6 +30,8 @@ if os.path.exists(OPTS):
     os.environ["OLLAMA_URL"]   = str(opts.get("ollama_url",   "http://192.168.10.21:11434"))
     os.environ["OLLAMA_MODEL"] = str(opts.get("ollama_model", "qwen35-moe:latest"))
     os.environ["REPORT_MODEL"] = str(opts.get("report_model", "deepseek-r1:8b"))
+    os.environ["LITELLM_URL"]  = str(opts.get("litellm_url",  ""))
+    os.environ["LITELLM_API_KEY"] = str(opts.get("litellm_api_key", ""))
     os.environ["HOST"]         = "0.0.0.0"
     os.environ["PORT"]         = "8443"
 

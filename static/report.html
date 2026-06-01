@@ -346,7 +346,7 @@
         });
       }
     } catch (e) {
-      console.warn('Could not load Ollama models:', e);
+      console.warn('Could not load local LLM models:', e);
       [reportModelSelect, chatModelSelect].forEach(s => {
         s.innerHTML = '<option value="">Ollama unavailable</option>';
       });

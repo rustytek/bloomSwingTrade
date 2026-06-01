@@ -27,6 +27,8 @@
     "ai_api_key": "",
     "ai_model": "",
     "fred_api_key": "",
+    "litellm_url": "",
+    "litellm_api_key": "",
     "ollama_url": "http://192.168.10.21:11434",
     "ollama_model": "qwen35-moe:latest",
     "report_model": "deepseek-r1:8b"
@@ -38,10 +40,12 @@
     "use_ha_ssl": "bool",
     "certfile": "str",
     "keyfile": "str",
-    "ai_provider": "list(none|anthropic|openai|ollama)",
+    "ai_provider": "list(none|anthropic|openai|ollama|litellm)",
     "ai_api_key": "str",
     "ai_model": "str",
     "fred_api_key": "str",
+    "litellm_url": "str",
+    "litellm_api_key": "str",
     "ollama_url": "str",
     "ollama_model": "str",
     "report_model": "str"

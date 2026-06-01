@@ -12,6 +12,55 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 settings = get_settings()
 
 
+def llm_base_url() -> str:
+    if settings.ai_provider.lower() == "litellm":
+        return (settings.litellm_url or settings.ollama_url).rstrip("/")
+    return settings.ollama_url.rstrip("/")
+
+
+def llm_headers() -> dict:
+    if settings.ai_provider.lower() != "litellm":
+        return {"Content-Type": "application/json"}
+    api_key = settings.litellm_api_key or settings.ai_api_key
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+async def call_chat_model(system: str, user_msg: str, model: str | None = None, timeout: float = 120.0) -> str:
+    import httpx
+
+    provider = settings.ai_provider.lower()
+    model_name = model or settings.ai_model or settings.ollama_model
+    if provider == "litellm":
+        payload = {
+            "model": model_name,
+            "stream": False,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_msg},
+            ],
+        }
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(f"{llm_base_url()}/v1/chat/completions", json=payload, headers=llm_headers())
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+
+    payload = {
+        "model": model or settings.ollama_model,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_msg},
+        ],
+    }
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(f"{settings.ollama_url.rstrip('/')}/api/chat", json=payload)
+        resp.raise_for_status()
+        return resp.json()["message"]["content"]
+
+
 class ChatRequest(BaseModel):
     question: str
 
@@ -32,7 +81,8 @@ def ai_status(user: User = Depends(get_current_user)):
     return {
         "configured": provider != "none",
         "provider": provider,
-        "model": settings.ai_model or "default",
+        "model": settings.ai_model or settings.ollama_model or "default",
+        "base_url": llm_base_url() if provider in ("litellm", "ollama") else None,
     }
 
 
@@ -101,28 +151,35 @@ async def sector_summary(
 
 @router.get("/ollama/models")
 async def ollama_models(user: User = Depends(get_current_user)):
-    """Return all models currently loaded on the Ollama server."""
+    """Return available local models from Ollama or LiteLLM."""
     import httpx
-    url = settings.ollama_url.rstrip("/") + "/api/tags"
+    provider = settings.ai_provider.lower()
+    url = f"{llm_base_url()}/v1/models" if provider == "litellm" else settings.ollama_url.rstrip("/") + "/api/tags"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url)
+            resp = await client.get(url, headers=llm_headers())
             resp.raise_for_status()
             data = resp.json()
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Cannot reach Ollama: {e}")
+        raise HTTPException(status_code=503, detail=f"Cannot reach local LLM server: {e}")
 
     models = []
-    for m in data.get("models", []):
-        size_bytes = m.get("size", 0)
-        models.append({
-            "name": m["name"],
-            "size_gb": round(size_bytes / 1e9, 1) if size_bytes else None,
-            "modified_at": m.get("modified_at"),
-        })
+    if provider == "litellm":
+        for m in data.get("data", []):
+            name = m.get("id") or m.get("name")
+            if name:
+                models.append({"name": name, "size_gb": None, "modified_at": None})
+    else:
+        for m in data.get("models", []):
+            size_bytes = m.get("size", 0)
+            models.append({
+                "name": m["name"],
+                "size_gb": round(size_bytes / 1e9, 1) if size_bytes else None,
+                "modified_at": m.get("modified_at"),
+            })
     # Sort: put embedding models last, everything else alphabetical
     models.sort(key=lambda m: (1 if "embed" in m["name"] else 0, m["name"]))
-    return {"models": models}
+    return {"models": models, "provider": provider, "base_url": llm_base_url()}
 
 
 @router.post("/daily-report")
@@ -196,7 +253,7 @@ async def market_chat(
     General market/report chat. Loads the user's live portfolio + watchlist
     as context, then calls Ollama with the question (and optional report markdown).
     """
-    import json, httpx
+    import json
     from database.models import PortfolioPosition, WatchlistItem
     from services import market_data
 
@@ -253,23 +310,10 @@ async def market_chat(
 
     user_msg = "\n".join(context_parts) + f"\n\n=== QUESTION ===\n{req.question}"
 
-    payload = {
-        "model": req.model or settings.ollama_model,
-        "stream": False,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_msg},
-        ],
-    }
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                settings.ollama_url.rstrip("/") + "/api/chat", json=payload
-            )
-            resp.raise_for_status()
-            answer = resp.json()["message"]["content"]
+        answer = await call_chat_model(system, user_msg, model=req.model, timeout=120.0)
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Ollama error: {e}")
+        raise HTTPException(status_code=503, detail=f"LLM error: {e}")
 
     return {"answer": answer}
 

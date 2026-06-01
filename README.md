@@ -50,9 +50,11 @@ Key pages:
 | `ADMIN_USER` | `admin` | Initial admin username (first run only) |
 | `ADMIN_PASS` | `changeme` | Initial admin password (first run only) |
 | `PORT` | `8443` | HTTPS port |
-| `AI_PROVIDER` | `none` | `none` \| `anthropic` \| `openai` |
+| `AI_PROVIDER` | `none` | `none` \| `anthropic` \| `openai` \| `ollama` \| `litellm` |
 | `AI_API_KEY` | *(empty)* | API key for your AI provider |
-| `AI_MODEL` | *(default)* | Override model (e.g. `claude-opus-4-6`) |
+| `AI_MODEL` | *(default)* | Default chat/analysis model; for LiteLLM use the LiteLLM model id, e.g. `ollama/qwen3.5:9-mlx` |
+| `LITELLM_URL` | *(empty)* | LiteLLM OpenAI-compatible base URL; falls back to `OLLAMA_URL` if blank |
+| `LITELLM_API_KEY` | *(empty)* | Optional LiteLLM proxy key; falls back to `AI_API_KEY` if blank |
 | `FRED_API_KEY` | *(empty)* | Optional FRED key for Macro & Liquidity charts: M2, Fed Funds, 2yr/10yr yields |
 | `QUOTE_CACHE_TTL` | `900` | Quote cache lifetime in seconds (15 min) |
 | `HISTORY_CACHE_TTL` | `3600` | History cache lifetime in seconds (1 hr) |
@@ -60,6 +62,19 @@ Key pages:
 ---
 
 ## Enabling AI Analysis
+
+### LiteLLM
+
+LiteLLM is the recommended local path when it proxies to Ollama or other local models.
+
+```env
+AI_PROVIDER=litellm
+LITELLM_URL=http://192.168.0.21:4000
+AI_MODEL=ollama/qwen3.5:9-mlx
+REPORT_MODEL=ollama/qwen3.5:9-mlx
+```
+
+If your LiteLLM proxy requires a key, set `LITELLM_API_KEY` or reuse `AI_API_KEY`.
 
 ### Anthropic Claude
 

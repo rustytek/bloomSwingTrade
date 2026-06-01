@@ -3,9 +3,9 @@ AI Service abstraction layer.
 
 This module provides an abstract base class and a mock implementation.
 To add a real AI provider:
-  1. Create a new class inheriting from AIService (e.g. AnthropicAIService)
+  1. Create a new class inheriting from AIService (e.g. LiteLLMAIService)
   2. Implement all abstract methods
-  3. Set AI_PROVIDER=anthropic (or openai) in your .env file
+  3. Set AI_PROVIDER=litellm in your .env file
 
 The rest of the application always calls get_ai_service() to get the current
 implementation, so switching providers requires zero changes elsewhere.
@@ -20,6 +20,10 @@ import httpx
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+def _strip_json_fences(raw: str) -> str:
+    return raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
 
 
 # ── Abstract Interface ─────────────────────────────────────────────────────
@@ -116,7 +120,7 @@ class MockAIService(AIService):
         return {
             "summary": (
                 f"Swing trading analysis for {ticker} requires a configured AI provider. "
-                "Set AI_PROVIDER=ollama (local), anthropic, or openai and the corresponding "
+                "Set AI_PROVIDER=litellm (local proxy), ollama, anthropic, or openai and the corresponding "
                 "API key in your .env to enable real AI-powered swing trading strategy analysis."
             ),
             "sentiment": "neutral",
@@ -145,8 +149,8 @@ class MockAIService(AIService):
 
     async def chat(self, ticker: str, question: str, context: dict) -> str:
         return (
-            f"AI chat is not configured. To enable it, set `AI_PROVIDER=anthropic` "
-            f"(or `openai`) and `AI_API_KEY` in your `.env` file, then restart the container."
+            f"AI chat is not configured. To enable it, set `AI_PROVIDER=litellm`, "
+            f"`LITELLM_URL`, and the model names in your `.env` file, then restart the container."
         )
 
     async def summarize_sector(self, sector: str, stocks: list[dict]) -> str:
@@ -200,7 +204,7 @@ class OllamaAIService(AIService):
         try:
             raw = await self._chat(system, user)
             # Strip any markdown code fences the model may add
-            raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            raw = _strip_json_fences(raw)
             return json.loads(raw)
         except Exception as e:
             logger.error(f"Ollama analyze_stock failed for {ticker}: {e}")
@@ -221,7 +225,7 @@ class OllamaAIService(AIService):
         user = f"Generate signals for {ticker}:\n{json.dumps(technicals, default=str)}"
         try:
             raw = await self._chat(system, user)
-            raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            raw = _strip_json_fences(raw)
             return json.loads(raw)
         except Exception as e:
             logger.error(f"Ollama generate_signals failed for {ticker}: {e}")
@@ -252,6 +256,100 @@ class OllamaAIService(AIService):
         except Exception as e:
             logger.error(f"Ollama summarize_sector failed for {sector}: {e}")
             return f"Ollama sector summary unavailable: {e}"
+
+
+# â”€â”€ LiteLLM Implementation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+class LiteLLMAIService(AIService):
+    """
+    LiteLLM OpenAI-compatible proxy service.
+    Use this when LiteLLM routes requests to Ollama or other local models.
+    Set AI_PROVIDER=litellm, LITELLM_URL, and model names in config.
+    """
+
+    def __init__(self):
+        self.base_url = (settings.litellm_url or settings.ollama_url).rstrip("/")
+        self.model = settings.ai_model or settings.ollama_model
+        self.api_key = settings.litellm_api_key or settings.ai_api_key
+        self._timeout = 120.0
+
+    def _headers(self) -> dict:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    async def _chat(self, system: str, user: str, model: str | None = None, timeout: float | None = None) -> str:
+        payload = {
+            "model": model or self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "stream": False,
+        }
+        async with httpx.AsyncClient(timeout=timeout or self._timeout) as client:
+            resp = await client.post(f"{self.base_url}/v1/chat/completions", json=payload, headers=self._headers())
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+
+    async def analyze_stock(self, ticker: str, data: dict) -> dict:
+        system = (
+            "You are an expert swing trader. Analyze the given stock/ETF technical and fundamental data "
+            "and respond with a JSON object ONLY - no markdown, no extra text. "
+            "Required keys: summary, sentiment, confidence, key_factors, entry_strategy, "
+            "exit_strategy, ai_score, risks, opportunities."
+        )
+        user = f"Analyze {ticker} for swing trading:\n{json.dumps(data, default=str)}"
+        try:
+            raw = await self._chat(system, user)
+            return json.loads(_strip_json_fences(raw))
+        except Exception as e:
+            logger.error("LiteLLM analyze_stock failed for %s: %s", ticker, e)
+            return {
+                "summary": f"LiteLLM analysis failed: {e}",
+                "sentiment": "neutral",
+                "confidence": 0.0,
+                "key_factors": [],
+                "ai_score": None,
+                "risks": ["LLM unavailable"],
+                "opportunities": [],
+            }
+
+    async def generate_signals(self, ticker: str, technicals: dict) -> list[dict]:
+        system = (
+            "You are a swing-trading signal generator. Based on the technical data provided, "
+            "return a JSON array of signal objects only - no markdown, no extra text. "
+            "Each object: type (entry|exit|warning|info), signal, message, strength."
+        )
+        user = f"Generate signals for {ticker}:\n{json.dumps(technicals, default=str)}"
+        try:
+            raw = await self._chat(system, user)
+            return json.loads(_strip_json_fences(raw))
+        except Exception as e:
+            logger.error("LiteLLM generate_signals failed for %s: %s", ticker, e)
+            return [{"type": "info", "signal": "LLM Error", "message": str(e), "strength": "weak"}]
+
+    async def chat(self, ticker: str, question: str, context: dict) -> str:
+        system = (
+            "You are a swing-trading assistant. Answer concisely using the stock data provided. "
+            "Use markdown formatting. Keep answers under 300 words."
+        )
+        user = f"Stock: {ticker}\nData: {json.dumps(context, default=str)}\n\nQuestion: {question}"
+        try:
+            return await self._chat(system, user)
+        except Exception as e:
+            logger.error("LiteLLM chat failed for %s: %s", ticker, e)
+            return f"LiteLLM error: {e}"
+
+    async def summarize_sector(self, sector: str, stocks: list[dict]) -> str:
+        system = "You are a market analyst. Write a 2-4 sentence markdown sector summary based on the stock data provided."
+        user = f"Sector: {sector}\nStocks: {json.dumps(stocks[:10], default=str)}"
+        try:
+            return await self._chat(system, user)
+        except Exception as e:
+            logger.error("LiteLLM summarize_sector failed for %s: %s", sector, e)
+            return f"LiteLLM sector summary unavailable: {e}"
 
 
 # ── Future: Anthropic Implementation ──────────────────────────────────────
@@ -293,6 +391,9 @@ def get_ai_service() -> AIService:
 
     if provider == "ollama":
         return OllamaAIService()
+
+    if provider == "litellm":
+        return LiteLLMAIService()
 
     if provider == "anthropic":
         # Uncomment when AnthropicAIService is implemented above

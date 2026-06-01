@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     ai_cache_ttl: int = 3600         # 1 hour
     cache_max_age_days: int = 180    # purge entries older than 180 days
 
-    # AI Provider ("none", "anthropic", "openai", "ollama")
+    # AI Provider ("none", "anthropic", "openai", "ollama", "litellm")
     ai_provider: str = "none"
     ai_api_key: str = ""
     ai_model: str = ""
@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     ollama_url: str = "http://192.168.10.21:11434"
     ollama_model: str = "qwen35-moe:latest"        # general chat/analysis
     report_model: str = "deepseek-r1:8b"           # report generation (reasoning)
+
+    # LiteLLM (OpenAI-compatible proxy; can point at Ollama-backed models)
+    litellm_url: str = ""                          # e.g. http://192.168.10.21:4000
+    litellm_api_key: str = ""                      # optional; falls back to AI_API_KEY
 
     class Config:
         env_file = ".env"

@@ -30,6 +30,17 @@ Open the Web UI button (or navigate to `https://<ha-ip>:8443`).
 | `ai_api_key` | API key for your AI provider |
 | `ai_model` | Model override (e.g. `claude-opus-4-6`) — leave blank for default |
 
+| `fred_api_key` | Optional FRED API key for Macro & Liquidity charts: M2, Fed Funds, 2yr/10yr yields, and yield spread |
+
+## Enabling FRED Macro Data
+
+1. Get a free API key from `https://fred.stlouisfed.org`.
+2. In Home Assistant, open **Settings -> Add-ons -> SwingTrader -> Configuration**.
+3. Paste the key into `fred_api_key`.
+4. Restart the add-on.
+
+Without this key, the Macro & Liquidity section still loads but shows a notice and leaves FRED-backed charts blank.
+
 ## Using Your Home Assistant SSL Certificate
 
 If you have the **Let's Encrypt** or **Duck DNS** add-on configured:

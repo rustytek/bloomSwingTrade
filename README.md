@@ -7,6 +7,8 @@ A self-hosted swing trading screener with:
 - Per-user **watchlist** and **portfolio** tracking (SQLite)
 - Technical indicators: RSI, MACD, Bollinger Bands, MA50/200, Golden/Death Cross
 - F / T / M scoring system (Fundamental / Technical / Momentum)
+- Decision cockpit: risk flags, opportunity queue, exit pressure, and signal changes
+- Walk-forward backtest lab for a regime-aware relative-strength strategy
 - **AI analysis hooks** — ready for Anthropic Claude or OpenAI (mock by default)
 - Dark terminal aesthetic React UI
 
@@ -32,6 +34,12 @@ https://localhost:8443
 Default login: **admin** / **changeme**
 Change the password via the admin panel or API after first login.
 
+Key pages:
+- `/` — screener, portfolio, watchlist, and stock detail views
+- `/charts` — macro, breadth, correlation, annualized return, and Wyckoff views
+- `/backtest` — decision cockpit and walk-forward strategy backtest
+- `/report` — daily AI-assisted market report.
+
 ---
 
 ## Configuration (.env)
@@ -45,6 +53,7 @@ Change the password via the admin panel or API after first login.
 | `AI_PROVIDER` | `none` | `none` \| `anthropic` \| `openai` |
 | `AI_API_KEY` | *(empty)* | API key for your AI provider |
 | `AI_MODEL` | *(default)* | Override model (e.g. `claude-opus-4-6`) |
+| `FRED_API_KEY` | *(empty)* | Optional FRED key for Macro & Liquidity charts: M2, Fed Funds, 2yr/10yr yields |
 | `QUOTE_CACHE_TTL` | `900` | Quote cache lifetime in seconds (15 min) |
 | `HISTORY_CACHE_TTL` | `3600` | History cache lifetime in seconds (1 hr) |
 
@@ -88,7 +97,13 @@ SwingTrader ships as a proper HA add-on — no Portainer, no terminal, no docker
 5. Open the **Configuration** tab — set a strong `secret_key` and change `admin_pass`
 6. Click **Start** → open the **Web UI**
 
+Optional: set `fred_api_key` in the add-on **Configuration** tab to enable Macro & Liquidity charts.
+
 On first launch, a self-signed SSL cert is auto-generated. Accept the browser warning once, and you're in.
+
+### FRED Macro Data
+
+The HA add-on reads `fred_api_key` from the add-on **Configuration** tab and maps it to `FRED_API_KEY` inside the container. Set this value if you want `/charts` to populate M2 Money Supply, Fed Funds, 2yr/10yr Treasury yields, and yield spread. After changing it, restart the add-on.
 
 ### Use Your HA SSL Certificate (optional)
 

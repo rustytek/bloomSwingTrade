@@ -54,6 +54,10 @@ async def _fred(series_id: str, limit: int = 60) -> list[dict]:
     cached = _cache_get(f"fred:{series_id}")
     if cached is not None:
         return cached
+    if not settings.fred_api_key:
+        logger.info("FRED_API_KEY is not set; skipping FRED series %s", series_id)
+        _cache_set(f"fred:{series_id}", [])
+        return []
 
     params = {
         "series_id": series_id,
@@ -62,10 +66,15 @@ async def _fred(series_id: str, limit: int = 60) -> list[dict]:
         "limit": limit,
         "sort_order": "desc",
     }
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(FRED_BASE, params=params)
-        resp.raise_for_status()
-        raw = resp.json()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(FRED_BASE, params=params)
+            resp.raise_for_status()
+            raw = resp.json()
+    except Exception as e:
+        logger.warning("FRED fetch failed for %s: %s", series_id, e)
+        _cache_set(f"fred:{series_id}", [])
+        return []
 
     result = [
         {"date": o["date"], "value": float(o["value"])}
@@ -111,6 +120,15 @@ async def get_macro_data() -> dict:
             m2_trend = "falling"
 
     current_spread = spread[-1]["value"] if spread else None
+    fred_status = "ok"
+    fred_message = ""
+    if not settings.fred_api_key:
+        fred_status = "missing_api_key"
+        fred_message = "FRED_API_KEY is not configured, so M2, Fed Funds, and Treasury yield data are unavailable."
+    elif not any((m2, fedfunds, dgs2, dgs10)):
+        fred_status = "unavailable"
+        fred_message = "FRED returned no usable macro series. Check whether the FRED_API_KEY is valid and the FRED service is reachable."
+
     result = {
         "m2":              m2,
         "fedfunds":        fedfunds,
@@ -124,6 +142,9 @@ async def get_macro_data() -> dict:
         "yield_10yr":      dgs10[-1]["value"] if dgs10 else None,
         "yield_spread_now": current_spread,
         "yield_inverted":  current_spread is not None and current_spread < 0,
+        "fred_configured": bool(settings.fred_api_key),
+        "fred_status": fred_status,
+        "fred_message": fred_message,
     }
     _cache_set("macro", result)
     return result
@@ -390,11 +411,16 @@ def get_breadth_data(db: Session) -> dict:
 # ── Convenience: everything in one async call ─────────────────────────────────
 
 async def get_all_chart_data(db: Session) -> dict:
-    macro, vix, sectors, etf_groups = await asyncio.gather(
+    results = await asyncio.gather(
         get_macro_data(),
         get_vix_data(),
         get_sector_data(),
         get_etf_group_data(),
+        return_exceptions=True,
     )
+    macro, vix, sectors, etf_groups = [
+        {} if isinstance(result, Exception) else result
+        for result in results
+    ]
     breadth = get_breadth_data(db)
     return {"macro": macro, "vix": vix, "sectors": sectors, "breadth": breadth, "etf_groups": etf_groups}

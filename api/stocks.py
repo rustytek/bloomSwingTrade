@@ -5,6 +5,7 @@ from database.db import get_db
 from database.models import User
 from auth.deps import get_current_user
 from services import market_data
+from services.tickers import normalize_ticker, normalize_tickers
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
 
@@ -21,9 +22,10 @@ async def get_stock(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    data = await market_data.get_quote(ticker.upper(), db, force_refresh=force_refresh)
+    ticker = normalize_ticker(ticker)
+    data = await market_data.get_quote(ticker, db, force_refresh=force_refresh)
     if data is None:
-        raise HTTPException(status_code=404, detail=f"Could not fetch data for {ticker.upper()}")
+        raise HTTPException(status_code=404, detail=f"Could not fetch data for {ticker}")
     return data
 
 
@@ -35,9 +37,10 @@ async def get_history(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    history = await market_data.get_history(ticker.upper(), db, period=period, force_refresh=force_refresh)
+    ticker = normalize_ticker(ticker)
+    history = await market_data.get_history(ticker, db, period=period, force_refresh=force_refresh)
     if not history:
-        raise HTTPException(status_code=404, detail=f"No history found for {ticker.upper()}")
+        raise HTTPException(status_code=404, detail=f"No history found for {ticker}")
 
     # Attach indicator series for charting
     rsi = market_data.get_rsi_series(history)
@@ -47,7 +50,7 @@ async def get_history(
     bb = market_data.get_bb_series(history)
 
     return {
-        "ticker": ticker.upper(),
+        "ticker": ticker,
         "bars": history,
         "indicators": {
             "rsi": rsi,
@@ -67,6 +70,6 @@ async def get_batch(
 ):
     if not req.tickers:
         return []
-    tickers = [t.upper() for t in req.tickers[:100]]  # cap at 100
+    tickers = normalize_tickers(req.tickers, limit=100)
     results = await market_data.get_batch(tickers, db, force_refresh=req.force_refresh)
     return results

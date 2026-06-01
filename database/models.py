@@ -1,5 +1,5 @@
 from sqlalchemy import (
-    Column, Integer, String, Float, Boolean, DateTime, Text,
+    Column, Integer, String, Float, Boolean, Date, DateTime, Text,
     ForeignKey, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
@@ -40,6 +40,21 @@ class WatchlistItem(Base):
     __table_args__ = (UniqueConstraint("user_id", "ticker", name="uq_watchlist_user_ticker"),)
 
 
+class WatchlistSnapshot(Base):
+    __tablename__ = "watchlist_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    week_start = Column(Date, nullable=False, index=True)
+    tickers_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=utcnow)
+    notes = Column(Text, nullable=True)
+
+    user = relationship("User")
+
+    __table_args__ = (UniqueConstraint("user_id", "week_start", name="uq_watchlist_snapshot_user_week"),)
+
+
 class PortfolioPosition(Base):
     __tablename__ = "portfolio_positions"
 
@@ -63,6 +78,8 @@ class StockCache(Base):
     quote_json = Column(Text, nullable=True)
     history_json = Column(Text, nullable=True)
     cached_at = Column(DateTime, default=utcnow)
+    quote_cached_at = Column(DateTime, nullable=True)
+    history_cached_at = Column(DateTime, nullable=True)
 
 
 class AICache(Base):

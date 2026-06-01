@@ -5,6 +5,7 @@ from database.db import get_db
 from database.models import User, PortfolioPosition
 from auth.deps import get_current_user
 from services import market_data
+from services.tickers import normalize_ticker
 import csv
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
@@ -75,7 +76,7 @@ def upsert_position(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    ticker = req.ticker.upper().strip()
+    ticker = normalize_ticker(req.ticker)
     pos = (
         db.query(PortfolioPosition)
         .filter(PortfolioPosition.user_id == user.id, PortfolioPosition.ticker == ticker)
@@ -105,7 +106,7 @@ def remove_position(
 ):
     pos = (
         db.query(PortfolioPosition)
-        .filter(PortfolioPosition.user_id == user.id, PortfolioPosition.ticker == ticker.upper())
+        .filter(PortfolioPosition.user_id == user.id, PortfolioPosition.ticker == normalize_ticker(ticker))
         .first()
     )
     if not pos:
@@ -214,7 +215,7 @@ async def import_fidelity_csv(
         raw_ticker = cell(row, sym_col)
 
         # Normalize: Fidelity uses BRK/B; yfinance uses BRK-B
-        raw_ticker = raw_ticker.replace("/", "-").upper()
+        raw_ticker = raw_ticker.replace("/", "-").upper().strip()
 
         if raw_ticker in SKIP_TICKERS:
             continue
@@ -226,6 +227,7 @@ async def import_fidelity_csv(
         clean = raw_ticker.replace("-", "").replace(".", "")
         if not clean or len(raw_ticker) > 10 or not clean.isalnum() or clean.isnumeric():
             continue
+        raw_ticker = normalize_ticker(raw_ticker)
 
         # Parse quantity — skip if blank or zero (e.g. SPAXX with no quantity)
         qty_raw = cell(row, qty_col).replace(",", "").replace("$", "").lstrip("+")

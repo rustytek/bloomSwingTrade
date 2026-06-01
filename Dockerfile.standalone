@@ -23,6 +23,6 @@ EXPOSE 8443
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD python -c "import urllib.request,ssl; ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE; urllib.request.urlopen('https://localhost:8443/auth/me', context=ctx, timeout=5)" || exit 1
+    CMD python -c "import urllib.request,ssl; ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE; urllib.request.urlopen('https://localhost:8443/', context=ctx, timeout=5)" || exit 1
 
 CMD ["python", "main.py"]

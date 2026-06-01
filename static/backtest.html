@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SwingTrader - Backtest Lab</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background:#0d0d0d; color:#d8d8d8; font-family:'Inter',sans-serif; font-size:14px; line-height:1.5; }
+    .topbar { height:44px; background:#111; border-bottom:1px solid #1a1a1a; display:flex; align-items:center; padding:0 16px; gap:12px; position:sticky; top:0; z-index:10; }
+    .brand { font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:700; color:#fff; letter-spacing:1px; text-decoration:none; white-space:nowrap; }
+    .topbar-sep { width:1px; height:20px; background:#222; flex-shrink:0; }
+    .universe-status { display:flex; align-items:center; gap:6px; min-width:0; }
+    .universe-text { font-size:11px; color:#444; white-space:nowrap; }
+    .universe-text.loading { color:#f0a500; }
+    .progress { display:inline-block; width:60px; height:4px; background:#1a1a1a; border-radius:2px; overflow:hidden; }
+    .progress-bar { display:block; width:0; height:100%; background:#f0a500; transition:width .5s; }
+    .data-time { font-size:10px; color:#555; margin-left:8px; white-space:nowrap; }
+    .topbar-actions { margin-left:auto; display:flex; align-items:center; gap:10px; }
+    .username { font-size:11px; color:#555; }
+    .btn { display:inline-flex; align-items:center; gap:5px; padding:5px 10px; border-radius:3px; border:1px solid #2a2a2a; background:#1a1a1a; color:#999; font-size:11px; font-weight:600; cursor:pointer; text-decoration:none; font-family:'Inter',sans-serif; }
+    .btn:hover { color:#ddd; background:#222; }
+    .btn-primary { background:#f0a500; color:#000; border-color:#f0a500; }
+    .hint { position:relative; }
+    .hint::after { content:attr(data-tip); position:absolute; left:50%; bottom:calc(100% + 9px); transform:translateX(-50%); display:none; width:min(280px, 70vw); padding:8px 10px; background:#1e1e1e; border:1px solid #333; border-radius:4px; color:#d8d8d8; font-size:11px; font-weight:400; line-height:1.45; letter-spacing:0; text-transform:none; white-space:normal; box-shadow:0 6px 18px #000c; z-index:200; pointer-events:none; }
+    .hint::before { content:''; position:absolute; left:50%; bottom:calc(100% + 4px); transform:translateX(-50%); display:none; border:5px solid transparent; border-top-color:#333; z-index:201; pointer-events:none; }
+    .hint:hover::after, .hint:hover::before, .hint:focus-within::after, .hint:focus-within::before, .hint:focus::after, .hint:focus::before { display:block; }
+    .topbar .hint::after { top:calc(100% + 9px); bottom:auto; }
+    .topbar .hint::before { top:calc(100% + 4px); bottom:auto; border-top-color:transparent; border-bottom-color:#333; }
+    .page { max-width:1700px; margin:0 auto; padding:20px; display:flex; flex-direction:column; gap:16px; }
+    .tutorial { display:grid; grid-template-columns:1.1fr 1fr; gap:16px; background:#101010; border:1px solid #1e1e1e; border-radius:6px; padding:16px; }
+    .tutorial-title { font-size:14px; color:#eee; font-weight:800; margin-bottom:8px; }
+    .tutorial-copy { color:#999; font-size:12px; line-height:1.6; }
+    .tutorial-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+    .tutorial-item { background:#151515; border:1px solid #222; border-radius:4px; padding:9px 10px; min-width:0; }
+    .tutorial-key { color:#f0a500; font:700 11px 'JetBrains Mono',monospace; margin-bottom:3px; text-transform:uppercase; }
+    .tutorial-value { color:#aaa; font-size:12px; line-height:1.45; }
+    .workflow-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+    .controls { display:flex; align-items:end; gap:12px; flex-wrap:wrap; padding:12px; background:#101010; border:1px solid #1e1e1e; border-radius:6px; }
+    label { display:flex; flex-direction:column; gap:5px; font-size:11px; color:#777; text-transform:uppercase; letter-spacing:.06em; }
+    select, input { background:#1a1a1a; border:1px solid #2a2a2a; color:#ddd; border-radius:4px; padding:7px 9px; font-family:'Inter',sans-serif; min-width:100px; }
+    input[type=checkbox] { min-width:auto; }
+    .grid4 { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+    .grid2 { display:grid; grid-template-columns:1.4fr .9fr; gap:16px; }
+    .panel { background:#111; border:1px solid #1e1e1e; border-radius:6px; padding:16px; min-width:0; }
+    .panel-title { display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:13px; color:#ccc; font-weight:700; margin-bottom:12px; }
+    .panel-sub { font-size:11px; color:#666; font-weight:400; }
+    .panel-desc { color:#777; font-size:12px; line-height:1.55; margin:-4px 0 12px; }
+    .metric-help { color:#777; font-size:11px; line-height:1.45; margin-top:8px; border-top:1px solid #1b1b1b; padding-top:8px; }
+    .stat-label { font-size:11px; color:#777; text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px; }
+    .stat-value { font:700 24px 'JetBrains Mono',monospace; color:#eee; }
+    .stat-sub { font-size:12px; color:#777; margin-top:3px; }
+    .up { color:#26a65b; }
+    .down { color:#e05252; }
+    .warn { color:#f0a500; }
+    .muted { color:#777; }
+    .mono { font-family:'JetBrains Mono',monospace; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th { text-align:left; padding:6px 8px; color:#666; border-bottom:1px solid #222; font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+    td { padding:7px 8px; border-bottom:1px solid #171717; vertical-align:top; }
+    tr:hover td { background:#151515; }
+    .ticker-link { color:#f0a500; cursor:pointer; font-family:'JetBrains Mono',monospace; font-weight:700; }
+    .pill { display:inline-flex; align-items:center; padding:2px 7px; border-radius:3px; background:#1a1a1a; border:1px solid #2a2a2a; font-size:11px; color:#999; margin:1px 3px 1px 0; }
+    .replay-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+    .status-pill { display:inline-flex; align-items:center; padding:2px 7px; border-radius:3px; border:1px solid #2a2a2a; color:#aaa; font-size:11px; background:#171717; }
+    .note { color:#777; font-size:12px; line-height:1.6; }
+    .error { color:#e05252; font-size:12px; }
+    .chart-wrap { height:360px; }
+    .modal { position:fixed; inset:0; background:rgba(0,0,0,.72); display:none; align-items:center; justify-content:center; z-index:100; padding:20px; }
+    .modal-card { width:min(980px, 96vw); max-height:88vh; overflow:auto; background:#111; border:1px solid #2a2a2a; border-radius:6px; box-shadow:0 18px 60px #000; }
+    .modal-head { display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid #1e1e1e; position:sticky; top:0; background:#111; }
+    .modal-body { padding:16px; display:grid; grid-template-columns:1.2fr .8fr; gap:16px; }
+    .icon-btn { margin-left:auto; background:#1a1a1a; color:#888; border:1px solid #2a2a2a; border-radius:4px; padding:4px 10px; cursor:pointer; }
+    @media (max-width:1100px) { .tutorial, .tutorial-list, .grid4, .grid2 { grid-template-columns:1fr; } .chart-wrap { height:300px; } }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <a href="/" class="brand">▲ SWING TRADER</a>
+    <div class="topbar-sep"></div>
+    <div class="universe-status">
+      <span id="universeText" class="universe-text">Loading universe...</span>
+      <span id="universeProgress" class="progress" hidden><span id="universeProgressBar" class="progress-bar"></span></span>
+      <span id="dataTime" class="data-time"></span>
+    </div>
+    <div class="topbar-actions">
+      <a class="btn hint" data-tip="Return to the main stock screener, filters, watchlist, portfolio, and ticker detail workspace." href="/">Screener</a>
+      <a class="btn hint" data-tip="Open market-wide chart dashboards for VIX, sectors, ETFs, breadth, and macro context." href="/charts">Charts</a>
+      <a class="btn hint" data-tip="Open the AI-assisted daily report page for saved market commentary and analysis." href="/report">Report</a>
+      <span id="username" class="username"></span>
+      <button id="logoutBtn" class="btn hint" data-tip="End this browser session and return to the login page." type="button">Logout</button>
+    </div>
+  </div>
+
+  <main class="page">
+    <section class="tutorial">
+      <div>
+        <div class="tutorial-title">How to Use Backtest Lab</div>
+        <div class="tutorial-copy">
+          This page tests your saved tickers against a repeatable swing-trading rule set. Use it as a decision-support
+          worksheet: build a watchlist on the screener, run the weekly preset here, then monitor the Opportunity Queue,
+          Recent Rebalances, and Exit Pressure during the week. The results are historical and cached-data based, so treat
+          them as evidence to review rather than a trade instruction.
+        </div>
+        <div class="workflow-actions">
+          <button id="weeklyPresetBtn" class="btn btn-primary hint" data-tip="Sets Universe to Watchlist, Top N to 10, Rebalance to Weekly, keeps the SPY trend filter on, and reruns the test.">Weekly Saved Tickers</button>
+          <a class="btn hint" data-tip="Open the screener to add or remove saved tickers in your watchlist before running this weekly workflow." href="/">Edit Watchlist</a>
+        </div>
+      </div>
+      <div class="tutorial-list">
+        <div class="tutorial-item"><div class="tutorial-key">Universe</div><div class="tutorial-value">Pick the saved ticker set to test: watchlist ideas, current portfolio, or both.</div></div>
+        <div class="tutorial-item"><div class="tutorial-key">Top N</div><div class="tutorial-value">How many ranked tickers the model would hold. Smaller is concentrated; larger is diversified.</div></div>
+        <div class="tutorial-item"><div class="tutorial-key">Rebalance</div><div class="tutorial-value">How often the model reranks. Weekly is the practical setting for a watchlist you review during the week.</div></div>
+        <div class="tutorial-item"><div class="tutorial-key">SPY Filter</div><div class="tutorial-value">When on, the model avoids new risk when SPY is below trend. Turn it off to see raw ticker strength.</div></div>
+        <div class="tutorial-item"><div class="tutorial-key">Equity Curve</div><div class="tutorial-value">Compare the strategy line to SPY. Watch CAGR, drawdown, and whether gains came with smoother risk.</div></div>
+        <div class="tutorial-item"><div class="tutorial-key">Opportunity Queue</div><div class="tutorial-value">Your weekly watch board: higher setup scores with clear reasons deserve the first chart review.</div></div>
+      </div>
+    </section>
+
+    <section class="controls">
+      <label class="hint" data-tip="Choose which saved tickers the strategy tests. Watchlist uses idea candidates, Portfolio uses current holdings, and Both combines them.">Universe
+        <select id="source">
+          <option value="watchlist">Watchlist</option>
+          <option value="portfolio">Portfolio</option>
+          <option value="both">Both</option>
+        </select>
+      </label>
+      <label class="hint" data-tip="Maximum number of ranked tickers held after each rebalance. Lower values concentrate the strategy; higher values diversify it.">Top N
+        <input id="topN" type="number" min="1" max="20" value="5">
+      </label>
+      <label class="hint" data-tip="How often the model reranks tickers and changes holdings. Shorter intervals react faster but can increase turnover.">Rebalance
+        <select id="rebalance">
+          <option value="5">Weekly</option>
+          <option value="10">Biweekly</option>
+          <option value="21">Monthly</option>
+        </select>
+      </label>
+      <label class="hint" data-tip="Estimated trading cost per rebalance in basis points. 10 bps means 0.10%, used to make the backtest less optimistic.">Cost bps
+        <input id="costBps" type="number" min="0" max="100" value="10">
+      </label>
+      <label class="hint" data-tip="When enabled, the strategy only buys when SPY is above its trend filter. When disabled, it can hold ranked tickers in any market regime." style="flex-direction:row;align-items:center;text-transform:none;letter-spacing:0;font-size:12px;margin-bottom:7px;">
+        <input id="spyRegime" type="checkbox" checked> SPY regime filter
+      </label>
+      <button id="runBtn" class="btn btn-primary hint" data-tip="Run the walk-forward test with the selected settings and refresh the equity curve, metrics, trades, and notes.">Run Backtest</button>
+      <span id="status" class="note" aria-live="polite"></span>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">Weekly Watchlist Replay <span class="panel-sub">saved tickers at week start vs current performance</span></div>
+      <div class="panel-desc">This is the audit trail for your real watchlist decisions. Create a snapshot when you finish picking tickers for the week; the replay freezes that list and tracks what the model would have selected, how those selected names performed, and how they compare to SPY through the latest cached close.</div>
+      <div class="replay-head">
+        <button id="snapshotBtn" class="btn btn-primary hint" data-tip="Save the current watchlist for this Monday's week. If a snapshot already exists for this week, it will be updated to match the current watchlist.">Snapshot Current Watchlist</button>
+        <span id="snapshotStatus" class="note" aria-live="polite"></span>
+      </div>
+      <div id="weeklyReplay" class="note">Loading...</div>
+    </section>
+
+    <section class="grid4" id="stats"></section>
+
+    <section class="grid2">
+      <div class="panel">
+        <div class="panel-title">Equity Curve <span class="panel-sub">strategy vs SPY benchmark</span></div>
+        <div class="panel-desc">Look for whether the strategy line beats SPY while taking smaller drawdowns. A good setup is not just the highest ending value; it should recover quickly after dips and avoid long flat periods.</div>
+        <div class="chart-wrap"><canvas id="equityChart"></canvas></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">Decision Risk <span class="panel-sub">live portfolio context</span></div>
+        <div class="panel-desc">Use this as a quick portfolio health check before acting on new ideas. Watch for high beta, one sector dominating the portfolio, or multiple exit flags showing that current holdings may need attention first.</div>
+        <div id="riskBox" class="note">Loading...</div>
+      </div>
+    </section>
+
+    <section class="grid2">
+      <div class="panel">
+        <div class="panel-title">Opportunity Queue <span class="panel-sub">watchlist ranked by setup quality</span></div>
+        <div class="panel-desc">Start here for weekly candidates. The best names usually combine a high setup score, RSI that is not overheated, useful volume confirmation, and several clear reasons in the Why column.</div>
+        <div id="opportunities"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">Exit Pressure <span class="panel-sub">positions with risk flags</span></div>
+        <div class="panel-desc">Review this before adding risk. A ticker here is not an automatic sell, but the flags tell you what to inspect: broken trend, weak return, poor Sharpe, or recent drawdown pressure.</div>
+        <div id="exits"></div>
+      </div>
+    </section>
+
+    <section class="grid2">
+      <div class="panel">
+        <div class="panel-title">Recent Rebalances <span class="panel-sub">what the model would have held</span></div>
+        <div class="panel-desc">This shows how often the model changed its mind. Consistent repeated holdings are stronger candidates; frequent cash periods or rapid turnover mean the rule set is less confident in the selected universe.</div>
+        <div id="trades"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">What Changed <span class="panel-sub">current cached signals</span></div>
+        <div class="panel-desc">Use this as the watchlist alert tape. Trend crosses, unusual volume, and extreme RSI readings tell you which tickers deserve a fresh chart review today.</div>
+        <div id="changes"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">Notes</div>
+      <div class="panel-desc">Read these caveats every time you change settings. They explain what data the test used, which rules are active, and why a result may be empty or limited.</div>
+      <div id="notes" class="note"></div>
+    </section>
+  </main>
+
+  <div class="modal" id="tickerModal" onclick="if(event.target===this)closeTicker()">
+    <div class="modal-card">
+      <div class="modal-head">
+        <div>
+          <div id="modalTicker" class="mono" style="font-size:20px;font-weight:800;color:#f0a500;"></div>
+          <div id="modalName" class="muted" style="font-size:12px;"></div>
+        </div>
+        <div id="modalPrice" class="mono" style="font-size:18px;"></div>
+        <button class="icon-btn hint" data-tip="Close this ticker detail overlay and return to the backtest dashboard." onclick="closeTicker()">Close</button>
+      </div>
+      <div class="modal-body">
+        <div class="panel" style="padding:12px;">
+          <div class="panel-title">Ticker Chart</div>
+          <div class="panel-desc">Use this to verify the setup visually. Prefer rising trends, controlled pullbacks, and price above key moving averages before trusting a high score.</div>
+          <div class="chart-wrap" style="height:300px;"><canvas id="tickerChart"></canvas></div>
+        </div>
+        <div class="panel" style="padding:12px;">
+          <div class="panel-title">Detail Metrics</div>
+          <div class="panel-desc">Check whether the numbers agree with the chart. RSI shows stretch, volume ratio shows participation, Sharpe/Sortino show risk quality, and drawdown shows recent pain.</div>
+          <div id="modalMetrics"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+'use strict';
+const token = () => localStorage.getItem('st_token');
+const clearToken = () => localStorage.removeItem('st_token');
+const authHdr = () => ({ Authorization: 'Bearer ' + token() });
+let chart;
+let tickerChart;
+
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+function fmtPct(v, d = 1) {
+  if (v == null) return '<span class="muted">--</span>';
+  return `<span class="${v >= 0 ? 'up' : 'down'}">${v >= 0 ? '+' : ''}${Number(v).toFixed(d)}%</span>`;
+}
+function fmtNum(v, d = 2) { return v == null ? '--' : Number(v).toFixed(d); }
+async function openTicker(ticker) {
+  ticker = String(ticker || '').toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 15);
+  document.getElementById('tickerModal').style.display = 'flex';
+  document.getElementById('modalTicker').textContent = ticker;
+  document.getElementById('modalName').textContent = 'Loading...';
+  document.getElementById('modalPrice').textContent = '';
+  document.getElementById('modalMetrics').innerHTML = '';
+  try {
+    const [stock, hist] = await Promise.all([
+      api('/api/stocks/' + encodeURIComponent(ticker)),
+      api('/api/stocks/' + encodeURIComponent(ticker) + '/history').catch(() => ({ bars: [] })),
+    ]);
+    document.getElementById('modalName').textContent = [stock.name, stock.sector].filter(Boolean).join(' - ');
+    document.getElementById('modalPrice').innerHTML = stock.price != null ? `$${Number(stock.price).toFixed(2)} ${fmtPct(stock.chg_pct)}` : '--';
+    const rows = [
+      ['RSI', fmtNum(stock.rsi, 1)], ['MACD', esc(stock.macd_sig || '--')], ['vs MA50', fmtPct(stock.vs_ma50)],
+      ['vs MA200', fmtPct(stock.vs_ma200)], ['Vol Ratio', fmtNum(stock.vol_r, 2)], ['Sharpe', fmtNum(stock.sharpe, 2)],
+      ['Sortino', fmtNum(stock.sortino, 2)], ['Ann Ret', fmtPct(stock.ann_ret)], ['Max DD 1M', stock.max_dd_1m == null ? '--' : `${fmtNum(stock.max_dd_1m, 1)}%`],
+      ['P/E', fmtNum(stock.pe, 1)], ['Beta', fmtNum(stock.beta, 2)], ['52W Pos', stock.p52w == null ? '--' : `${fmtNum(stock.p52w, 0)}%`],
+    ];
+    document.getElementById('modalMetrics').innerHTML = `<table><tbody>${rows.map(([k,v]) => `<tr><td class="muted">${k}</td><td class="mono">${v}</td></tr>`).join('')}</tbody></table>`;
+    tickerChart?.destroy();
+    tickerChart = new Chart(document.getElementById('tickerChart'), {
+      type: 'line',
+      data: {
+        labels: (hist.bars || []).map(b => b.date),
+        datasets: [{ label: ticker, data: (hist.bars || []).map(b => b.close), borderColor:'#f0a500', tension:.15, pointRadius:0 }],
+      },
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ labels:{ color:'#aaa' } } },
+        scales:{ x:{ ticks:{ color:'#777', maxTicksLimit:8 }, grid:{ color:'#1a1a1a' } }, y:{ ticks:{ color:'#777' }, grid:{ color:'#1a1a1a' } } },
+      },
+    });
+  } catch (e) {
+    document.getElementById('modalName').innerHTML = `<span class="error">${esc(e.message)}</span>`;
+  }
+}
+function closeTicker() {
+  document.getElementById('tickerModal').style.display = 'none';
+  tickerChart?.destroy();
+  tickerChart = null;
+}
+async function api(url, opts = {}) {
+  if (!token()) { window.location.href = '/login'; throw new Error('Not authenticated'); }
+  const res = await fetch(url, { ...opts, headers: { ...authHdr(), ...(opts.headers || {}) } });
+  if (res.status === 401) { clearToken(); window.location.href = '/login'; throw new Error('Session expired'); }
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function initHeader() {
+  document.getElementById('logoutBtn').addEventListener('click', () => {
+    clearToken();
+    window.location.href = '/login';
+  });
+  try {
+    const user = await api('/auth/me');
+    document.getElementById('username').textContent = user.username || '';
+  } catch (e) {
+    return;
+  }
+  try {
+    const status = await api('/api/screener/universe/status');
+    const loaded = status.loaded || 0;
+    const total = status.total || 0;
+    const pct = total > 0 ? Math.round(loaded / total * 100) : 0;
+    const isLoading = total > 0 && loaded < total;
+    const text = document.getElementById('universeText');
+    const progress = document.getElementById('universeProgress');
+    text.classList.toggle('loading', isLoading);
+    text.textContent = isLoading ? `Loading universe... ${loaded}/${total} (${pct}%)` : `${loaded} stocks loaded`;
+    progress.hidden = !isLoading;
+    document.getElementById('universeProgressBar').style.width = `${pct}%`;
+    document.getElementById('dataTime').textContent = !isLoading && status.last_updated_time ? `Data as of ${status.last_updated_time}` : '';
+  } catch (e) {
+    document.getElementById('universeText').textContent = 'Universe status unavailable';
+  }
+}
+
+function statCard(label, value, sub, cls = '', help = '') {
+  return `<div class="panel"><div class="stat-label">${esc(label)}</div><div class="stat-value ${cls}">${value}</div><div class="stat-sub">${esc(sub || '')}</div>${help ? `<div class="metric-help">${esc(help)}</div>` : ''}</div>`;
+}
+
+function renderStats(bt) {
+  const m = bt.metrics || {}, b = bt.benchmark_metrics || {};
+  document.getElementById('stats').innerHTML = [
+    statCard('Strategy CAGR', fmtPct(m.cagr), `SPY ${b.cagr ?? '--'}%`, (m.cagr ?? 0) >= (b.cagr ?? 0) ? 'up' : 'down', 'Annualized growth rate. Prefer positive CAGR that beats SPY without requiring extreme drawdown.'),
+    statCard('Total Return', fmtPct(m.total_return), `SPY ${b.total_return ?? '--'}%`, (m.total_return ?? 0) >= 0 ? 'up' : 'down', 'End-to-end return over cached history. Useful, but less important than consistency and drawdown.'),
+    statCard('Max Drawdown', `${fmtNum(m.max_drawdown, 1)}%`, `SPY ${b.max_drawdown ?? '--'}%`, (m.max_drawdown ?? 0) <= (b.max_drawdown ?? 999) ? 'up' : 'warn', 'Largest peak-to-trough decline. Lower is better because it shows how painful the strategy could feel.'),
+    statCard('Sharpe', fmtNum(m.sharpe), `Win rate ${m.win_rate ?? '--'}%`, (m.sharpe ?? 0) > 1 ? 'up' : 'warn', 'Risk-adjusted return. Above 1 is decent, above 2 is strong, negative means returns did not justify volatility.'),
+  ].join('');
+}
+
+function renderChart(bt) {
+  const ctx = document.getElementById('equityChart');
+  chart?.destroy();
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: (bt.equity || []).map(p => p.date),
+      datasets: [
+        { label: 'Strategy', data: (bt.equity || []).map(p => p.value), borderColor: '#f0a500', backgroundColor: 'rgba(240,165,0,.08)', tension: .2 },
+        { label: 'SPY', data: (bt.benchmark || []).map(p => p.value), borderColor: '#7eb8f5', backgroundColor: 'rgba(126,184,245,.06)', tension: .2 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#aaa' } } },
+      scales: {
+        x: { ticks: { color: '#777', maxTicksLimit: 8 }, grid: { color: '#1a1a1a' } },
+        y: { ticks: { color: '#777' }, grid: { color: '#1a1a1a' } },
+      },
+    },
+  });
+}
+
+function renderTrades(bt) {
+  const trades = (bt.trades || []).slice(-10).reverse();
+  const help = '<div class="panel-desc">Date is the rebalance day, Regime shows whether the SPY trend filter allowed risk, Return is the next holding-period result, and Holdings are the tickers the model selected. Repeated tickers are stronger watch candidates than one-off appearances.</div>';
+  document.getElementById('trades').innerHTML = trades.length ? `${help}<table><thead><tr><th>Date</th><th>Regime</th><th>Return</th><th>Holdings</th></tr></thead><tbody>${trades.map(t => `
+    <tr>
+      <td class="mono">${esc(t.date)}</td>
+      <td>${t.regime === 'risk_on' ? '<span class="up">Risk on</span>' : '<span class="warn">Cash</span>'}</td>
+      <td>${fmtPct(t.period_return)}</td>
+      <td>${(t.holdings || []).map(h => `<span class="pill"><span class="ticker-link hint" data-tip="Open price chart and detailed metrics for this ticker." tabindex="0" onclick="openTicker('${esc(h.ticker)}')">${esc(h.ticker)}</span> ${h.ret_63}%</span>`).join('') || '<span class="muted">No holdings</span>'}</td>
+    </tr>`).join('')}</tbody></table>` : `${help}<div class="note">No rebalance history available yet.</div>`;
+}
+
+function renderReplay(replay) {
+  const rows = replay.snapshots || [];
+  const help = '<div class="panel-desc">Model Return is the average return of the tickers the rule selected from your saved snapshot. SPY Return is the market comparison for the same dates. Status is in progress when the current week has not finished yet.</div>';
+  if (!rows.length) {
+    document.getElementById('weeklyReplay').innerHTML = `${help}<div class="note">No weekly snapshots yet. Click Snapshot Current Watchlist after you finish choosing this week&apos;s saved tickers.</div>`;
+    return;
+  }
+  document.getElementById('weeklyReplay').innerHTML = `${help}<table><thead><tr><th>Week</th><th>Status</th><th>Saved</th><th>Model Return</th><th>SPY</th><th>Selected</th><th>Top Saved Movers</th></tr></thead><tbody>${rows.map(row => {
+    const selected = (row.selected || []).map(s => `<span class="pill"><span class="ticker-link hint" data-tip="Open price chart and detailed metrics for this ticker." tabindex="0" onclick="openTicker('${esc(s.ticker)}')">${esc(s.ticker)}</span> ${fmtPct(s.return)}</span>`).join('') || '<span class="muted">Cash / no qualifying picks</span>';
+    const movers = (row.all_returns || []).slice(0, 5).map(s => `<span class="pill"><span class="ticker-link hint" data-tip="Open price chart and detailed metrics for this ticker." tabindex="0" onclick="openTicker('${esc(s.ticker)}')">${esc(s.ticker)}</span> ${fmtPct(s.return)}</span>`).join('') || '<span class="muted">No return data</span>';
+    return `<tr>
+      <td class="mono">${esc(row.week_start)}<div class="muted">${esc(row.actual_start || '')} to ${esc(row.actual_end || row.week_end || '')}</div></td>
+      <td><span class="status-pill">${esc((row.status || '').replaceAll('_', ' '))}</span><div class="muted">${esc(row.regime || '')}</div></td>
+      <td>${row.ticker_count || 0}<div class="muted">${(row.available_tickers || []).length} usable</div></td>
+      <td>${fmtPct(row.model_return)}</td>
+      <td>${fmtPct(row.spy_return)}</td>
+      <td>${selected}</td>
+      <td>${movers}</td>
+    </tr>`;
+  }).join('')}</tbody></table>`;
+}
+
+function renderCockpit(c) {
+  const r = c.risk || {};
+  const topSector = r.top_sector ? `${r.top_sector.sector} ${r.top_sector.weight}%` : '--';
+  document.getElementById('riskBox').innerHTML = `
+    <div class="grid4" style="grid-template-columns:repeat(2,1fr);">
+      ${statCard('Positions', r.positions ?? 0, 'current portfolio', '', 'Count of holdings in your portfolio. More names can diversify, but only if they are not highly correlated.')}
+      ${statCard('Weighted Beta', fmtNum(r.weighted_beta), 'market sensitivity', (r.weighted_beta ?? 1) <= 1 ? 'up' : 'warn', 'Portfolio sensitivity to market moves. Above 1 means it may move more than SPY in both directions.')}
+      ${statCard('Top Sector', esc(topSector), 'concentration', '', 'Largest sector weight. A very high number means one theme could dominate your results.')}
+      ${statCard('Exit Flags', r.exit_flags ?? 0, 'positions needing review', r.exit_flags ? 'warn' : 'up', 'Number of holdings with risk warnings. Review these before adding new watchlist candidates.')}
+    </div>
+    <div class="panel-desc" style="margin:12px 0 8px;">Sector concentration shows where your current risk is clustered. If one sector dominates, prefer new candidates from different sectors unless you intentionally want that exposure.</div>
+    <div>${(r.sector_concentration || []).map(s => `<span class="pill">${esc(s.sector)} ${s.weight}%</span>`).join('')}</div>`;
+
+  document.getElementById('opportunities').innerHTML = table(c.opportunities || [], ['Ticker','Setup','RSI','Vol','Why'], row => [
+    `<span class="ticker-link hint" data-tip="Open price chart and detailed metrics for this ticker." tabindex="0" onclick="openTicker('${esc(row.ticker)}')">${esc(row.ticker)}</span>`,
+    fmtNum(row.setup_score, 1), fmtNum(row.rsi, 1), fmtNum(row.vol_r, 2), (row.why || []).map(esc).join(', ')
+  ], 'No watchlist opportunities scored yet.', 'Setup is the ranking score; RSI helps avoid chasing overheated names; Vol shows confirmation; Why explains the signals that earned the rank.');
+
+  document.getElementById('exits').innerHTML = table(c.exit_pressure || [], ['Ticker','Flags','RSI','Ann Ret','Sharpe'], row => [
+    `<span class="ticker-link hint" data-tip="Open price chart and detailed metrics for this ticker." tabindex="0" onclick="openTicker('${esc(row.ticker)}')">${esc(row.ticker)}</span>`,
+    (row.reasons || []).map(x => `<span class="pill">${esc(x)}</span>`).join(''),
+    fmtNum(row.rsi, 1), fmtPct(row.ann_ret), fmtNum(row.sharpe, 2)
+  ], 'No current portfolio exit flags.', 'Flags are the reason to inspect the holding. Weak annualized return plus low Sharpe or broken trend is more serious than one isolated warning.');
+
+  document.getElementById('changes').innerHTML = table(c.changes || [], ['Ticker','Type','Signal'], row => [
+    `<span class="ticker-link hint" data-tip="Open price chart and detailed metrics for this ticker." tabindex="0" onclick="openTicker('${esc(row.ticker)}')">${esc(row.ticker)}</span>`,
+    esc(row.type), esc(row.message)
+  ], 'No notable cached signal changes.', 'Trend changes are slower but more important; volume changes are early alerts; RSI extremes can mean either exhaustion or a possible reversal setup.');
+}
+
+function table(rows, headers, mapper, empty, help = '') {
+  const intro = help ? `<div class="panel-desc">${esc(help)}</div>` : '';
+  if (!rows.length) return `${intro}<div class="note">${esc(empty)}</div>`;
+  return `${intro}<table><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${mapper(row).map(v => `<td>${v}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+
+async function load() {
+  const status = document.getElementById('status');
+  status.textContent = 'Running...';
+  const params = new URLSearchParams({
+    source: document.getElementById('source').value,
+    top_n: document.getElementById('topN').value,
+    rebalance_days: document.getElementById('rebalance').value,
+    cost_bps: document.getElementById('costBps').value,
+    spy_regime: document.getElementById('spyRegime').checked ? 'true' : 'false',
+  });
+  try {
+    const [bt, cockpit] = await Promise.all([
+      api('/api/backtest/walk-forward?' + params.toString()),
+      api('/api/backtest/cockpit'),
+    ]);
+    const replay = await api('/api/backtest/watchlist-replay?top_n=' + encodeURIComponent(document.getElementById('topN').value) + '&spy_regime=' + (document.getElementById('spyRegime').checked ? 'true' : 'false'));
+    renderStats(bt);
+    renderChart(bt);
+    renderTrades(bt);
+    renderCockpit(cockpit);
+    renderReplay(replay);
+    document.getElementById('notes').innerHTML = [...(bt.notes || []), cockpit.disclaimer].map(n => `<div>${esc(n)}</div>`).join('');
+    status.textContent = `${bt.available_tickers?.length || 0} tickers tested`;
+  } catch (e) {
+    status.innerHTML = `<span class="error">${esc(e.message)}</span>`;
+  }
+}
+
+document.getElementById('runBtn').addEventListener('click', load);
+document.getElementById('snapshotBtn').addEventListener('click', async () => {
+  const status = document.getElementById('snapshotStatus');
+  status.textContent = 'Saving snapshot...';
+  try {
+    const snap = await api('/api/backtest/watchlist-replay/snapshot', { method: 'POST' });
+    status.textContent = `Saved ${snap.ticker_count} tickers for week of ${snap.week_start}`;
+    load();
+  } catch (e) {
+    status.innerHTML = `<span class="error">${esc(e.message)}</span>`;
+  }
+});
+document.getElementById('weeklyPresetBtn').addEventListener('click', () => {
+  document.getElementById('source').value = 'watchlist';
+  document.getElementById('topN').value = '10';
+  document.getElementById('rebalance').value = '5';
+  document.getElementById('costBps').value = '10';
+  document.getElementById('spyRegime').checked = true;
+  load();
+});
+initHeader();
+load();
+</script>
+</body>
+</html>

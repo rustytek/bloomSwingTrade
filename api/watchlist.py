@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from database.db import get_db
 from database.models import User, WatchlistItem, StockCache
 from auth.deps import get_current_user
+from services.tickers import normalize_ticker
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 
@@ -54,9 +55,7 @@ def add_ticker(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    ticker = req.ticker.upper().strip()
-    if not ticker:
-        raise HTTPException(status_code=400, detail="Ticker cannot be empty")
+    ticker = normalize_ticker(req.ticker)
 
     existing = (
         db.query(WatchlistItem)
@@ -81,8 +80,9 @@ def add_batch(
 ):
     added = []
     for raw in req.tickers:
-        ticker = raw.upper().strip()
-        if not ticker:
+        try:
+            ticker = normalize_ticker(raw)
+        except HTTPException:
             continue
         existing = (
             db.query(WatchlistItem)
@@ -105,7 +105,7 @@ def remove_ticker(
 ):
     item = (
         db.query(WatchlistItem)
-        .filter(WatchlistItem.user_id == user.id, WatchlistItem.ticker == ticker.upper())
+        .filter(WatchlistItem.user_id == user.id, WatchlistItem.ticker == normalize_ticker(ticker))
         .first()
     )
     if not item:
@@ -194,8 +194,9 @@ def auto_populate_watchlist(
     added = []
     skipped = []
     for q in selected:
-        ticker = q.get("ticker", "").upper().strip()
-        if not ticker:
+        try:
+            ticker = normalize_ticker(q.get("ticker", ""))
+        except HTTPException:
             continue
         existing = (
             db.query(WatchlistItem)

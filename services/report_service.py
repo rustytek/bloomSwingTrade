@@ -20,6 +20,7 @@ import numpy as np
 from sqlalchemy.orm import Session
 
 from config import get_settings
+from database.db import SessionLocal
 from database.models import PortfolioPosition, WatchlistItem, StockCache, ReportCache
 from services.chart_service import get_all_chart_data
 
@@ -371,9 +372,17 @@ async def generate_daily_report(
 
     # Fetch live chart/macro data concurrently with portfolio context
     import asyncio
+
+    async def gather_charts():
+        chart_db = SessionLocal()
+        try:
+            return await get_all_chart_data(chart_db)
+        finally:
+            chart_db.close()
+
     ctx, charts = await asyncio.gather(
         _gather_context(user_id, db),
-        get_all_chart_data(db),
+        gather_charts(),
     )
     today = datetime.now(timezone.utc).strftime("%Y%m%d")
     s = ctx["summary"]

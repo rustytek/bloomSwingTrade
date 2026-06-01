@@ -32,6 +32,7 @@ from api.watchlist import router as watchlist_router
 from api.portfolio import router as portfolio_router
 from api.ai import router as ai_router
 from api.charts import router as charts_router
+from api.backtest import router as backtest_router
 from generate_ssl import generate_ssl_cert
 from services.universe import UNIVERSE
 from services.market_data import refresh_universe, cleanup_old_entries, invalidate_legacy_cache
@@ -64,6 +65,7 @@ async def _scheduled_report_job():
 def init_db():
     """Create all tables and seed the admin user if it doesn't exist."""
     Base.metadata.create_all(bind=engine)
+    ensure_cache_columns()
     db = SessionLocal()
     try:
         if not db.query(User).filter(User.username == settings.admin_user).first():
@@ -77,6 +79,36 @@ def init_db():
             logger.info(f"Created admin user: {settings.admin_user}")
     finally:
         db.close()
+
+
+async def _scheduled_watchlist_snapshot_job():
+    """Capture each user's watchlist at the start of the trading week."""
+    from services.backtest import create_watchlist_snapshot
+    db = SessionLocal()
+    try:
+        users = db.query(User).all()
+        for user in users:
+            create_watchlist_snapshot(db, user.id, notes="weekly-schedule")
+        logger.info("Scheduler: captured weekly watchlist snapshots for %s users", len(users))
+    except Exception as e:
+        logger.error("Scheduler: watchlist snapshot failed: %s", e)
+    finally:
+        db.close()
+
+
+def ensure_cache_columns():
+    """Add lightweight SQLite columns needed by older installs."""
+    if engine.dialect.name != "sqlite":
+        return
+
+    with engine.begin() as conn:
+        existing = {
+            row[1]
+            for row in conn.exec_driver_sql("PRAGMA table_info(stock_cache)").fetchall()
+        }
+        for column in ("quote_cached_at", "history_cached_at"):
+            if column not in existing:
+                conn.exec_driver_sql(f"ALTER TABLE stock_cache ADD COLUMN {column} DATETIME")
 
 
 @asynccontextmanager
@@ -101,6 +133,12 @@ async def lifespan(app: FastAPI):
         id="daily_report",
         replace_existing=True,
     )
+    _scheduler.add_job(
+        _scheduled_watchlist_snapshot_job,
+        CronTrigger(day_of_week="mon", hour=6, minute=0),
+        id="weekly_watchlist_snapshot",
+        replace_existing=True,
+    )
     _scheduler.start()
     logger.info("Scheduler started — daily report will run at 05:30")
 
@@ -113,7 +151,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.5.1",
+    version="1.5.2",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -136,6 +174,7 @@ app.include_router(watchlist_router)
 app.include_router(portfolio_router)
 app.include_router(ai_router)
 app.include_router(charts_router)
+app.include_router(backtest_router)
 
 
 # ── Static files (React SPA) ─────────────────────────────────────────────────
@@ -156,6 +195,11 @@ async def report_page():
 @app.get("/charts")
 async def charts_page():
     return FileResponse(os.path.join(STATIC_DIR, "charts.html"))
+
+
+@app.get("/backtest")
+async def backtest_page():
+    return FileResponse(os.path.join(STATIC_DIR, "backtest.html"))
 
 
 @app.get("/")

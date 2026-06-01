@@ -14,6 +14,7 @@ import yfinance as yf
 from sqlalchemy.orm import Session
 
 from config import get_settings
+from database.db import SessionLocal
 from database.models import StockCache
 from services.indicators import (
     calc_ma, calc_ema, calc_rsi, calc_macd, calc_bollinger,
@@ -277,9 +278,10 @@ async def get_quote(ticker: str, db: Session, force_refresh: bool = False) -> Op
 
     # 2. Check SQLite cache
     row: Optional[StockCache] = db.query(StockCache).filter(StockCache.ticker == ticker).first()
-    if not force_refresh and row and row.quote_json and _is_fresh(row.cached_at):
+    quote_cached_at = row.quote_cached_at or row.cached_at if row else None
+    if not force_refresh and row and row.quote_json and quote_cached_at and _is_fresh(quote_cached_at):
         data = json.loads(row.quote_json)
-        _mem_cache[cache_key] = {"data": data, "cached_at": row.cached_at}
+        _mem_cache[cache_key] = {"data": data, "cached_at": quote_cached_at}
         return data
 
     # 3. Fetch from yfinance
@@ -299,9 +301,10 @@ async def get_quote(ticker: str, db: Session, force_refresh: bool = False) -> Op
             now = datetime.now(timezone.utc)
             fail_row = db.query(StockCache).filter(StockCache.ticker == ticker).first()
             if fail_row:
-                fail_row.cached_at = now   # refresh timestamp, leave quote_json as-is
+                fail_row.quote_cached_at = now   # refresh timestamp, leave quote_json as-is
+                fail_row.cached_at = now
             else:
-                db.add(StockCache(ticker=ticker, quote_json=None, cached_at=now))
+                db.add(StockCache(ticker=ticker, quote_json=None, cached_at=now, quote_cached_at=now))
             db.commit()
         except Exception:
             db.rollback()
@@ -313,9 +316,10 @@ async def get_quote(ticker: str, db: Session, force_refresh: bool = False) -> Op
     row = db.query(StockCache).filter(StockCache.ticker == ticker).first()
     if row:
         row.quote_json = quote_json
+        row.quote_cached_at = now
         row.cached_at = now
     else:
-        row = StockCache(ticker=ticker, quote_json=quote_json, cached_at=now)
+        row = StockCache(ticker=ticker, quote_json=quote_json, cached_at=now, quote_cached_at=now)
         db.add(row)
     db.commit()
 
@@ -334,9 +338,10 @@ async def get_history(ticker: str, db: Session, period: str = "6mo", force_refre
             return entry["data"]
 
     row: Optional[StockCache] = db.query(StockCache).filter(StockCache.ticker == ticker).first()
-    if not force_refresh and row and row.history_json and _is_fresh(row.cached_at):
+    history_cached_at = row.history_cached_at or row.cached_at if row else None
+    if not force_refresh and row and row.history_json and history_cached_at and _is_fresh(history_cached_at):
         data = json.loads(row.history_json)
-        _mem_cache[cache_key] = {"data": data, "cached_at": row.cached_at}
+        _mem_cache[cache_key] = {"data": data, "cached_at": history_cached_at}
         return data
 
     try:
@@ -350,9 +355,10 @@ async def get_history(ticker: str, db: Session, period: str = "6mo", force_refre
     history_json = json.dumps(history)
     if row:
         row.history_json = history_json
+        row.history_cached_at = now
         row.cached_at = now
     else:
-        row = StockCache(ticker=ticker, history_json=history_json, cached_at=now)
+        row = StockCache(ticker=ticker, history_json=history_json, cached_at=now, history_cached_at=now)
         db.add(row)
     db.commit()
 
@@ -362,7 +368,14 @@ async def get_history(ticker: str, db: Session, period: str = "6mo", force_refre
 
 async def get_batch(tickers: list[str], db: Session, force_refresh: bool = False) -> list[dict]:
     """Fetch multiple quotes concurrently."""
-    tasks = [get_quote(t, db, force_refresh) for t in tickers]
+    async def fetch_one(ticker: str):
+        local_db = SessionLocal()
+        try:
+            return await get_quote(ticker, local_db, force_refresh)
+        finally:
+            local_db.close()
+
+    tasks = [fetch_one(t) for t in tickers]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     return [r for r in results if isinstance(r, dict)]
 
@@ -483,8 +496,12 @@ def get_universe_status(db: Session, universe: list[str]) -> dict:
     # Count ALL rows including failure markers (quote_json=None) as "attempted/loaded"
     rows = db.query(StockCache).all()
     loaded = sum(1 for r in rows if r.ticker in universe_set)
-    fresh  = sum(1 for r in rows if r.ticker in universe_set
-                 and r.quote_json and _is_fresh(r.cached_at))
+    fresh  = sum(
+        1 for r in rows
+        if r.ticker in universe_set
+        and r.quote_json
+        and _is_fresh(r.quote_cached_at or r.cached_at)
+    )
                  
     last_updated_time = None
     latest = max((r.cached_at for r in rows if r.ticker in universe_set and r.cached_at), default=None)
@@ -509,31 +526,28 @@ async def refresh_universe(universe: list[str], db_factory, force: bool = False)
     If market is open, it will query across the hour avoiding limits.
     If market is closed, it sweeps once and then waits.
     """
-    # Max concurrent fetches (keep low so rate limit checks are granular)
-    sem = asyncio.Semaphore(5)
+    worker_count = 8
 
     async def fetch_one(ticker: str, force_flag: bool):
         # Stop and wait if rate limit is hit
         if not await limiter.increment():
             return False
             
-        async with sem:
-            db = db_factory()
-            try:
-                await get_quote(ticker, db, force_refresh=force_flag)
-            except Exception as e:
-                logger.debug(f"Background fetch skipped {ticker}: {e}")
-            finally:
-                db.close()
-            # Distribute requests to about 2000 per hour (1.8s delay total on average)
-            await asyncio.sleep(1.8)
-            return True
+        db = db_factory()
+        try:
+            await get_quote(ticker, db, force_refresh=force_flag)
+        except Exception as e:
+            logger.debug(f"Background fetch skipped {ticker}: {e}")
+        finally:
+            db.close()
+        await asyncio.sleep(0.2)
+        return True
 
     while True:
         db = db_factory()
         try:
             existing = {
-                r.ticker: r.cached_at
+                r.ticker: (r.quote_cached_at or r.cached_at)
                 for r in db.query(StockCache).all()
             }
         finally:
@@ -553,17 +567,31 @@ async def refresh_universe(universe: list[str], db_factory, force: bool = False)
             
         logger.info(f"Background universe loop: {len(stale)}/{len(universe)} tickers need updating")
         
-        market_open = is_market_open()
-        
+        queue = asyncio.Queue()
         for ticker in stale:
-            res = await fetch_one(ticker, force)
-            if not res:
-                logger.warning(f"Hourly API rate limit reached ({limiter.limit}). Pausing background polling until next window.")
-                # We hit the limit. Sleep until the next hour begins.
-                now = datetime.now(timezone.utc)
-                next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-                await asyncio.sleep((next_hour - now).total_seconds())
-                break # break the for-loop, while-loop restarts the stale sweep
+            queue.put_nowait(ticker)
+
+        hit_limit = False
+
+        async def worker():
+            nonlocal hit_limit
+            while not queue.empty() and not hit_limit:
+                ticker = await queue.get()
+                try:
+                    res = await fetch_one(ticker, force)
+                    if not res:
+                        hit_limit = True
+                finally:
+                    queue.task_done()
+
+        workers = [asyncio.create_task(worker()) for _ in range(min(worker_count, len(stale)))]
+        await asyncio.gather(*workers)
+
+        if hit_limit:
+            logger.warning(f"Hourly API rate limit reached ({limiter.limit}). Pausing background polling until next window.")
+            now = datetime.now(timezone.utc)
+            next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+            await asyncio.sleep((next_hour - now).total_seconds())
         
         # If the market was closed, we do not want to constantly run. 
         # By definition, if stale was empty, it skips above. 

@@ -154,6 +154,7 @@
   <span class="topbar-title">Market Charts</span>
   <div class="topbar-sep"></div>
   <a href="/report" class="btn btn-ghost" style="text-decoration:none;">📄 Report</a>
+  <a href="/backtest" class="btn btn-ghost" style="text-decoration:none;">Backtest</a>
   <div class="spacer"></div>
   <!-- Period buttons (apply to all LW Charts) -->
   <div class="period-group" id="periodGroup">
@@ -186,6 +187,7 @@
     <div class="stat-row" id="macroStatRow">
       <div class="loading">Loading macro data…</div>
     </div>
+    <div class="err" id="fredNotice" style="display:none;margin-top:10px;padding:10px 12px;background:#1a1111;border:1px solid #3a1f1f;border-radius:4px;"></div>
     <div style="margin-top:16px" class="grid2">
       <div class="panel">
         <div class="panel-title" title="Treasury yields reflect the cost of borrowing. Rising 10yr yield = growth/inflation expectations. When 2yr > 10yr (inverted), it historically signals recession risk within 12-18 months. Watch for yield curve normalization as a bullish macro signal.">10yr &amp; 2yr Treasury Yields <span class="panel-sub">gold = 10yr · blue = 2yr</span></div>
@@ -638,6 +640,14 @@ function fmtRet(v, digits = 2) {
   const cls = v > 0 ? 'up' : v < 0 ? 'down' : 'muted';
   return `<span class="${cls}">${v > 0 ? '+' : ''}${v.toFixed(digits)}%</span>`;
 }
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
+}
+function safeTicker(value) {
+  return String(value ?? '').toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 15);
+}
 function retColor(v) {
   if (v == null) return '#1a1a1a';
   const c = Math.max(-60, Math.min(100, v));
@@ -698,6 +708,17 @@ async function loadMacro() {
     const vixZone = vixCurrent > 30 ? 'extreme_fear' : vixCurrent > 20 ? 'fear' : vixCurrent > 15 ? 'neutral' : 'complacency';
     const spread = macro?.yield_spread_now ?? 0;
     const inverted = macro?.yield_inverted;
+    const fredNotice = document.getElementById('fredNotice');
+    if (macro && macro.fred_configured === false) {
+      fredNotice.style.display = 'block';
+      fredNotice.innerHTML = 'FRED macro/liquidity data is not loading because <b>FRED_API_KEY</b> is not configured in the container. For the Home Assistant add-on, set <code>fred_api_key</code> in the add-on Configuration tab and restart. For docker-compose, add <code>FRED_API_KEY</code> to <code>.env</code> and rebuild/restart. VIX, breadth, sectors, ETF groups, watchlist, and portfolio charts can still load.';
+    } else if (macro?.fred_status && macro.fred_status !== 'ok') {
+      fredNotice.style.display = 'block';
+      fredNotice.textContent = macro.fred_message || 'FRED macro/liquidity data is unavailable.';
+    } else {
+      fredNotice.style.display = 'none';
+      fredNotice.textContent = '';
+    }
 
     // ── Macro stat cards ────────────────────────────────────────────────
     document.getElementById('macroStatRow').innerHTML = [
@@ -1292,6 +1313,7 @@ function switchTdTab(tab) {
 }
 
 async function openTickerDetail(ticker) {
+  ticker = safeTicker(ticker);
   const modal = document.getElementById('tdModal');
   modal.style.display = 'flex';
   document.getElementById('tdBody').innerHTML = `<div class="loading">Loading <b style="color:#f0a500">${ticker}</b>…</div>`;
@@ -1327,7 +1349,7 @@ async function openTickerDetail(ticker) {
     }
     _renderTdBody();
   } catch(e) {
-    document.getElementById('tdBody').innerHTML = `<div class="err">Failed to load ${ticker}: ${e.message}</div>`;
+    document.getElementById('tdBody').innerHTML = `<div class="err">Failed to load ${esc(ticker)}: ${esc(e.message)}</div>`;
   }
 }
 
@@ -1476,11 +1498,11 @@ function _renderTdBody() {
     ].filter(([, v]) => v != null);
 
     el.innerHTML = `
-      ${s.description ? `<div style="background:#141414;border-radius:4px;padding:12px;margin-bottom:14px;font-size:12px;color:#888;line-height:1.65;max-height:80px;overflow:hidden;">${s.description.substring(0,350)}${s.description.length>350?'…':''}</div>` : ''}
+      ${s.description ? `<div style="background:#141414;border-radius:4px;padding:12px;margin-bottom:14px;font-size:12px;color:#888;line-height:1.65;max-height:80px;overflow:hidden;">${esc(s.description.substring(0,350))}${s.description.length>350?'…':''}</div>` : ''}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 32px;">
         ${rows.map(([k,v]) => `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #1a1a1a;font-size:12px;">
           <span style="color:#666;">${k}</span>
-          <span style="font-family:'JetBrains Mono',monospace;color:#c8c8c8;">${v}</span>
+          <span style="font-family:'JetBrains Mono',monospace;color:#c8c8c8;">${esc(v)}</span>
         </div>`).join('')}
       </div>`;
 

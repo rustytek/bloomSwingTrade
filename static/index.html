@@ -2153,6 +2153,9 @@
         <button onClick={() => window.location.href = '/charts'} style={{ background: '#1a3a5c', color: '#7eb8f5', padding: '5px 10px', borderRadius: 3, fontSize: 11, fontWeight: 700, border: '1px solid #2a5a9c' }}>
           📊 Charts
         </button>
+        <button onClick={() => window.location.href = '/backtest'} style={{ background: '#1a1a1a', color: '#f0a500', padding: '5px 10px', borderRadius: 3, fontSize: 11, fontWeight: 700, border: '1px solid #3a2a08' }}>
+          Backtest
+        </button>
         {activeCount > 0 && <span style={{ background: '#f0a500', color: '#000', fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 8 }}>
           {activeCount} filter{activeCount !== 1 ? 's' : ''}
         </span>}
@@ -2409,9 +2412,9 @@
       useEffect(() => { if (user) loadWatchlist(); }, [user]);
 
       /* Screener */
-      const loadScreener = useCallback(async (f, force = false) => {
+      const loadScreener = useCallback(async (f, force = false, silent = false) => {
         const gen = ++loadGen.current;
-        setLoading(true);
+        if (!silent) setLoading(true);
         try {
           const body = { ...f, force_refresh: force };
           Object.keys(body).forEach(k => { if (body[k] === '') body[k] = null; });
@@ -2428,7 +2431,7 @@
             if (data.universe) setUniverseStatus(data.universe);
           }
         } catch (e) { }
-        if (gen === loadGen.current) setLoading(false);
+        if (gen === loadGen.current && !silent) setLoading(false);
       }, []);
 
       /* Refresh — trigger forced market data reload, poll until done */
@@ -2469,7 +2472,7 @@
             setUniverseStatus(s);
             if (s.rate_limit && s.rate_limit.used >= s.rate_limit.limit) setRateLimitExceeded(true);
 
-            if (s.loaded < s.total && !rateLimitExceeded) loadScreener(filtersRef.current, false);
+            if (s.loaded < s.total && !rateLimitExceeded) loadScreener(filtersRef.current, false, true);
           }
         };
         const id = setInterval(poll, 10000); // every 10s while loading

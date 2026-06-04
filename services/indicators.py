@@ -2,6 +2,8 @@
 Technical indicator calculations.
 Pure Python / numpy — mirrors the logic from the HTML template.
 """
+from __future__ import annotations
+
 import math
 import numpy as np
 from typing import Optional
@@ -158,6 +160,188 @@ def compute_score(stock: dict) -> dict:
     m = min(5, m)
     o = round((f + t + m) / 3)
     return {"f": f, "t": t, "m": m, "o": o}
+
+
+def compute_swing_score(stock: dict) -> dict:
+    """Return an explainable 0-100 swing-trade setup score.
+
+    Component weights:
+    trend 25, momentum/relative strength 25, risk 20,
+    liquidity/volume 15, fundamentals 15.
+    """
+    reasons: list[tuple[int, str]] = []
+
+    def num(key: str, default: float | None = None) -> float | None:
+        value = stock.get(key)
+        return value if isinstance(value, (int, float)) and not math.isnan(value) else default
+
+    def add_reason(points: int, text: str) -> None:
+        if points > 0:
+            reasons.append((points, text))
+
+    # Trend: is price in a useful uptrend without being purely a one-day pop?
+    trend = 0
+    vs_ma50 = num("vs_ma50", 0) or 0
+    vs_ma200 = num("vs_ma200", 0) or 0
+    rsi = num("rsi")
+    if vs_ma200 > 0:
+        trend += 8
+        add_reason(8, f"above 200-day MA ({vs_ma200:.1f}%)")
+    if vs_ma50 > 0:
+        trend += 5
+        add_reason(5, f"above 50-day MA ({vs_ma50:.1f}%)")
+    if vs_ma200 > 10:
+        trend += 4
+        add_reason(4, "strong long-term trend")
+    if rsi is not None and 45 <= rsi <= 65:
+        trend += 4
+        add_reason(4, f"RSI in swing zone ({rsi:.1f})")
+    elif rsi is not None and 40 <= rsi <= 70:
+        trend += 2
+    if stock.get("macd_sig") == "bullish":
+        trend += 3
+        add_reason(3, "bullish MACD")
+    if not stock.get("dc"):
+        trend += 1
+    trend = min(25, trend)
+
+    # Momentum / relative strength: does it have multi-week strength and alpha?
+    momentum = 0
+    ret_5d = num("ret_5d")
+    ret_21d = num("ret_21d")
+    ret_63d = num("ret_63d")
+    rel_spy_21d = num("rel_spy_21d")
+    rel_spy_63d = num("rel_spy_63d")
+    p52w = num("p52w")
+    if ret_21d is not None and ret_21d > 0:
+        pts = 6 + (4 if ret_21d >= 5 else 0)
+        momentum += pts
+        add_reason(pts, f"21D momentum {ret_21d:+.1f}%")
+    if ret_5d is not None and ret_5d > 0:
+        momentum += 3
+        add_reason(3, f"5D momentum {ret_5d:+.1f}%")
+    if ret_63d is not None and ret_63d > 0:
+        momentum += 4
+        add_reason(4, f"63D trend {ret_63d:+.1f}%")
+    if rel_spy_21d is not None and rel_spy_21d > 0:
+        pts = 5 + (2 if rel_spy_21d >= 3 else 0)
+        momentum += pts
+        add_reason(pts, f"beating SPY 21D by {rel_spy_21d:+.1f}%")
+    elif rel_spy_63d is not None and rel_spy_63d > 0:
+        momentum += 3
+        add_reason(3, f"beating SPY 63D by {rel_spy_63d:+.1f}%")
+    if p52w is not None and 60 <= p52w <= 92:
+        momentum += 4
+        add_reason(4, f"healthy 52-week position ({p52w:.0f}%)")
+    elif p52w is not None and p52w > 92:
+        momentum += 2
+    momentum = min(25, momentum)
+
+    # Risk: prefer names that move cleanly and recover from dips.
+    risk = 0
+    sortino = num("sortino")
+    sharpe = num("sharpe")
+    calmar = num("calmar")
+    max_dd_1m = num("max_dd_1m")
+    vol_1m = num("vol_1m")
+    if sortino is not None and sortino > 1:
+        pts = 5 + (3 if sortino > 2 else 0)
+        risk += pts
+        add_reason(pts, f"strong Sortino ({sortino:.2f})")
+    if max_dd_1m is not None:
+        if max_dd_1m <= 5:
+            risk += 5
+            add_reason(5, f"shallow 1M drawdown ({max_dd_1m:.1f}%)")
+        elif max_dd_1m <= 10:
+            risk += 3
+    if vol_1m is not None:
+        if vol_1m <= 30:
+            risk += 4
+            add_reason(4, f"manageable 1M volatility ({vol_1m:.1f}%)")
+        elif vol_1m <= 45:
+            risk += 2
+    if sharpe is not None and sharpe > 1:
+        risk += 3
+    if calmar is not None and calmar > 1:
+        risk += 3
+    risk = min(20, risk)
+
+    # Liquidity / volume: can a normal user enter/exit without chasing.
+    liquidity = 0
+    avg_dollar_vol_m = num("avg_dollar_vol_m")
+    vol_r = num("vol_r", 1) or 1
+    mkt_cap = num("mkt_cap")
+    if avg_dollar_vol_m is not None:
+        if avg_dollar_vol_m >= 50:
+            liquidity += 6
+            add_reason(6, f"liquid trading (${avg_dollar_vol_m:.0f}M avg)")
+        elif avg_dollar_vol_m >= 10:
+            liquidity += 4
+    if 1.1 <= vol_r <= 2.5:
+        liquidity += 5
+        add_reason(5, f"volume confirmation ({vol_r:.2f}x)")
+    elif vol_r > 2.5:
+        liquidity += 2
+    if mkt_cap is not None:
+        if mkt_cap >= 10:
+            liquidity += 4
+        elif mkt_cap >= 2:
+            liquidity += 2
+    liquidity = min(15, liquidity)
+
+    # Fundamentals: enough business quality to reduce single-chart risk.
+    fundamentals = 0
+    pe = num("pe")
+    fwd_pe = num("fwd_pe")
+    pm = num("pm")
+    eps_grw = num("eps_grw")
+    rev_grw = num("rev_grw")
+    debt_eq = num("debt_eq")
+    if stock.get("fcf_pos"):
+        fundamentals += 3
+        add_reason(3, "positive free cash flow")
+    if pm is not None and pm >= 15:
+        fundamentals += 3
+        add_reason(3, f"healthy margin ({pm:.1f}%)")
+    if rev_grw is not None and rev_grw >= 10:
+        fundamentals += 3
+        add_reason(3, f"revenue growth {rev_grw:.1f}%")
+    if eps_grw is not None and eps_grw >= 10:
+        fundamentals += 3
+        add_reason(3, f"EPS growth {eps_grw:.1f}%")
+    if debt_eq is not None and debt_eq <= 1:
+        fundamentals += 2
+    valuation = fwd_pe if fwd_pe is not None else pe
+    if valuation is not None and 0 < valuation <= 30:
+        fundamentals += 2
+    fundamentals = min(15, fundamentals)
+
+    components = {
+        "trend": trend,
+        "momentum": momentum,
+        "risk": risk,
+        "liquidity": liquidity,
+        "fundamentals": fundamentals,
+    }
+    total = int(round(sum(components.values())))
+    if total >= 80:
+        grade = "A"
+    elif total >= 65:
+        grade = "B"
+    elif total >= 50:
+        grade = "C"
+    elif total >= 35:
+        grade = "D"
+    else:
+        grade = "F"
+
+    top_reasons = [text for _, text in sorted(reasons, key=lambda item: item[0], reverse=True)[:5]]
+    return {
+        "score": max(0, min(100, total)),
+        "grade": grade,
+        "components": components,
+        "reasons": top_reasons,
+    }
 
 
 def compute_performance_metrics(

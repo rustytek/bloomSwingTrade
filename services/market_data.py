@@ -2,6 +2,8 @@
 yfinance data service with in-memory + SQLite caching.
 All public methods are async-friendly (run blocking yfinance in thread pool).
 """
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -18,7 +20,7 @@ from database.db import SessionLocal
 from database.models import StockCache
 from services.indicators import (
     calc_ma, calc_ema, calc_rsi, calc_macd, calc_bollinger,
-    macd_signal_label, compute_score, compute_performance_metrics,
+    macd_signal_label, compute_score, compute_swing_score, compute_performance_metrics,
 )
 
 logger = logging.getLogger(__name__)
@@ -152,7 +154,7 @@ def _fetch_quote_sync(ticker: str) -> dict:
     }
 
 
-def _fetch_history_sync(ticker: str, period: str = "6mo") -> list[dict]:
+def _fetch_history_sync(ticker: str, period: str = "1y") -> list[dict]:
     """Fetch OHLCV history synchronously."""
     t = yf.Ticker(ticker)
     hist = t.history(period=period, interval="1d", auto_adjust=True)
@@ -224,6 +226,15 @@ def _enrich_with_technicals(quote: dict, history: list[dict]) -> dict:
     avg_vol_20 = sum(vols[-20:]) / min(20, len(vols)) if vols else 0
     avg_vol_5 = sum(vols[-5:]) / min(5, len(vols)) if vols else 0
     vol_r = (avg_vol_5 / avg_vol_20) if avg_vol_20 > 0 else 1.0
+    avg_dollar_vol_m = (avg_vol_20 * price / 1_000_000) if avg_vol_20 and price else None
+
+    def period_return(series: list[float] | None, bars: int) -> float | None:
+        if not series or len(series) <= bars:
+            return None
+        base = series[-bars - 1]
+        if not base:
+            return None
+        return ((series[-1] - base) / base) * 100
 
     # SPY closes from memory cache (for Info Ratio) — best-effort
     spy_closes = None
@@ -235,6 +246,13 @@ def _enrich_with_technicals(quote: dict, history: list[dict]) -> dict:
     beta = quote.get("beta")
 
     perf = compute_performance_metrics(closes, spy_closes=spy_closes, beta=beta)
+    ret_5d = period_return(closes, 5)
+    ret_21d = period_return(closes, 21)
+    ret_63d = period_return(closes, 63)
+    spy_ret_21d = period_return(spy_closes, 21)
+    spy_ret_63d = period_return(spy_closes, 63)
+    rel_spy_21d = (ret_21d - spy_ret_21d) if ret_21d is not None and spy_ret_21d is not None else None
+    rel_spy_63d = (ret_63d - spy_ret_63d) if ret_63d is not None and spy_ret_63d is not None else None
 
     # Sparkline: last 7 closes for in-table mini trend chart
     spark = [round(v, 2) for v in closes[-7:]]
@@ -250,9 +268,20 @@ def _enrich_with_technicals(quote: dict, history: list[dict]) -> dict:
         "dc": dc,
         "p52w": round(p52w, 1) if p52w is not None else None,
         "vol_r": round(vol_r, 2),
+        "avg_dollar_vol_m": round(avg_dollar_vol_m, 1) if avg_dollar_vol_m is not None else None,
+        "ret_5d": round(ret_5d, 2) if ret_5d is not None else None,
+        "ret_21d": round(ret_21d, 2) if ret_21d is not None else None,
+        "ret_63d": round(ret_63d, 2) if ret_63d is not None else None,
+        "rel_spy_21d": round(rel_spy_21d, 2) if rel_spy_21d is not None else None,
+        "rel_spy_63d": round(rel_spy_63d, 2) if rel_spy_63d is not None else None,
         **perf,
     }
     enriched["score"] = compute_score(enriched)
+    swing = compute_swing_score(enriched)
+    enriched["swing_score"] = swing["score"]
+    enriched["swing_grade"] = swing["grade"]
+    enriched["swing_components"] = swing["components"]
+    enriched["swing_reasons"] = swing["reasons"]
 
     # Final NaN/Inf guard — prevents JSON serialisation failures from bad yfinance data
     def _safe_val(v):
@@ -327,7 +356,7 @@ async def get_quote(ticker: str, db: Session, force_refresh: bool = False) -> Op
     return enriched
 
 
-async def get_history(ticker: str, db: Session, period: str = "6mo", force_refresh: bool = False) -> list[dict]:
+async def get_history(ticker: str, db: Session, period: str = "1y", force_refresh: bool = False) -> list[dict]:
     """Return OHLCV history list, using cache."""
     ticker = ticker.upper()
     cache_key = f"history:{ticker}"
@@ -486,6 +515,55 @@ def invalidate_legacy_cache(db: Session) -> int:
     if count:
         db.commit()
         logger.info(f"Invalidated {count} legacy cache entries missing performance metrics — will re-fetch")
+    return count
+
+
+def invalidate_short_history_cache(db: Session, min_bars: int = 200) -> int:
+    """Force refresh for legacy 6-month histories that cannot compute MA200.
+
+    Older installs cached about 6 months of bars, so quote enrichment could not
+    produce vs_ma200 and market breadth showed 0% above the 200-day average.
+    """
+    epoch = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    rows = db.query(StockCache).filter(StockCache.history_json.isnot(None)).all()
+    count = 0
+    for row in rows:
+        try:
+            bars = json.loads(row.history_json or "[]")
+        except Exception:
+            bars = []
+        if len(bars) < min_bars:
+            row.history_cached_at = epoch
+            row.quote_cached_at = epoch
+            row.cached_at = epoch
+            count += 1
+    if count:
+        db.commit()
+        logger.info(
+            "Invalidated %s short history cache entries (<%s bars) so MA200 breadth can refresh",
+            count,
+            min_bars,
+        )
+    return count
+
+
+def invalidate_missing_swing_score_cache(db: Session) -> int:
+    """Force quote refresh for cache rows created before swing_score existed."""
+    epoch = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    rows = db.query(StockCache).filter(StockCache.quote_json.isnot(None)).all()
+    count = 0
+    for row in rows:
+        try:
+            data = json.loads(row.quote_json or "{}")
+        except Exception:
+            data = {}
+        if "swing_score" not in data:
+            row.quote_cached_at = epoch
+            row.cached_at = epoch
+            count += 1
+    if count:
+        db.commit()
+        logger.info("Invalidated %s cache entries missing swing_score — will re-score", count)
     return count
 
 

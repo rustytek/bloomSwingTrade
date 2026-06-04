@@ -47,6 +47,7 @@
     .stat-label { font-size: 11px; color: #777; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 5px; }
     .stat-value { font-size: 22px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #e0e0e0; }
     .stat-sub { font-size: 12px; color: #888; margin-top: 4px; }
+    .stat-help { font-size: 11px; color: #666; line-height: 1.45; margin-top: 9px; padding-top: 9px; border-top: 1px solid #1a1a1a; }
     .up { color: #26a65b; }
     .down { color: #e05252; }
     .warn { color: #f0a500; }
@@ -193,6 +194,9 @@
         <div class="panel-title" title="Treasury yields reflect the cost of borrowing. Rising 10yr yield = growth/inflation expectations. When 2yr > 10yr (inverted), it historically signals recession risk within 12-18 months. Watch for yield curve normalization as a bullish macro signal.">10yr &amp; 2yr Treasury Yields <span class="panel-sub">gold = 10yr · blue = 2yr</span></div>
         <div class="lw-chart" id="yieldChart"></div>
         <div class="panel-desc">
+          <strong>Plain English:</strong> These lines show what the market thinks money should cost over short and long time periods.
+          The 2yr line reacts quickly to Fed policy expectations; the 10yr line reflects longer-term growth and inflation expectations.
+          <br>
           <strong>What to watch:</strong> Rising 10yr yield signals growth/inflation expectations — good for banks, bad for long-duration growth stocks.
           When <span class="tag tag-bear">2yr &gt; 10yr</span> the curve is <em>inverted</em> — a historically reliable recession signal within 12–18 months.
           <span class="tag tag-bull">10yr &gt; 2yr</span> = normal, healthy lending environment. Watch for the spread crossing zero as a regime change indicator.
@@ -202,6 +206,8 @@
         <div class="panel-title" title="The yield spread (10yr minus 2yr) is the most watched recession indicator. Positive (green) = normal, healthy lending conditions. Negative/inverted (red) = banks have less incentive to lend, credit tightens. Re-inversion or deep inversion is bearish for equities.">Yield Spread: 10yr − 2yr <span class="panel-sub">green = normal · red = inverted</span></div>
         <div class="lw-chart" id="spreadChart"></div>
         <div class="panel-desc">
+          <strong>Plain English:</strong> This subtracts the 2yr yield from the 10yr yield. Above zero usually means normal credit conditions; below zero means the curve is inverted.
+          <br>
           <strong>What to watch:</strong> <span class="tag tag-bull">Positive spread</span> = banks profit lending long-term → credit availability is healthy.
           <span class="tag tag-bear">Negative / inverted</span> = banks have less incentive to lend, credit tightens → historically precedes recessions.
           The re-steepening after inversion (spread rising back toward 0) is often the period when recession actually hits — not the inversion itself.
@@ -211,6 +217,8 @@
         <div class="panel-title" title="M2 is the broadest measure of money supply (cash + checking + savings + money market). Expanding M2 adds liquidity to the system — historically bullish for risk assets. Contracting M2 (rare) drains liquidity and pressures valuations.">M2 Money Supply <span class="panel-sub">billions USD</span></div>
         <div class="lw-chart" id="m2Chart"></div>
         <div class="panel-desc">
+          <strong>Plain English:</strong> M2 is a broad measure of cash and cash-like money in the economy. More liquidity can support risk assets; less liquidity can make rallies harder to sustain.
+          <br>
           <strong>What to watch:</strong> <span class="tag tag-bull">Rising M2</span> = more liquidity in the financial system — bullish for equities, especially growth stocks and crypto.
           <span class="tag tag-bear">Falling M2</span> = liquidity draining — bearish for risk assets, supports cash/bonds.
           M2 rate-of-change (acceleration) matters more than level. A slowdown in growth can precede pullbacks even while M2 is still rising.
@@ -220,6 +228,8 @@
         <div class="panel-title" title="The Federal Funds Rate is the overnight lending rate set by the Fed. It is the primary tool of monetary policy. Rate hikes raise the discount rate for all future cash flows — compressing equity valuations, especially for growth stocks. Rate cuts act as a liquidity stimulus.">Federal Funds Rate <span class="panel-sub">%</span></div>
         <div class="lw-chart" id="fedChart"></div>
         <div class="panel-desc">
+          <strong>Plain English:</strong> This is the Fed's main policy rate. Higher rates make borrowing more expensive; lower rates usually add stimulus and liquidity.
+          <br>
           <strong>What to watch:</strong> <span class="tag tag-bear">Rising rates</span> = tighter policy — raises the discount rate for stocks, pressures valuations, especially growth/tech.
           <span class="tag tag-bull">Cutting cycle</span> = monetary stimulus — historically bullish for equities and real estate.
           The <em>peak</em> of a rate cycle is key: equities often rally before the first cut as markets price in easing. The rate level vs. inflation (real rate) matters most.
@@ -244,6 +254,8 @@
       <div class="panel-title" title="The VIX measures implied volatility (fear) in the S&amp;P 500 options market. What to look for: VIX below 15 = complacency (market may be overextended). VIX 15-20 = neutral. VIX above 20 = elevated fear (potential buy opportunity as fear spikes are often contrarian). VIX above 30 = extreme fear (panic — often marks bottoms). Rising VIX + falling price = sellers in control. Falling VIX + rising price = healthy uptrend.">VIX — CBOE Volatility Index <span class="panel-sub">20 = fear threshold · 30 = extreme fear</span></div>
       <div class="lw-chart" id="vixChart"></div>
       <div class="panel-desc">
+        <strong>Plain English:</strong> VIX is the market's fear gauge. A low VIX means traders are calm; a high VIX means traders are paying up for protection.
+        <br>
         <strong>Reading the VIX:</strong>
         <span class="tag tag-warn">VIX &lt; 15</span> Complacency — market may be overextended, risk/reward deteriorating.
         <span class="tag tag-info">VIX 15–20</span> Neutral — normal market environment.
@@ -272,6 +284,9 @@
           <div id="breadthStats"></div>
         </div>
         <div class="panel-desc">
+          <strong>Plain English:</strong> Breadth asks whether the whole market is participating, not just a few mega-cap stocks.
+          If price is rising but fewer stocks are above their moving averages, the rally may be weaker than it looks.
+          <br>
           <strong>What to watch:</strong>
           <span class="tag tag-bull">&gt;70% above 200MA</span> Bull market — broad participation.
           <span class="tag tag-info">50–70%</span> Healthy uptrend.
@@ -284,6 +299,9 @@
         <div class="panel-title" title="Shows what percentage of stocks in each S&P 500 sector are trading above their 200-day moving average. Sectors with high breadth (green bars) are in strong uptrends. Sectors with low breadth (red bars) are in downtrends or correcting. Compare across sectors to spot rotation — money moving from weak to strong sectors.">Sector % Above 200MA <span class="panel-sub">from screener cache · refreshes with screener</span></div>
         <div id="sectorBreadthBars"><div class="muted" style="font-size:12px;padding:10px;">Loading…</div></div>
         <div class="panel-desc">
+          <strong>Plain English:</strong> This shows which sectors have the most stocks in long-term uptrends.
+          Look for green sectors when hunting long setups; be more careful with red sectors unless you are looking for shorts or reversals.
+          <br>
           <strong>What to watch:</strong> Bars show % of stocks within each sector trading above their 200-day moving average.
           <span class="tag tag-bull">Green (&gt;70%)</span> sector is in a strong uptrend — favorable for swing longs.
           <span class="tag tag-warn">Yellow (30–70%)</span> mixed — select stocks only.
@@ -645,6 +663,14 @@ function esc(value) {
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[ch]));
 }
+function renderStatCards(cards) {
+  return cards.map(c => `<div class="stat-card" title="${esc(c.tip || c.help || '')}">
+    <div class="stat-label">${esc(c.label)}</div>
+    <div class="stat-value ${esc(c.cls || '')}">${c.value}</div>
+    <div class="stat-sub">${c.sub}</div>
+    ${c.help ? `<div class="stat-help">${c.help}</div>` : ''}
+  </div>`).join('');
+}
 function safeTicker(value) {
   return String(value ?? '').toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 15);
 }
@@ -721,34 +747,38 @@ async function loadMacro() {
     }
 
     // ── Macro stat cards ────────────────────────────────────────────────
-    document.getElementById('macroStatRow').innerHTML = [
-      { label: 'Fed Funds', value: `${macro?.fed_rate ?? '—'}%`, sub: 'Target rate', cls: '' },
-      { label: '2yr Yield', value: `${macro?.yield_2yr ?? '—'}%`, sub: 'Treasury', cls: '' },
-      { label: '10yr Yield', value: `${macro?.yield_10yr ?? '—'}%`, sub: 'Treasury', cls: '' },
+    document.getElementById('macroStatRow').innerHTML = renderStatCards([
+      { label: 'Fed Funds', value: `${macro?.fed_rate ?? '—'}%`, sub: 'Target rate', cls: '',
+        help: 'The Fed policy rate. Higher = tighter money and more pressure on valuations. Lower = easier money and more liquidity.' },
+      { label: '2yr Yield', value: `${macro?.yield_2yr ?? '—'}%`, sub: 'Treasury', cls: '',
+        help: 'Short-term bond yield. It moves quickly when investors expect Fed hikes or cuts.' },
+      { label: '10yr Yield', value: `${macro?.yield_10yr ?? '—'}%`, sub: 'Treasury', cls: '',
+        help: 'Long-term bond yield. Rising 10yr yields can pressure growth stocks and help banks.' },
       { label: 'Yield Spread', value: spread != null ? `${spread > 0 ? '+' : ''}${spread.toFixed(3)}%` : '—',
         sub: inverted ? '<span class="warn">⚠ Inverted</span>' : 'Normal curve',
-        cls: inverted ? 'warn' : spread >= 0 ? 'up' : 'down' },
+        cls: inverted ? 'warn' : spread >= 0 ? 'up' : 'down',
+        help: '10yr minus 2yr. Positive is normal. Negative/inverted is a credit and recession warning signal.' },
       { label: 'M2 Supply', value: macro?.m2_current != null ? `$${macro.m2_current.toFixed(0)}B` : '—',
-        sub: `Trend: ${macro?.m2_trend ?? '—'}`, cls: '' },
-    ].map(c => `<div class="stat-card"><div class="stat-label">${c.label}</div>
-      <div class="stat-value ${c.cls}">${c.value}</div>
-      <div class="stat-sub">${c.sub}</div></div>`).join('');
+        sub: `Trend: ${macro?.m2_trend ?? '—'}`, cls: '',
+        help: 'Broad money supply. Rising or accelerating M2 means more liquidity; falling or slowing M2 can pressure risk assets.' },
+    ]);
 
     // ── VIX stat card ───────────────────────────────────────────────────
     const breadthPct = breadth?.pct_above_200ma ?? 0;
-    document.getElementById('vixStatRow').innerHTML = [
+    document.getElementById('vixStatRow').innerHTML = renderStatCards([
       { label: 'VIX', value: vixCurrent?.toFixed(2) ?? '—',
         sub: `<span class="vix-badge zone-${vixZone}">${vixZone.replace('_',' ')}</span>`,
-        cls: vixCurrent > 25 ? 'down' : vixCurrent > 18 ? 'warn' : 'up' },
+        cls: vixCurrent > 25 ? 'down' : vixCurrent > 18 ? 'warn' : 'up',
+        help: 'Fear gauge for S&P 500 options. Low = calm; high = fear. Spikes can mark panic selloffs.' },
       { label: 'S&P 500 Breadth', value: `${breadthPct}%`,
         sub: `Above 200MA — Regime: <b>${breadth?.regime ?? '—'}</b>`,
-        cls: breadthPct >= 60 ? 'up' : breadthPct >= 40 ? 'warn' : 'down' },
+        cls: breadthPct >= 60 ? 'up' : breadthPct >= 40 ? 'warn' : 'down',
+        help: 'Percent of S&P 500 stocks in long-term uptrends. Above 60 is healthier; below 40 is caution.' },
       { label: 'A/D Ratio', value: breadth?.ad_ratio ?? '—',
         sub: `${breadth?.advancing ?? 0} adv / ${breadth?.declining ?? 0} dec`,
-        cls: (breadth?.ad_ratio ?? 0) >= 1 ? 'up' : 'down' },
-    ].map(c => `<div class="stat-card"><div class="stat-label">${c.label}</div>
-      <div class="stat-value ${c.cls}">${c.value}</div>
-      <div class="stat-sub">${c.sub}</div></div>`).join('');
+        cls: (breadth?.ad_ratio ?? 0) >= 1 ? 'up' : 'down',
+        help: 'Advancing stocks divided by declining stocks today. Above 1 means more stocks are rising than falling.' },
+    ]);
 
     // ── LW Charts ───────────────────────────────────────────────────────
     const yieldChart = makeLWChart('yieldChart');

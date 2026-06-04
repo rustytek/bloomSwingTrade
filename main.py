@@ -35,7 +35,13 @@ from api.charts import router as charts_router
 from api.backtest import router as backtest_router
 from generate_ssl import generate_ssl_cert
 from services.universe import UNIVERSE
-from services.market_data import refresh_universe, cleanup_old_entries, invalidate_legacy_cache
+from services.market_data import (
+    refresh_universe,
+    cleanup_old_entries,
+    invalidate_legacy_cache,
+    invalidate_short_history_cache,
+    invalidate_missing_swing_score_cache,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -119,6 +125,8 @@ async def lifespan(app: FastAPI):
     try:
         cleanup_old_entries(db)
         invalidate_legacy_cache(db)
+        invalidate_short_history_cache(db)
+        invalidate_missing_swing_score_cache(db)
     finally:
         db.close()
     # Kick off background universe data refresh (non-blocking)
@@ -151,7 +159,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.5.4",
+    version="1.5.7",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

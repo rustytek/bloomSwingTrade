@@ -284,6 +284,13 @@
       calmar: 'Calmar Ratio — Annualized Return ÷ Max Drawdown (full history). Measures blow-up risk and recovery quality. >1 = good, >3 = excellent. High Calmar = strong returns with shallow drawdowns.',
       info_ratio: 'Information Ratio — (Stock Return − SPY Return) ÷ Tracking Error. Measures consistency of alpha over the S&P 500 benchmark. >0.5 = good, >1 = excellent. Negative = underperforms SPY.',
       treynor: 'Treynor Ratio — (Return − Risk-Free Rate) ÷ Beta (β). Uses only systematic/market risk, not total volatility. Best for well-diversified portfolios. >0.1 = good, >0.5 = excellent.',
+      swing_score: 'Swing Score 0-100. Weighted ranking for weekly swing candidates: trend 25, momentum/relative strength 25, risk 20, liquidity/volume 15, fundamentals 15.',
+      swing_reasons: 'Top reasons this ticker ranked where it did. Use these as quick setup notes, not a buy signal by themselves.',
+      ret_5d: '5 trading-day return. Shows very recent momentum.',
+      ret_21d: '21 trading-day return, roughly one month. Useful for weekly swing momentum.',
+      ret_63d: '63 trading-day return, roughly three months. Helps separate durable trends from short pops.',
+      rel_spy_21d: '21-day return minus SPY 21-day return. Positive means the stock is beating the S&P 500 recently.',
+      avg_dollar_vol_m: 'Average dollar volume over about 20 trading days, in millions. Higher means easier entry/exit.',
       score_f: 'Fundamental score 0-5. Rates P/E, margins, growth, debt, FCF',
       score_t: 'Technical score 0-5. Rates RSI, MACD, MA position, volume',
       score_m: 'Momentum score 0-5. Rates 52W position, volume trend, earnings',
@@ -297,6 +304,8 @@
     const ALL_COLS = [
       { k: 'spark', label: 'Trend', w: 20 },
       { k: 'ticker', label: 'Ticker', w: 80 },
+      { k: 'swing_score', label: 'Swing', w: 74 },
+      { k: 'swing_reasons', label: 'Why', w: 190 },
       { k: 'name', label: 'Name', w: 155 },
       { k: 'price', label: 'Price', w: 75 },
       { k: 'chg_pct', label: 'Chg%', w: 70 },
@@ -322,6 +331,11 @@
       { k: 'vs_ma200', label: 'vMA200', w: 72 },
       { k: 'p52w', label: '52W%', w: 58 },
       { k: 'vol_r', label: 'VolR', w: 58 },
+      { k: 'ret_5d', label: '5D', w: 58 },
+      { k: 'ret_21d', label: '21D', w: 58 },
+      { k: 'ret_63d', label: '63D', w: 58 },
+      { k: 'rel_spy_21d', label: 'RS SPY', w: 68 },
+      { k: 'avg_dollar_vol_m', label: '$Vol', w: 68 },
       { k: 'vol', label: 'Vol', w: 55 },
       { k: 'div', label: 'Div%', w: 55 },
       { k: 'gain_sharpe', label: 'Gain Sh.', w: 70 },
@@ -330,7 +344,7 @@
       { k: 'score_m', label: 'M', w: 42 },
       { k: 'vol_1m', label: 'Vol 1M', w: 68 },
     ];
-    const DEFAULT_COLS = ['spark', 'ticker', 'name', 'price', 'chg_pct', 'pe', 'rsi', 'vs_ma50', 'sharpe', 'sortino', 'max_dd_1m', 'ann_ret', 'beta', 'calmar', 'info_ratio', 'treynor', 'score'];
+    const DEFAULT_COLS = ['spark', 'ticker', 'swing_score', 'swing_reasons', 'name', 'price', 'chg_pct', 'rsi', 'vs_ma50', 'ret_21d', 'rel_spy_21d', 'sortino', 'max_dd_1m', 'vol_1m', 'score'];
 
     /* ── Sector colors for diversification view ── */
     const SECTOR_COLORS = {
@@ -353,6 +367,7 @@
 
     /* ── Presets ── */
     const PRESETS = [
+      { name: 'Swing Score 65+', f: { swing_score_min: 65 } },
       { name: 'Breakout', f: { rsi_min: 55, rsi_max: 70, vs_ma50: 'above', vol_r_min: 1.5, p52w_min: 70 } },
       { name: 'Value', f: { pe_max: 15, fwd_pe_max: 12, pm_min: 10, fcf_only: true } },
       { name: 'Growth', f: { eps_grw_min: 20, rev_grw_min: 15, rsi_min: 50 } },
@@ -372,7 +387,7 @@
       gain_sharpe_min: '', vol_max: '',
       beta_min: '', beta_max: '', div_min: '', div_max: '', sectors: [],
       asset_type: '', cap_tier: '',
-      score_min: '', score_f_min: '', score_t_min: '', score_m_min: '',
+      swing_score_min: '', score_min: '', score_f_min: '', score_t_min: '', score_m_min: '',
       sharpe_min: '', sortino_min: '', calmar_min: '', info_ratio_min: '', treynor_min: '', max_dd_1m_max: '',
       tickers: [],
       force_refresh: false,
@@ -723,7 +738,7 @@
               { lbl: 'RSI(14)', val: stock.rsi != null ? fmt1(stock.rsi) : '—', tip: 'Relative Strength Index. Best swing entry: 40-65 zone. <30 = oversold, >70 = overbought.', col: stock.rsi != null && stock.rsi >= 40 && stock.rsi <= 65 ? '#00d26a' : stock.rsi != null && stock.rsi > 70 ? '#ff4d4d' : '#f0a500' },
               { lbl: 'vs MA200', val: stock.vs_ma200 != null ? fmtPct(stock.vs_ma200) : '—', tip: '% above/below 200-day MA. Positive = uptrend. Best for swing longs: >0%.', col: (stock.vs_ma200 || 0) > 0 ? '#00d26a' : '#ff4d4d' },
               { lbl: 'Sharpe', val: stock.sharpe != null ? fmt2(stock.sharpe) : '—', tip: 'Risk-adjusted return. >1 = good, >2 = excellent.', col: (stock.sharpe || 0) > 1 ? '#00d26a' : (stock.sharpe || 0) > 0 ? '#f0a500' : '#ff4d4d' },
-              { lbl: 'Score', val: stock.score?.o != null ? `${stock.score.o}/5` : '—', tip: 'Composite F+T+M score. Higher = better quality setup.', col: (stock.score?.o || 0) >= 4 ? '#00d26a' : (stock.score?.o || 0) >= 3 ? '#f0a500' : '#ff4d4d' },
+              { lbl: 'Swing', val: stock.swing_score != null ? `${stock.swing_score}/100` : '—', tip: COL_TIPS.swing_score, col: stock.swing_score != null ? scoreGradient(stock.swing_score, 100) : '#555' },
             ].map(({ lbl, val, tip, col }) => (
               <div key={lbl} title={tip} style={{ background: '#0d0d0d', borderRadius: 4, padding: '8px 10px', border: '1px solid #1a1a1a', cursor: 'help' }}>
                 <div style={{ fontSize: 10, color: '#555', marginBottom: 3 }}>{lbl}</div>
@@ -802,6 +817,7 @@
       const s = stock;
       const infoRows = [
         ['Sector', s.sector], ['Industry', s.industry], ['Market Cap', fmtB(s.mkt_cap)],
+        ['Swing Score', s.swing_score != null ? `${s.swing_score}/100 ${s.swing_grade || ''}` : null],
         ['Price', s.price != null ? '$' + fmt2(s.price) : null], ['Change', s.chg_pct != null ? fmtPct(s.chg_pct) : null],
         ['Beta', fmt2(s.beta)], ['Dividend Yield', s.div != null ? s.div + '%' : null],
         ['P/E', fmt2(s.pe)], ['Forward P/E', fmt2(s.fwd_pe)],
@@ -815,6 +831,11 @@
         ['vs MA200', s.vs_ma200 != null ? fmtPct(s.vs_ma200) : null],
         ['52W Position', s.p52w != null ? s.p52w + '%' : null],
         ['Volume Ratio', fmt2(s.vol_r)],
+        ['5D Return', s.ret_5d != null ? fmtPct(s.ret_5d) : null],
+        ['21D Return', s.ret_21d != null ? fmtPct(s.ret_21d) : null],
+        ['63D Return', s.ret_63d != null ? fmtPct(s.ret_63d) : null],
+        ['21D vs SPY', s.rel_spy_21d != null ? fmtPct(s.rel_spy_21d) : null],
+        ['Avg $ Volume', s.avg_dollar_vol_m != null ? '$' + fmt1(s.avg_dollar_vol_m) + 'M' : null],
         ['Ann Return', s.ann_ret != null ? fmtPct(s.ann_ret) : null],
         ['Volatility', s.vol != null ? fmtPct(s.vol) : null],
         ['Sharpe', fmt2(s.sharpe)],
@@ -905,6 +926,40 @@
                     <ScoreDots val={val || 0} color={col} />
                   </div>
                 ))}
+              </div>}
+              {s.swing_score != null && <div title={COL_TIPS.swing_score} style={{
+                marginTop: 10, padding: '10px 12px', background: '#0d0d0d',
+                borderRadius: 4, border: '1px solid #1a1a1a'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+                  <div className="mono" style={{ fontSize: 20, fontWeight: 800, color: scoreGradient(s.swing_score, 100) }}>
+                    {s.swing_score}/100
+                  </div>
+                  <div style={{ color: '#777', fontSize: 11 }}>Swing Score {s.swing_grade ? `Grade ${s.swing_grade}` : ''}</div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 8 }}>
+                  {[
+                    ['Trend', s.swing_components?.trend, 25],
+                    ['Momentum', s.swing_components?.momentum, 25],
+                    ['Risk', s.swing_components?.risk, 20],
+                    ['Liquidity', s.swing_components?.liquidity, 15],
+                    ['Fundamentals', s.swing_components?.fundamentals, 15],
+                  ].map(([lbl, val, max]) => (
+                    <div key={lbl} title={`${lbl}: ${val ?? 0}/${max}`} style={{ minWidth: 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#666', marginBottom: 3 }}>
+                        <span>{lbl}</span><span className="mono">{val ?? 0}/{max}</span>
+                      </div>
+                      <div style={{ height: 4, background: '#1a1a1a', borderRadius: 2, overflow: 'hidden' }}>
+                        <div style={{ width: `${Math.max(0, Math.min(100, ((val || 0) / max) * 100))}%`, height: '100%', background: scoreGradient(val || 0, max) }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {(s.swing_reasons || []).slice(0, 5).map(r => (
+                    <span key={r} style={{ fontSize: 10, color: '#aaa', background: '#151515', border: '1px solid #222', borderRadius: 3, padding: '3px 6px' }}>{r}</span>
+                  ))}
+                </div>
               </div>}
             </>}
             {tab === 'fundamentals' && <>
@@ -1871,7 +1926,7 @@
       const countMom = () => [f.vol_r_min, f.p52w_min, f.p52w_max, f.earn_beat, f.earn_soon, f.gain_sharpe_min, f.vol_max]
         .filter(v => v !== '' && v !== false && v != null).length;
       const countUni = () => [f.asset_type, f.cap_tier, ...f.sectors].filter(v => v !== '' && v != null).length;
-      const countScore = () => [f.score_min, f.score_f_min, f.score_t_min, f.score_m_min].filter(v => v !== '' && v != null).length;
+      const countScore = () => [f.swing_score_min, f.score_min, f.score_f_min, f.score_t_min, f.score_m_min].filter(v => v !== '' && v != null).length;
       const countPort = () => [f.div_min, f.div_max].filter(v => v !== '' && v != null).length;
       const countRisk = () => [f.sharpe_min, f.sortino_min, f.calmar_min, f.info_ratio_min, f.treynor_min, f.beta_min, f.beta_max, f.max_dd_1m_max].filter(v => v !== '' && v != null).length;
 
@@ -2016,6 +2071,11 @@
           </FilterSection>
 
           <FilterSection title="Score" badge={countScore()}>
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}><Tip label="Min Swing Score" tip={COL_TIPS.swing_score} /></div>
+              <input type="number" placeholder="e.g. 65" step="1" min="0" max="100" value={f.swing_score_min ?? ''}
+                onChange={e => setFilters(p => ({ ...p, swing_score_min: e.target.value }))} style={{ width: '100%' }} />
+            </div>
             {[['score_min', 'Overall', COL_TIPS.score], ['score_f_min', 'Fundamental', COL_TIPS.score_f],
             ['score_t_min', 'Technical', COL_TIPS.score_t], ['score_m_min', 'Momentum', COL_TIPS.score_m]].map(([key, label, tip]) => (
               <div key={key} style={{ marginBottom: 6 }}>
@@ -2057,7 +2117,7 @@
         f.rev_grw_min, f.rev_grw_max, f.pm_min, f.pm_max, f.debt_eq_min, f.debt_eq_max,
         f.rsi_min, f.rsi_max, f.macd, f.vs_ma200, f.vs_ma50, f.vol_r_min, f.p52w_min, f.p52w_max, f.gain_sharpe_min, f.vol_max,
         f.beta_min, f.beta_max, f.div_min, f.div_max, f.asset_type, f.cap_tier,
-        f.score_min, f.score_f_min, f.score_t_min, f.score_m_min,
+        f.swing_score_min, f.score_min, f.score_f_min, f.score_t_min, f.score_m_min,
         f.sharpe_min, f.sortino_min, f.calmar_min, f.info_ratio_min, f.treynor_min, f.max_dd_1m_max, ...f.sectors]
           .filter(v => v !== '' && v !== false && v != null).length +
           (f.fcf_only ? 1 : 0) + (f.gc ? 1 : 0) + (f.dc ? 1 : 0) + (f.earn_beat ? 1 : 0) + (f.earn_soon ? 1 : 0);
@@ -2249,6 +2309,23 @@
             maxWidth: 150, display: 'block'
           }} title={s.name}>{s.name}</span>;
           case 'spark': return <Sparkline data={s.spark} width={27} height={26} />;
+          case 'swing_score': {
+            const v = s.swing_score;
+            return v != null ? <div title={(s.swing_reasons || []).join('\n')} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span className="mono" style={{ color: scoreGradient(v, 100), fontWeight: 800 }}>{v}</span>
+              <span style={{
+                fontSize: 9, color: '#111', background: scoreGradient(v, 100),
+                borderRadius: 3, padding: '1px 4px', fontWeight: 800
+              }}>{s.swing_grade || ''}</span>
+            </div> : '—';
+          }
+          case 'swing_reasons': {
+            const reasons = s.swing_reasons || [];
+            return reasons.length ? <div title={reasons.join('\n')} style={{
+              color: '#888', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap', maxWidth: 185
+            }}>{reasons.slice(0, 2).join(' • ')}</div> : <span style={{ color: '#444' }}>—</span>;
+          }
           case 'price': return s.price != null ?
             <span className="mono" style={{
               background: heatMode ? heatColor(s.chg_pct) : 'transparent',
@@ -2274,6 +2351,11 @@
           case 'vs_ma200': return s.vs_ma200 != null ? <span className="mono" style={{ color: clr(s.vs_ma200) }}>{fmtPct(s.vs_ma200)}</span> : '—';
           case 'p52w': return s.p52w != null ? <span className="mono">{s.p52w}%</span> : '—';
           case 'vol_r': return s.vol_r != null ? <span className="mono" style={{ color: s.vol_r > 1.5 ? '#f0a500' : s.vol_r < 0.7 ? '#555' : '#c8c8c8' }}>{fmt2(s.vol_r)}×</span> : '—';
+          case 'ret_5d':
+          case 'ret_21d':
+          case 'ret_63d':
+          case 'rel_spy_21d': return s[k] != null ? <span className="mono" style={{ color: clr(s[k]) }}>{fmtPct(s[k])}</span> : '—';
+          case 'avg_dollar_vol_m': return s.avg_dollar_vol_m != null ? <span className="mono">${fmt1(s.avg_dollar_vol_m)}M</span> : '—';
           case 'beta': return <span className="mono">{fmt2(s.beta)}</span>;
           case 'div': return s.div != null ? <span className="mono" style={{ color: '#00d26a' }}>{s.div}%</span> : '—';
           case 'ann_ret': return s.ann_ret != null ? <span className="mono" style={{ color: clr(s.ann_ret) }}>{fmtPct(s.ann_ret)}</span> : '—';
@@ -2369,7 +2451,7 @@
       const [results, setResults] = useState([]);
       const [loading, setLoading] = useState(false);
       const [filters, setFilters] = useState(defFilters());
-      const [sortKey, setSortKey] = useState('score');
+      const [sortKey, setSortKey] = useState('swing_score');
       const [sortDir, setSortDir] = useState('desc');
       const [selected, setSelected] = useState(null);
       const [selectedHistory, setSelectedHistory] = useState(null);
@@ -2526,6 +2608,7 @@
         else if (sortKey === 'score_f') { av = a.score?.f ?? -1; bv = b.score?.f ?? -1; }
         else if (sortKey === 'score_t') { av = a.score?.t ?? -1; bv = b.score?.t ?? -1; }
         else if (sortKey === 'score_m') { av = a.score?.m ?? -1; bv = b.score?.m ?? -1; }
+        else if (sortKey === 'swing_reasons') { av = (a.swing_reasons || []).join(' '); bv = (b.swing_reasons || []).join(' '); }
         else { av = a[sortKey] ?? -Infinity; bv = b[sortKey] ?? -Infinity; }
         if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
         return sortDir === 'asc' ? av - bv : bv - av;

@@ -62,6 +62,7 @@ class ScreenerFilters(BaseModel):
     cap_tier: Optional[str] = None       # "Large" | "Mid" | "Small" | None (all)
 
     # Score filters
+    swing_score_min: Optional[int] = None
     score_min: Optional[int] = None
     score_f_min: Optional[int] = None
     score_t_min: Optional[int] = None
@@ -126,7 +127,7 @@ def _passes(stock: dict, f: ScreenerFilters) -> bool:
 
     if not between(stock.get("vol_r"), f.vol_r_min, None): return False
     if not between(stock.get("gain_sharpe"), f.gain_sharpe_min, None): return False
-    if not between(stock.get("vol"), None, f.vol_max): return False
+    if not between(stock.get("vol_1m", stock.get("vol")), None, f.vol_max): return False
     if not between(stock.get("p52w"), f.p52w_min, f.p52w_max): return False
     if f.earn_beat and not stock.get("earn_beat"): return False
     if f.earn_soon and not stock.get("earn_soon"): return False
@@ -136,6 +137,7 @@ def _passes(stock: dict, f: ScreenerFilters) -> bool:
     if f.sectors and stock.get("sector") not in f.sectors: return False
 
     sc = stock.get("score") or {}
+    if f.swing_score_min is not None and (stock.get("swing_score") or 0) < f.swing_score_min: return False
     if f.score_min is not None and (sc.get("o") or 0) < f.score_min: return False
     if f.score_f_min is not None and (sc.get("f") or 0) < f.score_f_min: return False
     if f.score_t_min is not None and (sc.get("t") or 0) < f.score_t_min: return False
@@ -178,6 +180,7 @@ async def screen(
             pass
 
     passed = [clean_nans(q) for q in all_quotes if _passes(q, filters)]
+    passed.sort(key=lambda q: q.get("swing_score") or -1, reverse=True)
     universe_status = clean_nans(get_universe_status(db, UNIVERSE))
 
     return {

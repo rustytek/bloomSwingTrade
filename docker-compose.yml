@@ -19,7 +19,7 @@ services:
       # ── Security ─────────────────────────────────────────────────────────
       - SECRET_KEY=${SECRET_KEY:-change-this-to-a-random-secret-at-least-32-chars}
 
-      # ── Initial Admin (first-run only) ────────────────────────────────────
+      # ── Admin account (synced on startup) ─────────────────────────────────
       - ADMIN_USER=${ADMIN_USER:-admin}
       - ADMIN_PASS=${ADMIN_PASS:-changeme}
 

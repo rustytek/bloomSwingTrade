@@ -25,6 +25,7 @@ from services.indicators import (
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 # In-memory layer on top of SQLite cache
 _mem_cache: dict[str, dict] = {}
@@ -98,17 +99,32 @@ def _attach_cache_metadata(data: dict, cached_at: datetime | None) -> dict:
 def _fetch_quote_sync(ticker: str) -> dict:
     """Fetch quote + fundamentals synchronously via yfinance."""
     t = yf.Ticker(ticker)
-    info = t.fast_info
+    info = None
     full_info = {}
+    try:
+        info = t.fast_info
+    except Exception as e:
+        logger.debug("t.fast_info failed for %s: %s", ticker, e)
     try:
         full_info = t.info or {}
     except Exception as e:
-        logger.warning(f"t.info failed for {ticker}: {e}")
+        logger.debug("t.info failed for %s: %s", ticker, e)
 
     # fast_info fields (always available)
-    price = getattr(info, "last_price", None) or full_info.get("currentPrice")
-    prev_close = getattr(info, "previous_close", None) or full_info.get("previousClose")
-    mkt_cap = getattr(info, "market_cap", None) or full_info.get("marketCap")
+    def fast_attr(name: str):
+        if info is None:
+            return None
+        try:
+            return getattr(info, name, None)
+        except Exception:
+            return None
+
+    price = fast_attr("last_price") or full_info.get("currentPrice")
+    prev_close = fast_attr("previous_close") or full_info.get("previousClose")
+    mkt_cap = fast_attr("market_cap") or full_info.get("marketCap")
+
+    if price is None and not full_info:
+        raise ValueError("Yahoo returned no quote data")
 
     chg_pct = None
     if price and prev_close and prev_close != 0:
@@ -342,7 +358,7 @@ async def get_quote(ticker: str, db: Session, force_refresh: bool = False) -> Op
             history = []
         enriched = _enrich_with_technicals(quote, history)
     except Exception as e:
-        logger.error(f"Failed to fetch {ticker}: {e}")
+        logger.warning("Skipping %s: %s", ticker, e)
         # Write a failure marker so we don't retry until after next market close.
         # quote_json stays None so the ticker won't appear in screener results,
         # but cached_at is set so _is_fresh() treats it as "done for today".

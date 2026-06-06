@@ -1,7 +1,7 @@
 {
   "name": "SwingTrader",
   "description": "Self-hosted swing trading screener — live market data via Yahoo Finance, technical indicators (RSI, MACD, BB, MA), watchlist & portfolio tracking, Fidelity CSV import, and optional AI analysis via LiteLLM/Ollama.",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "slug": "swingtrader",
   "url": "https://github.com/rustytek/bloomSwingTrade",
   "arch": ["amd64", "aarch64"],

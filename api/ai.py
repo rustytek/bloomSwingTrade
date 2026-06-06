@@ -12,16 +12,25 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 settings = get_settings()
 
 
+def current_settings():
+    return get_settings()
+
+
 def llm_base_url() -> str:
-    if settings.ai_provider.lower() == "litellm":
-        return (settings.litellm_url or settings.ollama_url).rstrip("/")
-    return settings.ollama_url.rstrip("/")
+    s = current_settings()
+    provider = s.ai_provider.lower()
+    if provider == "litellm":
+        return (s.litellm_url or s.ollama_url).rstrip("/")
+    if provider == "openai":
+        return "https://api.openai.com"
+    return s.ollama_url.rstrip("/")
 
 
 def llm_headers() -> dict:
-    if settings.ai_provider.lower() != "litellm":
+    s = current_settings()
+    if s.ai_provider.lower() == "ollama":
         return {"Content-Type": "application/json"}
-    api_key = settings.litellm_api_key or settings.ai_api_key
+    api_key = s.litellm_api_key or s.ai_api_key
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -31,9 +40,13 @@ def llm_headers() -> dict:
 async def call_chat_model(system: str, user_msg: str, model: str | None = None, timeout: float = 120.0) -> str:
     import httpx
 
-    provider = settings.ai_provider.lower()
-    model_name = model or settings.ai_model or settings.ollama_model
-    if provider == "litellm":
+    s = current_settings()
+    provider = s.ai_provider.lower()
+    if provider == "none":
+        raise RuntimeError("AI provider is disabled")
+
+    model_name = model or s.ai_model or s.ollama_model
+    if provider in ("litellm", "openai"):
         payload = {
             "model": model_name,
             "stream": False,
@@ -44,11 +57,17 @@ async def call_chat_model(system: str, user_msg: str, model: str | None = None, 
         }
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(f"{llm_base_url()}/v1/chat/completions", json=payload, headers=llm_headers())
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                raise RuntimeError(f"{provider} returned HTTP {resp.status_code}: {resp.text[:500]}") from e
             return resp.json()["choices"][0]["message"]["content"]
 
+    if provider not in ("ollama", "litellm", "openai"):
+        raise RuntimeError(f"AI provider '{provider}' is not supported by this endpoint")
+
     payload = {
-        "model": model or settings.ollama_model,
+        "model": model or s.ollama_model,
         "stream": False,
         "messages": [
             {"role": "system", "content": system},
@@ -56,8 +75,11 @@ async def call_chat_model(system: str, user_msg: str, model: str | None = None, 
         ],
     }
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(f"{settings.ollama_url.rstrip('/')}/api/chat", json=payload)
-        resp.raise_for_status()
+        resp = await client.post(f"{s.ollama_url.rstrip('/')}/api/chat", json=payload)
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(f"ollama returned HTTP {resp.status_code}: {resp.text[:500]}") from e
         return resp.json()["message"]["content"]
 
 
@@ -77,11 +99,12 @@ class ReportRequest(BaseModel):
 
 @router.get("/status")
 def ai_status(user: User = Depends(get_current_user)):
-    provider = settings.ai_provider.lower()
+    s = current_settings()
+    provider = s.ai_provider.lower()
     return {
         "configured": provider != "none",
         "provider": provider,
-        "model": settings.ai_model or settings.ollama_model or "default",
+        "model": s.ai_model or s.ollama_model or "default",
         "base_url": llm_base_url() if provider in ("litellm", "ollama") else None,
     }
 
@@ -154,8 +177,11 @@ async def sector_summary(
 async def ollama_models(user: User = Depends(get_current_user)):
     """Return available local models from Ollama or LiteLLM."""
     import httpx
-    provider = settings.ai_provider.lower()
-    url = f"{llm_base_url()}/v1/models" if provider == "litellm" else settings.ollama_url.rstrip("/") + "/api/tags"
+    s = current_settings()
+    provider = s.ai_provider.lower()
+    if provider == "none":
+        return {"models": [], "provider": provider, "base_url": None}
+    url = f"{llm_base_url()}/v1/models" if provider in ("litellm", "openai") else s.ollama_url.rstrip("/") + "/api/tags"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(url, headers=llm_headers())
@@ -165,7 +191,7 @@ async def ollama_models(user: User = Depends(get_current_user)):
         raise HTTPException(status_code=503, detail=f"Cannot reach local LLM server: {e}")
 
     models = []
-    if provider == "litellm":
+    if provider in ("litellm", "openai"):
         for m in data.get("data", []):
             name = m.get("id") or m.get("name")
             if name:

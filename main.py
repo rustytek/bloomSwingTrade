@@ -24,7 +24,7 @@ from config import get_settings
 from database.db import engine
 from database.models import Base, User
 from database.db import SessionLocal
-from auth.utils import hash_password
+from auth.utils import hash_password, verify_password
 from auth.router import router as auth_router
 from api.stocks import router as stocks_router
 from api.screener import router as screener_router
@@ -86,12 +86,24 @@ async def _scheduled_market_refresh_job():
 
 
 def init_db():
-    """Create all tables and seed the admin user if it doesn't exist."""
+    """Create all tables and sync the configured admin account."""
     Base.metadata.create_all(bind=engine)
     ensure_cache_columns()
     db = SessionLocal()
     try:
-        if not db.query(User).filter(User.username == settings.admin_user).first():
+        admin = db.query(User).filter(User.username == settings.admin_user).first()
+        if admin:
+            changed = False
+            if not verify_password(settings.admin_pass, admin.password_hash):
+                admin.password_hash = hash_password(settings.admin_pass)
+                changed = True
+            if not admin.is_admin:
+                admin.is_admin = True
+                changed = True
+            if changed:
+                db.commit()
+                logger.info("Synced configured admin user: %s", settings.admin_user)
+        else:
             admin = User(
                 username=settings.admin_user,
                 password_hash=hash_password(settings.admin_pass),
@@ -184,7 +196,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.6.0",
+    version="1.6.1",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

@@ -75,8 +75,8 @@ Copy `.env.example` to `.env`. Key variables:
 | Variable | Default | Notes |
 |---|---|---|
 | `SECRET_KEY` | weak default | Change this â€” used for JWT signing |
-| `ADMIN_USER` / `ADMIN_PASS` | `admin` / `changeme` | First-run only; change immediately |
-| `AI_PROVIDER` | `none` | `none` \| `anthropic` \| `openai` \| `ollama` |
+| `ADMIN_USER` / `ADMIN_PASS` | `admin` / `changeme` | Synced to the configured admin account on startup |
+| `AI_PROVIDER` | `litellm` | `none` \| `anthropic` \| `openai` \| `ollama` \| `litellm` |
 | `AI_API_KEY` | â€” | Required when provider is `anthropic` or `openai` |
 | `FRED_API_KEY` | â€” | Optional; enables macro chart data |
 | `OLLAMA_URL` | `http://192.168.10.21:11434` | Local Ollama server |

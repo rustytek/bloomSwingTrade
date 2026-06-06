@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+def current_settings():
+    return get_settings()
+
+
 # ── Sector keyword sets for correlation group labelling ───────────────────────
 
 _ENERGY = {
@@ -337,8 +341,12 @@ async def _gather_context(user_id: int, db: Session) -> dict:
 # ── Ollama call ───────────────────────────────────────────────────────────────
 
 async def _call_ollama(system: str, user_msg: str, model: str | None = None) -> str:
-    provider = settings.ai_provider.lower()
-    model = model or settings.report_model or settings.ai_model or settings.ollama_model
+    s = current_settings()
+    provider = s.ai_provider.lower()
+    if provider == "none":
+        raise RuntimeError("AI provider is disabled")
+
+    model = model or s.report_model or s.ai_model or s.ollama_model
     payload = {
         "model": model,
         "stream": False,
@@ -347,21 +355,31 @@ async def _call_ollama(system: str, user_msg: str, model: str | None = None) -> 
             {"role": "user", "content": user_msg},
         ],
     }
-    if provider == "litellm":
-        url = (settings.litellm_url or settings.ollama_url).rstrip("/") + "/v1/chat/completions"
+    if provider in ("litellm", "openai"):
+        base_url = "https://api.openai.com" if provider == "openai" else (s.litellm_url or s.ollama_url).rstrip("/")
+        url = base_url + "/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
-        api_key = settings.litellm_api_key or settings.ai_api_key
+        api_key = s.litellm_api_key or s.ai_api_key
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                raise RuntimeError(f"{provider} returned HTTP {resp.status_code}: {resp.text[:500]}") from e
             return resp.json()["choices"][0]["message"]["content"]
 
-    url = settings.ollama_url.rstrip("/") + "/api/chat"
+    if provider != "ollama":
+        raise RuntimeError(f"AI provider '{provider}' is not supported for report generation")
+
+    url = s.ollama_url.rstrip("/") + "/api/chat"
     async with httpx.AsyncClient(timeout=300.0) as client:
         resp = await client.post(url, json=payload)
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(f"ollama returned HTTP {resp.status_code}: {resp.text[:500]}") from e
         return resp.json()["message"]["content"]
 
 

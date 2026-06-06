@@ -19,7 +19,6 @@ from config import get_settings
 import httpx
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 
 def _strip_json_fences(raw: str) -> str:
@@ -167,6 +166,7 @@ class OllamaAIService(AIService):
     """
 
     def __init__(self):
+        settings = get_settings()
         self.base_url = settings.ollama_url.rstrip("/")
         self.model = settings.ollama_model
         self._timeout = 120.0
@@ -182,7 +182,10 @@ class OllamaAIService(AIService):
         }
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.post(f"{self.base_url}/api/chat", json=payload)
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                raise RuntimeError(f"ollama returned HTTP {resp.status_code}: {resp.text[:500]}") from e
             return resp.json()["message"]["content"]
 
     async def analyze_stock(self, ticker: str, data: dict) -> dict:
@@ -268,6 +271,7 @@ class LiteLLMAIService(AIService):
     """
 
     def __init__(self):
+        settings = get_settings()
         self.base_url = (settings.litellm_url or settings.ollama_url).rstrip("/")
         self.model = settings.ai_model or settings.ollama_model
         self.api_key = settings.litellm_api_key or settings.ai_api_key
@@ -290,7 +294,10 @@ class LiteLLMAIService(AIService):
         }
         async with httpx.AsyncClient(timeout=timeout or self._timeout) as client:
             resp = await client.post(f"{self.base_url}/v1/chat/completions", json=payload, headers=self._headers())
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                raise RuntimeError(f"litellm returned HTTP {resp.status_code}: {resp.text[:500]}") from e
             return resp.json()["choices"][0]["message"]["content"]
 
     async def analyze_stock(self, ticker: str, data: dict) -> dict:
@@ -387,6 +394,7 @@ class LiteLLMAIService(AIService):
 
 def get_ai_service() -> AIService:
     """Return the configured AI service singleton."""
+    settings = get_settings()
     provider = settings.ai_provider.lower()
 
     if provider == "ollama":

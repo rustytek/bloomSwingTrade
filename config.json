@@ -1,7 +1,7 @@
 {
   "name": "SwingTrader",
-  "description": "Self-hosted swing trading screener — live market data via Yahoo Finance, technical indicators (RSI, MACD, BB, MA), watchlist & portfolio tracking, Fidelity CSV import, and optional AI analysis (Anthropic / OpenAI).",
-  "version": "1.5.7",
+  "description": "Self-hosted swing trading screener — live market data via Yahoo Finance, technical indicators (RSI, MACD, BB, MA), watchlist & portfolio tracking, Fidelity CSV import, and optional AI analysis via LiteLLM/Ollama.",
+  "version": "1.5.9",
   "slug": "swingtrader",
   "url": "https://github.com/rustytek/bloomSwingTrade",
   "arch": ["amd64", "aarch64"],
@@ -23,15 +23,15 @@
     "use_ha_ssl": false,
     "certfile": "fullchain.pem",
     "keyfile": "privkey.pem",
-    "ai_provider": "none",
+    "ai_provider": "litellm",
     "ai_api_key": "",
-    "ai_model": "",
+    "ai_model": "ollama/qwen3.5:9-mlx",
     "fred_api_key": "",
-    "litellm_url": "",
+    "litellm_url": "http://192.168.0.21:4000",
     "litellm_api_key": "",
-    "ollama_url": "http://192.168.10.21:11434",
-    "ollama_model": "qwen35-moe:latest",
-    "report_model": "deepseek-r1:8b"
+    "ollama_url": "http://192.168.0.21:11434",
+    "ollama_model": "qwen3.5:9-mlx",
+    "report_model": "ollama/qwen3.5:9-mlx"
   },
   "schema": {
     "secret_key": "str",

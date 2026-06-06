@@ -29,20 +29,20 @@ class Settings(BaseSettings):
     cache_max_age_days: int = 180    # purge entries older than 180 days
 
     # AI Provider ("none", "anthropic", "openai", "ollama", "litellm")
-    ai_provider: str = "none"
+    ai_provider: str = "litellm"
     ai_api_key: str = ""
-    ai_model: str = ""
+    ai_model: str = "ollama/qwen3.5:9-mlx"
 
     # FRED API (Federal Reserve Economic Data)
     fred_api_key: str = ""
 
     # Ollama (local LLM server)
-    ollama_url: str = "http://192.168.10.21:11434"
-    ollama_model: str = "qwen35-moe:latest"        # general chat/analysis
-    report_model: str = "deepseek-r1:8b"           # report generation (reasoning)
+    ollama_url: str = "http://192.168.0.21:11434"
+    ollama_model: str = "qwen3.5:9-mlx"            # general chat/analysis fallback
+    report_model: str = "ollama/qwen3.5:9-mlx"     # report generation
 
     # LiteLLM (OpenAI-compatible proxy; can point at Ollama-backed models)
-    litellm_url: str = ""                          # e.g. http://192.168.10.21:4000
+    litellm_url: str = "http://192.168.0.21:4000"  # e.g. http://192.168.0.21:4000
     litellm_api_key: str = ""                      # optional; falls back to AI_API_KEY
 
     class Config:

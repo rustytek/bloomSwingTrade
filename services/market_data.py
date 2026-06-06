@@ -73,6 +73,26 @@ def _is_fresh(cached_at: datetime) -> bool:
     return cached_at >= _last_market_close()
 
 
+def _format_cached_at(cached_at: datetime | None) -> str | None:
+    if not cached_at:
+        return None
+    try:
+        if cached_at.tzinfo is None:
+            cached_at = cached_at.replace(tzinfo=timezone.utc)
+        local_dt = cached_at.astimezone()
+        tz_name = local_dt.strftime("%Z")
+        return local_dt.strftime("%b %d, %I:%M %p").lstrip("0") + f" {tz_name}"
+    except Exception:
+        return cached_at.strftime("%b %d, %I:%M %p").lstrip("0")
+
+
+def _attach_cache_metadata(data: dict, cached_at: datetime | None) -> dict:
+    enriched = dict(data)
+    enriched["last_updated"] = _format_cached_at(cached_at)
+    enriched["last_updated_iso"] = cached_at.isoformat() if cached_at else None
+    return enriched
+
+
 # ── Raw yfinance helpers (blocking — run in thread pool) ──────────────────
 
 def _fetch_quote_sync(ticker: str) -> dict:
@@ -303,7 +323,7 @@ async def get_quote(ticker: str, db: Session, force_refresh: bool = False) -> Op
     if not force_refresh and cache_key in _mem_cache:
         entry = _mem_cache[cache_key]
         if _is_fresh(entry["cached_at"]):
-            return entry["data"]
+            return _attach_cache_metadata(entry["data"], entry["cached_at"])
 
     # 2. Check SQLite cache
     row: Optional[StockCache] = db.query(StockCache).filter(StockCache.ticker == ticker).first()
@@ -311,7 +331,7 @@ async def get_quote(ticker: str, db: Session, force_refresh: bool = False) -> Op
     if not force_refresh and row and row.quote_json and quote_cached_at and _is_fresh(quote_cached_at):
         data = json.loads(row.quote_json)
         _mem_cache[cache_key] = {"data": data, "cached_at": quote_cached_at}
-        return data
+        return _attach_cache_metadata(data, quote_cached_at)
 
     # 3. Fetch from yfinance
     try:
@@ -353,7 +373,7 @@ async def get_quote(ticker: str, db: Session, force_refresh: bool = False) -> Op
     db.commit()
 
     _mem_cache[cache_key] = {"data": enriched, "cached_at": now}
-    return enriched
+    return _attach_cache_metadata(enriched, now)
 
 
 async def get_history(ticker: str, db: Session, period: str = "1y", force_refresh: bool = False) -> list[dict]:
@@ -596,6 +616,50 @@ def get_universe_status(db: Session, universe: list[str]) -> dict:
     # Append the rate limiter status
     limit_status = limiter.get_status()
     return {"total": total, "loaded": loaded, "fresh": fresh, "rate_limit": limit_status, "last_updated_time": last_updated_time}
+
+
+async def refresh_universe_once(universe: list[str], db_factory, force: bool = True) -> dict:
+    """Refresh the universe once, respecting the yfinance rate limiter."""
+    worker_count = 8
+    refreshed = skipped = 0
+
+    async def fetch_one(ticker: str) -> bool:
+        if not await limiter.increment():
+            return False
+        db = db_factory()
+        try:
+            await get_quote(ticker, db, force_refresh=force)
+            return True
+        except Exception as e:
+            logger.debug("Scheduled refresh skipped %s: %s", ticker, e)
+            return True
+        finally:
+            db.close()
+
+    queue = asyncio.Queue()
+    for ticker in universe:
+        queue.put_nowait(ticker)
+
+    hit_limit = False
+
+    async def worker():
+        nonlocal refreshed, skipped, hit_limit
+        while not queue.empty() and not hit_limit:
+            ticker = await queue.get()
+            try:
+                ok = await fetch_one(ticker)
+                if ok:
+                    refreshed += 1
+                else:
+                    skipped += queue.qsize() + 1
+                    hit_limit = True
+            finally:
+                queue.task_done()
+            await asyncio.sleep(0.2)
+
+    workers = [asyncio.create_task(worker()) for _ in range(min(worker_count, len(universe)))]
+    await asyncio.gather(*workers)
+    return {"refreshed": refreshed, "skipped": skipped, "hit_limit": hit_limit}
 
 
 async def refresh_universe(universe: list[str], db_factory, force: bool = False) -> None:

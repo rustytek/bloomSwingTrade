@@ -149,6 +149,7 @@ async def sector_summary(
 
 # ── Daily Report Endpoints ────────────────────────────────────────────────────
 
+@router.get("/models")
 @router.get("/ollama/models")
 async def ollama_models(user: User = Depends(get_current_user)):
     """Return available local models from Ollama or LiteLLM."""

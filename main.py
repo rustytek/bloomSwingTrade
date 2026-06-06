@@ -37,6 +37,8 @@ from generate_ssl import generate_ssl_cert
 from services.universe import UNIVERSE
 from services.market_data import (
     refresh_universe,
+    refresh_universe_once,
+    is_market_open,
     cleanup_old_entries,
     invalidate_legacy_cache,
     invalidate_short_history_cache,
@@ -66,6 +68,21 @@ async def _scheduled_report_job():
         logger.error("Scheduler: report generation failed: %s", e)
     finally:
         db.close()
+
+
+async def _scheduled_market_refresh_job():
+    """Refresh market data every 15 minutes during regular trading hours."""
+    if not is_market_open():
+        logger.debug("Scheduler: skipped market refresh because market is closed")
+        return
+    logger.info("Scheduler: refreshing market data for %s tickers", len(UNIVERSE))
+    result = await refresh_universe_once(UNIVERSE, db_factory=SessionLocal, force=True)
+    logger.info(
+        "Scheduler: market refresh complete — refreshed=%s skipped=%s hit_limit=%s",
+        result.get("refreshed"),
+        result.get("skipped"),
+        result.get("hit_limit"),
+    )
 
 
 def init_db():
@@ -147,8 +164,16 @@ async def lifespan(app: FastAPI):
         id="weekly_watchlist_snapshot",
         replace_existing=True,
     )
+    _scheduler.add_job(
+        _scheduled_market_refresh_job,
+        CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/15", timezone="America/New_York"),
+        id="market_data_15m_refresh",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     _scheduler.start()
-    logger.info("Scheduler started — daily report will run at 05:30")
+    logger.info("Scheduler started — daily report 05:30, market data every 15 minutes during trading hours")
 
     yield
 
@@ -159,7 +184,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.5.7",
+    version="1.5.9",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

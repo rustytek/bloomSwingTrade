@@ -817,6 +817,7 @@
       const s = stock;
       const infoRows = [
         ['Sector', s.sector], ['Industry', s.industry], ['Market Cap', fmtB(s.mkt_cap)],
+        ['Last Updated', s.last_updated],
         ['Swing Score', s.swing_score != null ? `${s.swing_score}/100 ${s.swing_grade || ''}` : null],
         ['Price', s.price != null ? '$' + fmt2(s.price) : null], ['Change', s.chg_pct != null ? fmtPct(s.chg_pct) : null],
         ['Beta', fmt2(s.beta)], ['Dividend Yield', s.div != null ? s.div + '%' : null],
@@ -860,6 +861,7 @@
             <div>
               <span className="mono" style={{ fontSize: 20, fontWeight: 700, color: '#f0a500' }}>{s.ticker}</span>
               <span style={{ marginLeft: 10, fontSize: 15, color: '#888' }}>{s.name}</span>
+              {s.last_updated && <div style={{ marginTop: 3, fontSize: 11, color: '#555' }}>Updated {s.last_updated}</div>}
             </div>
             <button onClick={onToggleWatchlist} title={isWatchlisted ? 'Remove from watchlist' : 'Add to watchlist'}
               style={{
@@ -1003,14 +1005,14 @@
                     { lbl: 'Beat Estimates', tip: 'Beat earnings estimates last quarter — EPS (Earnings Per Share) exceeded analyst consensus', pass: s.earn_beat }]
                 }
               ].map(({ lbl, tip, score, col, items }) => (
-                <div key={lbl} style={{ background: '#141414', borderRadius: 4, padding: 12 }}>
+                <div key={lbl} style={{ background: '#141414', borderRadius: 4, padding: 14 }}>
                   <div title={tip} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, cursor: 'help' }}>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: '#aaa' }}>{lbl}</span><ScoreDots val={score || 0} color={col} />
+                    <span style={{ fontSize: 14, fontWeight: 700, color: '#aaa' }}>{lbl}</span><ScoreDots val={score || 0} color={col} />
                   </div>
                   {items.map(({ lbl: il, tip: it, pass }) => (
-                    <div key={il} title={it} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '3px 0', cursor: 'help' }}>
-                      <span style={{ fontSize: 13, color: pass ? col : '#2a2a2a' }}>{pass ? '●' : '○'}</span>
-                      <span style={{ fontSize: 11, color: pass ? '#aaa' : '#444' }}>{il}</span>
+                    <div key={il} title={it} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', cursor: 'help' }}>
+                      <span style={{ fontSize: 15, color: pass ? col : '#2a2a2a' }}>{pass ? '●' : '○'}</span>
+                      <span style={{ fontSize: 13, lineHeight: 1.35, color: pass ? '#c8c8c8' : '#555' }}>{il}</span>
                     </div>
                   ))}
                 </div>
@@ -2619,6 +2621,12 @@
       /* Select stock */
       const handleSelect = useCallback(async (s) => {
         setSelected(s); setSelectedHistory(null); setSelectedIndicators(null);
+        const quoteResp = await apiFetch(`/api/stocks/${s.ticker}`);
+        if (quoteResp.ok) {
+          const quote = await quoteResp.json();
+          stockInfoMapRef.current[s.ticker] = quote;
+          setSelected(quote);
+        }
         const r = await apiFetch(`/api/stocks/${s.ticker}/history`);
         if (r.ok) { const d = await r.json(); setSelectedHistory(d.bars); setSelectedIndicators(d.indicators); }
       }, []);

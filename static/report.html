@@ -318,10 +318,11 @@
   // ── Model loading ─────────────────────────────────────────────────────────
   async function loadModels() {
     try {
-      const res = await fetch('/api/ai/ollama/models', { headers: authHdr() });
+      const res = await fetch('/api/ai/models', { headers: authHdr() });
       if (!res.ok) throw new Error(res.statusText);
-      const data = await res.json();   // { models: [{name, size_gb, ...}] }
+      const data = await res.json();   // { models: [{name, size_gb, ...}], provider, base_url }
       const models = data.models || [];
+      const provider = data.provider || 'LLM';
 
       const savedReport = localStorage.getItem('st_report_model');
       const savedChat   = localStorage.getItem('st_chat_model');
@@ -342,13 +343,13 @@
 
       if (models.length === 0) {
         [reportModelSelect, chatModelSelect].forEach(s => {
-          s.innerHTML = '<option value="">No models found</option>';
+          s.innerHTML = `<option value="">No ${provider} models found</option>`;
         });
       }
     } catch (e) {
       console.warn('Could not load local LLM models:', e);
       [reportModelSelect, chatModelSelect].forEach(s => {
-        s.innerHTML = '<option value="">Ollama unavailable</option>';
+        s.innerHTML = '<option value="">LLM unavailable</option>';
       });
     }
   }

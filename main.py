@@ -196,7 +196,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.6.4",
+    version="1.6.5",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

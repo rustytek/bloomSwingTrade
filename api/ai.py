@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
+import logging
 from database.db import get_db
 from database.models import User, ReportCache
 from auth.deps import get_current_user
@@ -10,6 +11,7 @@ from config import get_settings
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 def current_settings():
@@ -47,6 +49,7 @@ async def call_chat_model(system: str, user_msg: str, model: str | None = None, 
 
     model_name = model or s.ai_model or s.ollama_model
     if provider in ("litellm", "openai"):
+        url = f"{llm_base_url()}/v1/chat/completions"
         payload = {
             "model": model_name,
             "stream": False,
@@ -55,13 +58,45 @@ async def call_chat_model(system: str, user_msg: str, model: str | None = None, 
                 {"role": "user", "content": user_msg},
             ],
         }
+        logger.info(
+            "Market chat LLM request provider=%s base_url=%s model=%s user_chars=%s timeout=%s",
+            provider,
+            llm_base_url(),
+            model_name,
+            len(user_msg),
+            timeout,
+        )
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(f"{llm_base_url()}/v1/chat/completions", json=payload, headers=llm_headers())
+            resp = await client.post(url, json=payload, headers=llm_headers())
+            logger.info(
+                "Market chat LLM response provider=%s model=%s status=%s response_chars=%s",
+                provider,
+                model_name,
+                resp.status_code,
+                len(resp.text or ""),
+            )
             try:
                 resp.raise_for_status()
             except httpx.HTTPStatusError as e:
+                logger.error(
+                    "Market chat LLM HTTP error provider=%s url=%s model=%s status=%s body=%s",
+                    provider,
+                    url,
+                    model_name,
+                    resp.status_code,
+                    resp.text[:1000],
+                )
                 raise RuntimeError(f"{provider} returned HTTP {resp.status_code}: {resp.text[:500]}") from e
-            return resp.json()["choices"][0]["message"]["content"]
+            try:
+                return resp.json()["choices"][0]["message"]["content"]
+            except Exception as e:
+                logger.error(
+                    "Market chat LLM parse error provider=%s model=%s body=%s",
+                    provider,
+                    model_name,
+                    resp.text[:1000],
+                )
+                raise RuntimeError(f"{provider} returned an unexpected response shape: {e}") from e
 
     if provider not in ("ollama", "litellm", "openai"):
         raise RuntimeError(f"AI provider '{provider}' is not supported by this endpoint")
@@ -74,13 +109,37 @@ async def call_chat_model(system: str, user_msg: str, model: str | None = None, 
             {"role": "user", "content": user_msg},
         ],
     }
+    logger.info(
+        "Market chat Ollama request base_url=%s model=%s user_chars=%s timeout=%s",
+        s.ollama_url.rstrip("/"),
+        payload["model"],
+        len(user_msg),
+        timeout,
+    )
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(f"{s.ollama_url.rstrip('/')}/api/chat", json=payload)
+        logger.info(
+            "Market chat Ollama response model=%s status=%s response_chars=%s",
+            payload["model"],
+            resp.status_code,
+            len(resp.text or ""),
+        )
         try:
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
+            logger.error(
+                "Market chat Ollama HTTP error url=%s model=%s status=%s body=%s",
+                f"{s.ollama_url.rstrip('/')}/api/chat",
+                payload["model"],
+                resp.status_code,
+                resp.text[:1000],
+            )
             raise RuntimeError(f"ollama returned HTTP {resp.status_code}: {resp.text[:500]}") from e
-        return resp.json()["message"]["content"]
+        try:
+            return resp.json()["message"]["content"]
+        except Exception as e:
+            logger.error("Market chat Ollama parse error model=%s body=%s", payload["model"], resp.text[:1000])
+            raise RuntimeError(f"ollama returned an unexpected response shape: {e}") from e
 
 
 class ChatRequest(BaseModel):
@@ -218,9 +277,19 @@ async def generate_report(
     """Trigger on-demand report generation for the current user."""
     from services.report_service import generate_daily_report
     try:
+        logger.info(
+            "Daily report requested user_id=%s username=%s model=%s",
+            user.id,
+            user.username,
+            req.model or "(default)",
+        )
         markdown = await generate_daily_report(db, user.id, triggered_by="user", model=req.model)
     except RuntimeError as e:
+        logger.error("Daily report request failed user_id=%s model=%s error=%s", user.id, req.model or "(default)", e)
         raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.exception("Daily report request crashed user_id=%s model=%s", user.id, req.model or "(default)")
+        raise HTTPException(status_code=503, detail=f"Report generation crashed: {e}")
     return {
         "markdown": markdown,
         "generated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
@@ -288,9 +357,19 @@ async def market_chat(
     positions = db.query(PortfolioPosition).filter(PortfolioPosition.user_id == user.id).all()
     watchlist = db.query(WatchlistItem).filter(WatchlistItem.user_id == user.id).all()
     all_tickers = list({p.ticker for p in positions} | {w.ticker for w in watchlist})
+    logger.info(
+        "Market chat requested user_id=%s username=%s model=%s question_chars=%s report_context_chars=%s tickers=%s",
+        user.id,
+        user.username,
+        req.model or "(default)",
+        len(req.question or ""),
+        len(req.report_context or ""),
+        len(all_tickers),
+    )
 
     quotes = await market_data.get_batch(all_tickers, db) if all_tickers else []
     qmap = {q["ticker"]: q for q in quotes}
+    logger.info("Market chat context loaded user_id=%s quotes=%s", user.id, len(qmap))
 
     portfolio_data = []
     total_cost = total_mv = 0.0
@@ -340,8 +419,10 @@ async def market_chat(
     try:
         answer = await call_chat_model(system, user_msg, model=req.model, timeout=120.0)
     except Exception as e:
+        logger.error("Market chat failed user_id=%s model=%s error=%s", user.id, req.model or "(default)", e)
         raise HTTPException(status_code=503, detail=f"LLM error: {e}")
 
+    logger.info("Market chat completed user_id=%s model=%s answer_chars=%s", user.id, req.model or "(default)", len(answer or ""))
     return {"answer": answer}
 
 

@@ -284,21 +284,48 @@ class LiteLLMAIService(AIService):
         return headers
 
     async def _chat(self, system: str, user: str, model: str | None = None, timeout: float | None = None) -> str:
+        model_name = model or self.model
         payload = {
-            "model": model or self.model,
+            "model": model_name,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
             "stream": False,
         }
+        url = f"{self.base_url}/v1/chat/completions"
+        logger.info(
+            "LiteLLM service request base_url=%s model=%s system_chars=%s user_chars=%s timeout=%s",
+            self.base_url,
+            model_name,
+            len(system or ""),
+            len(user or ""),
+            timeout or self._timeout,
+        )
         async with httpx.AsyncClient(timeout=timeout or self._timeout) as client:
-            resp = await client.post(f"{self.base_url}/v1/chat/completions", json=payload, headers=self._headers())
+            resp = await client.post(url, json=payload, headers=self._headers())
+            logger.info(
+                "LiteLLM service response model=%s status=%s response_chars=%s",
+                model_name,
+                resp.status_code,
+                len(resp.text or ""),
+            )
             try:
                 resp.raise_for_status()
             except httpx.HTTPStatusError as e:
+                logger.error(
+                    "LiteLLM service HTTP error url=%s model=%s status=%s body=%s",
+                    url,
+                    model_name,
+                    resp.status_code,
+                    resp.text[:1000],
+                )
                 raise RuntimeError(f"litellm returned HTTP {resp.status_code}: {resp.text[:500]}") from e
-            return resp.json()["choices"][0]["message"]["content"]
+            try:
+                return resp.json()["choices"][0]["message"]["content"]
+            except Exception as e:
+                logger.error("LiteLLM service parse error model=%s body=%s", model_name, resp.text[:1000])
+                raise RuntimeError(f"litellm returned an unexpected response shape: {e}") from e
 
     async def analyze_stock(self, ticker: str, data: dict) -> dict:
         system = (

@@ -347,6 +347,13 @@ async def _call_ollama(system: str, user_msg: str, model: str | None = None) -> 
         raise RuntimeError("AI provider is disabled")
 
     model = model or s.report_model or s.ai_model or s.ollama_model
+    logger.info(
+        "Report LLM request provider=%s model=%s system_chars=%s user_chars=%s",
+        provider,
+        model,
+        len(system or ""),
+        len(user_msg or ""),
+    )
     payload = {
         "model": model,
         "stream": False,
@@ -363,24 +370,62 @@ async def _call_ollama(system: str, user_msg: str, model: str | None = None) -> 
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         async with httpx.AsyncClient(timeout=300.0) as client:
+            logger.info("Report LLM HTTP POST url=%s model=%s", url, model)
             resp = await client.post(url, json=payload, headers=headers)
+            logger.info(
+                "Report LLM response provider=%s model=%s status=%s response_chars=%s",
+                provider,
+                model,
+                resp.status_code,
+                len(resp.text or ""),
+            )
             try:
                 resp.raise_for_status()
             except httpx.HTTPStatusError as e:
+                logger.error(
+                    "Report LLM HTTP error provider=%s url=%s model=%s status=%s body=%s",
+                    provider,
+                    url,
+                    model,
+                    resp.status_code,
+                    resp.text[:1000],
+                )
                 raise RuntimeError(f"{provider} returned HTTP {resp.status_code}: {resp.text[:500]}") from e
-            return resp.json()["choices"][0]["message"]["content"]
+            try:
+                return resp.json()["choices"][0]["message"]["content"]
+            except Exception as e:
+                logger.error(
+                    "Report LLM parse error provider=%s model=%s body=%s",
+                    provider,
+                    model,
+                    resp.text[:1000],
+                )
+                raise RuntimeError(f"{provider} returned an unexpected response shape: {e}") from e
 
     if provider != "ollama":
         raise RuntimeError(f"AI provider '{provider}' is not supported for report generation")
 
     url = s.ollama_url.rstrip("/") + "/api/chat"
     async with httpx.AsyncClient(timeout=300.0) as client:
+        logger.info("Report Ollama HTTP POST url=%s model=%s", url, model)
         resp = await client.post(url, json=payload)
+        logger.info("Report Ollama response model=%s status=%s response_chars=%s", model, resp.status_code, len(resp.text or ""))
         try:
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
+            logger.error(
+                "Report Ollama HTTP error url=%s model=%s status=%s body=%s",
+                url,
+                model,
+                resp.status_code,
+                resp.text[:1000],
+            )
             raise RuntimeError(f"ollama returned HTTP {resp.status_code}: {resp.text[:500]}") from e
-        return resp.json()["message"]["content"]
+        try:
+            return resp.json()["message"]["content"]
+        except Exception as e:
+            logger.error("Report Ollama parse error model=%s body=%s", model, resp.text[:1000])
+            raise RuntimeError(f"ollama returned an unexpected response shape: {e}") from e
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -397,7 +442,10 @@ async def generate_daily_report(
     Returns the raw markdown string.
     """
     logger.info(
-        "Generating daily report for user_id=%s triggered_by=%s", user_id, triggered_by
+        "Generating daily report for user_id=%s triggered_by=%s requested_model=%s",
+        user_id,
+        triggered_by,
+        model or "(default)",
     )
 
     # Fetch live chart/macro data concurrently with portfolio context
@@ -410,9 +458,22 @@ async def generate_daily_report(
         finally:
             chart_db.close()
 
-    ctx, charts = await asyncio.gather(
-        _gather_context(user_id, db),
-        gather_charts(),
+    logger.info("Daily report gathering context user_id=%s", user_id)
+    try:
+        ctx, charts = await asyncio.gather(
+            _gather_context(user_id, db),
+            gather_charts(),
+        )
+    except Exception:
+        logger.exception("Daily report context gathering failed user_id=%s", user_id)
+        raise
+    logger.info(
+        "Daily report context ready user_id=%s portfolio=%s watchlist=%s correlation_groups=%s chart_keys=%s",
+        user_id,
+        len(ctx.get("portfolio", [])),
+        len(ctx.get("watchlist", [])),
+        len(ctx.get("correlation_groups", [])),
+        sorted(charts.keys()) if isinstance(charts, dict) else type(charts).__name__,
     )
     today = datetime.now(timezone.utc).strftime("%Y%m%d")
     s = ctx["summary"]
@@ -527,8 +588,9 @@ Do not add new sections. Return only the completed markdown — no preamble."""
     try:
         markdown = await _call_ollama(_SYSTEM_PROMPT, user_msg, model=model)
     except Exception as e:
-        logger.error("Ollama report generation failed: %s", e)
+        logger.error("Report generation LLM call failed provider=%s model=%s error=%s", current_settings().ai_provider, model or "(default)", e)
         raise RuntimeError(f"Report generation failed: {e}") from e
+    logger.info("Daily report LLM completed user_id=%s markdown_chars=%s", user_id, len(markdown or ""))
 
     # Persist — keep only the 10 most recent per user
     try:
@@ -547,6 +609,7 @@ Do not add new sections. Return only the completed markdown — no preamble."""
             triggered_by=triggered_by,
         ))
         db.commit()
+        logger.info("Daily report persisted user_id=%s triggered_by=%s", user_id, triggered_by)
     except Exception as e:
         logger.warning("Could not persist report to DB: %s", e)
 

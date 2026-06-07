@@ -86,7 +86,7 @@ For HAOS, config goes through the add-on UI (mapped to `/data/options.json`).
 
 ## Deployment Notes
 
-- **Versioning before push**: Any push to the remote repo must include a version bump so Home Assistant detects the update. Keep `config.json` (`version`), `build.json` (`io.hass.version`), and `main.py` (`FastAPI(... version=...)`) in sync. Do not push functional changes without updating these version fields.
+- **Versioning before push**: Any push to the remote repo must include a Home Assistant-visible version bump so HA detects the update. Keep `config.json` (`version`), `build.json` (`io.hass.version`), and `main.py` (`FastAPI(... version=...)`) in sync. Do not push functional changes without updating these version fields. If HA still does not show the update after a normal patch bump, use a clearer next version bump (for example `1.5.9` -> `1.6.0`), push it, then tell the user to reload/check updates in the HA Add-on Store because HA can cache add-on repository metadata.
 - **SSL**: Auto-generated self-signed cert on first run, stored in `./ssl/` (or `/data/ssl/` in HAOS). Persists across restarts.
 - **Database**: `./data/swingtrader.db` (SQLite). Survives all restarts; back up by copying this file.
 - **Scheduler**: APScheduler runs daily report generation at 05:30 local time using the configured AI provider.

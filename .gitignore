@@ -9,3 +9,5 @@ __pycache__/
 *.db-shm
 *.db-wal
 docker_logs.txt
+server.err.log
+server.out.log

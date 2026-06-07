@@ -343,6 +343,7 @@ async def _gather_context(user_id: int, db: Session) -> dict:
 async def _call_ollama(system: str, user_msg: str, model: str | None = None) -> str:
     s = current_settings()
     provider = s.ai_provider.lower()
+    timeout_seconds = 900.0
     if provider == "none":
         raise RuntimeError("AI provider is disabled")
 
@@ -369,9 +370,33 @@ async def _call_ollama(system: str, user_msg: str, model: str | None = None) -> 
         api_key = s.litellm_api_key or s.ai_api_key
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            logger.info("Report LLM HTTP POST url=%s model=%s", url, model)
-            resp = await client.post(url, json=payload, headers=headers)
+        client_timeout = httpx.Timeout(timeout_seconds, connect=15.0, read=timeout_seconds, write=60.0, pool=15.0)
+        logger.info("Report LLM HTTP POST url=%s model=%s timeout=%s", url, model, timeout_seconds)
+        try:
+            async with httpx.AsyncClient(timeout=client_timeout) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+        except httpx.TimeoutException as e:
+            logger.error(
+                "Report LLM timeout provider=%s url=%s model=%s timeout=%s error_type=%s error_repr=%r",
+                provider,
+                url,
+                model,
+                timeout_seconds,
+                type(e).__name__,
+                e,
+            )
+            raise RuntimeError(f"{provider} request timed out after {timeout_seconds:.0f}s ({type(e).__name__})") from e
+        except httpx.RequestError as e:
+            logger.error(
+                "Report LLM request error provider=%s url=%s model=%s error_type=%s error_repr=%r",
+                provider,
+                url,
+                model,
+                type(e).__name__,
+                e,
+            )
+            raise RuntimeError(f"{provider} request failed before a response: {type(e).__name__}: {e!r}") from e
+        else:
             logger.info(
                 "Report LLM response provider=%s model=%s status=%s response_chars=%s",
                 provider,
@@ -406,9 +431,31 @@ async def _call_ollama(system: str, user_msg: str, model: str | None = None) -> 
         raise RuntimeError(f"AI provider '{provider}' is not supported for report generation")
 
     url = s.ollama_url.rstrip("/") + "/api/chat"
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        logger.info("Report Ollama HTTP POST url=%s model=%s", url, model)
-        resp = await client.post(url, json=payload)
+    client_timeout = httpx.Timeout(timeout_seconds, connect=15.0, read=timeout_seconds, write=60.0, pool=15.0)
+    logger.info("Report Ollama HTTP POST url=%s model=%s timeout=%s", url, model, timeout_seconds)
+    try:
+        async with httpx.AsyncClient(timeout=client_timeout) as client:
+            resp = await client.post(url, json=payload)
+    except httpx.TimeoutException as e:
+        logger.error(
+            "Report Ollama timeout url=%s model=%s timeout=%s error_type=%s error_repr=%r",
+            url,
+            model,
+            timeout_seconds,
+            type(e).__name__,
+            e,
+        )
+        raise RuntimeError(f"ollama request timed out after {timeout_seconds:.0f}s ({type(e).__name__})") from e
+    except httpx.RequestError as e:
+        logger.error(
+            "Report Ollama request error url=%s model=%s error_type=%s error_repr=%r",
+            url,
+            model,
+            type(e).__name__,
+            e,
+        )
+        raise RuntimeError(f"ollama request failed before a response: {type(e).__name__}: {e!r}") from e
+    else:
         logger.info("Report Ollama response model=%s status=%s response_chars=%s", model, resp.status_code, len(resp.text or ""))
         try:
             resp.raise_for_status()
@@ -588,7 +635,13 @@ Do not add new sections. Return only the completed markdown — no preamble."""
     try:
         markdown = await _call_ollama(_SYSTEM_PROMPT, user_msg, model=model)
     except Exception as e:
-        logger.error("Report generation LLM call failed provider=%s model=%s error=%s", current_settings().ai_provider, model or "(default)", e)
+        logger.error(
+            "Report generation LLM call failed provider=%s model=%s error_type=%s error_repr=%r",
+            current_settings().ai_provider,
+            model or "(default)",
+            type(e).__name__,
+            e,
+        )
         raise RuntimeError(f"Report generation failed: {e}") from e
     logger.info("Daily report LLM completed user_id=%s markdown_chars=%s", user_id, len(markdown or ""))
 

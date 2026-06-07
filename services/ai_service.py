@@ -302,8 +302,31 @@ class LiteLLMAIService(AIService):
             len(user or ""),
             timeout or self._timeout,
         )
-        async with httpx.AsyncClient(timeout=timeout or self._timeout) as client:
-            resp = await client.post(url, json=payload, headers=self._headers())
+        timeout_seconds = timeout or self._timeout
+        client_timeout = httpx.Timeout(timeout_seconds, connect=15.0, read=timeout_seconds, write=60.0, pool=15.0)
+        try:
+            async with httpx.AsyncClient(timeout=client_timeout) as client:
+                resp = await client.post(url, json=payload, headers=self._headers())
+        except httpx.TimeoutException as e:
+            logger.error(
+                "LiteLLM service timeout url=%s model=%s timeout=%s error_type=%s error_repr=%r",
+                url,
+                model_name,
+                timeout_seconds,
+                type(e).__name__,
+                e,
+            )
+            raise RuntimeError(f"litellm request timed out after {timeout_seconds:.0f}s ({type(e).__name__})") from e
+        except httpx.RequestError as e:
+            logger.error(
+                "LiteLLM service request error url=%s model=%s error_type=%s error_repr=%r",
+                url,
+                model_name,
+                type(e).__name__,
+                e,
+            )
+            raise RuntimeError(f"litellm request failed before a response: {type(e).__name__}: {e!r}") from e
+        else:
             logger.info(
                 "LiteLLM service response model=%s status=%s response_chars=%s",
                 model_name,

@@ -66,8 +66,32 @@ async def call_chat_model(system: str, user_msg: str, model: str | None = None, 
             len(user_msg),
             timeout,
         )
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, json=payload, headers=llm_headers())
+        client_timeout = httpx.Timeout(timeout, connect=15.0, read=timeout, write=60.0, pool=15.0)
+        try:
+            async with httpx.AsyncClient(timeout=client_timeout) as client:
+                resp = await client.post(url, json=payload, headers=llm_headers())
+        except httpx.TimeoutException as e:
+            logger.error(
+                "Market chat LLM timeout provider=%s url=%s model=%s timeout=%s error_type=%s error_repr=%r",
+                provider,
+                url,
+                model_name,
+                timeout,
+                type(e).__name__,
+                e,
+            )
+            raise RuntimeError(f"{provider} request timed out after {timeout:.0f}s ({type(e).__name__})") from e
+        except httpx.RequestError as e:
+            logger.error(
+                "Market chat LLM request error provider=%s url=%s model=%s error_type=%s error_repr=%r",
+                provider,
+                url,
+                model_name,
+                type(e).__name__,
+                e,
+            )
+            raise RuntimeError(f"{provider} request failed before a response: {type(e).__name__}: {e!r}") from e
+        else:
             logger.info(
                 "Market chat LLM response provider=%s model=%s status=%s response_chars=%s",
                 provider,
@@ -116,8 +140,31 @@ async def call_chat_model(system: str, user_msg: str, model: str | None = None, 
         len(user_msg),
         timeout,
     )
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(f"{s.ollama_url.rstrip('/')}/api/chat", json=payload)
+    url = f"{s.ollama_url.rstrip('/')}/api/chat"
+    client_timeout = httpx.Timeout(timeout, connect=15.0, read=timeout, write=60.0, pool=15.0)
+    try:
+        async with httpx.AsyncClient(timeout=client_timeout) as client:
+            resp = await client.post(url, json=payload)
+    except httpx.TimeoutException as e:
+        logger.error(
+            "Market chat Ollama timeout url=%s model=%s timeout=%s error_type=%s error_repr=%r",
+            url,
+            payload["model"],
+            timeout,
+            type(e).__name__,
+            e,
+        )
+        raise RuntimeError(f"ollama request timed out after {timeout:.0f}s ({type(e).__name__})") from e
+    except httpx.RequestError as e:
+        logger.error(
+            "Market chat Ollama request error url=%s model=%s error_type=%s error_repr=%r",
+            url,
+            payload["model"],
+            type(e).__name__,
+            e,
+        )
+        raise RuntimeError(f"ollama request failed before a response: {type(e).__name__}: {e!r}") from e
+    else:
         logger.info(
             "Market chat Ollama response model=%s status=%s response_chars=%s",
             payload["model"],
@@ -417,9 +464,15 @@ async def market_chat(
     user_msg = "\n".join(context_parts) + f"\n\n=== QUESTION ===\n{req.question}"
 
     try:
-        answer = await call_chat_model(system, user_msg, model=req.model, timeout=120.0)
+        answer = await call_chat_model(system, user_msg, model=req.model, timeout=300.0)
     except Exception as e:
-        logger.error("Market chat failed user_id=%s model=%s error=%s", user.id, req.model or "(default)", e)
+        logger.error(
+            "Market chat failed user_id=%s model=%s error_type=%s error_repr=%r",
+            user.id,
+            req.model or "(default)",
+            type(e).__name__,
+            e,
+        )
         raise HTTPException(status_code=503, detail=f"LLM error: {e}")
 
     logger.info("Market chat completed user_id=%s model=%s answer_chars=%s", user.id, req.model or "(default)", len(answer or ""))

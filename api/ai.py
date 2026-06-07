@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 import logging
+import time
 from database.db import get_db
 from database.models import User, ReportCache
 from auth.deps import get_current_user
@@ -203,6 +204,111 @@ class ReportRequest(BaseModel):
     model: str | None = None            # override report model
 
 
+class DebugLiteLLMRequest(BaseModel):
+    model: str | None = None
+    mode: str = "short"                 # short | market | report
+    timeout: float = 120.0
+    target_chars: int | None = None
+
+
+def _pad_debug_text(text: str, target_chars: int | None) -> str:
+    if not target_chars or len(text) >= target_chars:
+        return text
+    filler = "\n\n=== SIZE PADDING ===\n" + ("Synthetic context row. " * 1000)
+    return text + filler[:target_chars - len(text)]
+
+
+def _debug_llm_user_message(mode: str, target_chars: int | None = None) -> str:
+    import json
+
+    mode = mode.lower()
+    if mode == "short":
+        return "Say OK and name the model you are running as."
+
+    sample_position = {
+        "ticker": "SAMPLE",
+        "shares": 10,
+        "avg_cost": 100.0,
+        "price": 104.2,
+        "market_value": 1042.0,
+        "pnl_pct": 4.2,
+        "rsi": 55.1,
+        "vol_r": 1.15,
+        "chg_pct": 0.8,
+        "ann_ret": 24.5,
+        "sharpe": 1.1,
+        "sector": "Technology",
+        "macd_sig": "bullish",
+    }
+    sample_watch = {
+        "ticker": "WATCH",
+        "price": 42.1,
+        "rsi": 49.8,
+        "score": {"o": 7},
+        "chg_pct": -0.3,
+        "sector": "Energy",
+        "notes": "Synthetic smoke-test row.",
+    }
+
+    portfolio = [{**sample_position, "ticker": f"P{i:02d}"} for i in range(31)]
+    watchlist = [{**sample_watch, "ticker": f"W{i:02d}"} for i in range(16)]
+
+    if mode == "market":
+        text = (
+            "=== PORTFOLIO SMOKE TEST ===\n"
+            + json.dumps(portfolio, indent=2)
+            + "\n\n=== WATCHLIST SMOKE TEST ===\n"
+            + json.dumps(watchlist, indent=2)
+            + "\n\nQuestion: reply in one short paragraph with the strongest and weakest synthetic tickers."
+        )
+        return _pad_debug_text(text, target_chars or 13655)
+
+    if mode == "report":
+        macro = {
+            "m2_current": 22000,
+            "m2_trend": "rising",
+            "fed_rate": 4.5,
+            "yield_2yr": 4.1,
+            "yield_10yr": 4.3,
+            "yield_spread_now": 0.2,
+            "vix_current": 16.4,
+            "breadth": {"pct_above_200ma": 58, "pct_above_50ma": 51, "ad_ratio": 1.2},
+        }
+        template = """
+# [DATE] Market Analysis & Execution
+
+## 1. Macro Regime & Liquidity
+[ANALYZE macro regime using the JSON data]
+
+## 2. Market Breadth & Ranking
+[ANALYZE breadth]
+
+## 3. Portfolio Performance
+[INSERT portfolio table]
+
+## 4. Position Logic & Same Shape Analysis
+[ANALYZE correlation groups]
+
+## 5. Tactical Actions
+[LIST sell/add/watch candidates]
+"""
+        text = (
+            "Today: smoke-test\n\n"
+            "=== LIVE MACRO DATA ===\n"
+            + json.dumps(macro, indent=2)
+            + "\n\n=== PORTFOLIO DATA ===\n"
+            + json.dumps(portfolio, indent=2)
+            + "\n\n=== WATCHLIST DATA ===\n"
+            + json.dumps(watchlist, indent=2)
+            + "\n\n=== FILL THIS TEMPLATE ===\n"
+            + template
+            + "\nReturn completed markdown only."
+        )
+        return _pad_debug_text(text, target_chars or 26639)
+
+    raise ValueError("mode must be one of: short, market, report")
+
+
 @router.get("/status")
 def ai_status(user: User = Depends(get_current_user)):
     s = current_settings()
@@ -313,6 +419,65 @@ async def ollama_models(user: User = Depends(get_current_user)):
     # Sort: put embedding models last, everything else alphabetical
     models.sort(key=lambda m: (1 if "embed" in m["name"] else 0, m["name"]))
     return {"models": models, "provider": provider, "base_url": llm_base_url()}
+
+
+@router.post("/debug/litellm")
+async def debug_litellm(
+    req: DebugLiteLLMRequest,
+    user: User = Depends(get_current_user),
+):
+    """Run a direct OpenAI-compatible chat-completions smoke test from this app process."""
+    s = current_settings()
+    provider = s.ai_provider.lower()
+    model_name = req.model or s.ai_model or s.report_model or s.ollama_model
+    try:
+        user_msg = _debug_llm_user_message(req.mode, req.target_chars)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    system = "You are a concise SwingTrader LiteLLM diagnostic assistant."
+    started = time.perf_counter()
+    try:
+        answer = await call_chat_model(system, user_msg, model=model_name, timeout=req.timeout)
+    except Exception as e:
+        elapsed = time.perf_counter() - started
+        logger.error(
+            "Debug LiteLLM failed user_id=%s provider=%s model=%s mode=%s elapsed=%.2fs error_type=%s error_repr=%r",
+            user.id,
+            provider,
+            model_name,
+            req.mode,
+            elapsed,
+            type(e).__name__,
+            e,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "provider": provider,
+                "base_url": llm_base_url() if provider in ("litellm", "ollama") else None,
+                "model": model_name,
+                "mode": req.mode,
+                "elapsed_seconds": round(elapsed, 2),
+                "user_chars": len(user_msg),
+                "error_type": type(e).__name__,
+                "error_repr": repr(e),
+                "error": str(e),
+            },
+        )
+
+    elapsed = time.perf_counter() - started
+    return {
+        "ok": True,
+        "provider": provider,
+        "base_url": llm_base_url() if provider in ("litellm", "ollama") else None,
+        "model": model_name,
+        "mode": req.mode,
+        "elapsed_seconds": round(elapsed, 2),
+        "user_chars": len(user_msg),
+        "answer_chars": len(answer or ""),
+        "answer_preview": (answer or "")[:1000],
+    }
 
 
 @router.post("/daily-report")

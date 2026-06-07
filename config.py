@@ -43,7 +43,7 @@ class Settings(BaseSettings):
 
     # LiteLLM (OpenAI-compatible proxy; can point at Ollama-backed models)
     litellm_url: str = "http://192.168.0.21:4000"  # e.g. http://192.168.0.21:4000
-    litellm_api_key: str = ""                      # optional; falls back to AI_API_KEY
+    litellm_api_key: str = ""                      # LiteLLM virtual key for this user/app
 
     class Config:
         env_file = ".env"

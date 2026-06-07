@@ -31,12 +31,18 @@ def llm_base_url() -> str:
 
 def llm_headers() -> dict:
     s = current_settings()
-    if s.ai_provider.lower() == "ollama":
+    provider = s.ai_provider.lower()
+    if provider == "ollama":
         return {"Content-Type": "application/json"}
-    api_key = s.litellm_api_key or s.ai_api_key
     headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+    if provider == "litellm":
+        if not s.litellm_api_key:
+            raise RuntimeError("LITELLM_API_KEY is required when AI_PROVIDER=litellm")
+        headers["Authorization"] = f"Bearer {s.litellm_api_key}"
+    elif provider == "openai":
+        if not s.ai_api_key:
+            raise RuntimeError("AI_API_KEY is required when AI_PROVIDER=openai")
+        headers["Authorization"] = f"Bearer {s.ai_api_key}"
     return headers
 
 

@@ -367,9 +367,14 @@ async def _call_ollama(system: str, user_msg: str, model: str | None = None) -> 
         base_url = "https://api.openai.com" if provider == "openai" else (s.litellm_url or s.ollama_url).rstrip("/")
         url = base_url + "/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
-        api_key = s.litellm_api_key or s.ai_api_key
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        if provider == "litellm":
+            if not s.litellm_api_key:
+                raise RuntimeError("LITELLM_API_KEY is required when AI_PROVIDER=litellm")
+            headers["Authorization"] = f"Bearer {s.litellm_api_key}"
+        else:
+            if not s.ai_api_key:
+                raise RuntimeError("AI_API_KEY is required when AI_PROVIDER=openai")
+            headers["Authorization"] = f"Bearer {s.ai_api_key}"
         client_timeout = httpx.Timeout(timeout_seconds, connect=15.0, read=timeout_seconds, write=60.0, pool=15.0)
         logger.info("Report LLM HTTP POST url=%s model=%s timeout=%s", url, model, timeout_seconds)
         try:

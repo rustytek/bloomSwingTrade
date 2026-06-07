@@ -27,11 +27,11 @@ Open the Web UI button (or navigate to `https://<ha-ip>:8443`).
 | `certfile` | HA certificate file (only used when `use_ha_ssl` is `true`) |
 | `keyfile` | HA key file (only used when `use_ha_ssl` is `true`) |
 | `ai_provider` | AI provider: `none`, `anthropic`, `openai`, `ollama`, or `litellm` |
-| `ai_api_key` | API key for your AI provider |
+| `ai_api_key` | API key for direct OpenAI/Anthropic-style providers; not used for LiteLLM |
 | `ai_model` | Model override (e.g. `claude-opus-4-6`) — leave blank for default |
 
 | `litellm_url` | LiteLLM OpenAI-compatible base URL. If blank, the app falls back to `ollama_url` |
-| `litellm_api_key` | Optional LiteLLM proxy key. If blank, the app falls back to `ai_api_key` |
+| `litellm_api_key` | Required when `ai_provider` is `litellm`; use the restricted LiteLLM virtual key for this user/app |
 | `fred_api_key` | Optional FRED API key for Macro & Liquidity charts: M2, Fed Funds, 2yr/10yr yields, and yield spread |
 
 ## Enabling FRED Macro Data
@@ -68,7 +68,7 @@ To back up your data, include the add-on data directory in your HA backup.
 1. Set `ai_provider: litellm`.
 2. Set `litellm_url` to your LiteLLM proxy base URL, for example `http://192.168.0.21:4000`.
 3. Set `ai_model` and `report_model` to the LiteLLM model IDs you want to use, for example `ollama/qwen3.5:9-mlx`.
-4. If your proxy requires auth, set `litellm_api_key`.
+4. Set `litellm_api_key` to the user's restricted LiteLLM virtual key.
 5. Restart the add-on.
 
 ### Anthropic Claude

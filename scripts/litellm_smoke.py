@@ -233,7 +233,7 @@ def parse_args() -> argparse.Namespace:
     settings = load_defaults()
     parser = argparse.ArgumentParser(description="Smoke-test LiteLLM chat completions from SwingTrader config.")
     parser.add_argument("--base-url", default=(settings.litellm_url or settings.ollama_url).rstrip("/"))
-    parser.add_argument("--api-key", default=settings.litellm_api_key or settings.ai_api_key)
+    parser.add_argument("--api-key", default=settings.litellm_api_key)
     parser.add_argument("--model", default=settings.ai_model or settings.report_model or settings.ollama_model)
     parser.add_argument("--mode", choices=["short", "market", "report"], default="short")
     parser.add_argument("--timeout", type=float, default=300.0)

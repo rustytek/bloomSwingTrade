@@ -274,13 +274,14 @@ class LiteLLMAIService(AIService):
         settings = get_settings()
         self.base_url = (settings.litellm_url or settings.ollama_url).rstrip("/")
         self.model = settings.ai_model or settings.ollama_model
-        self.api_key = settings.litellm_api_key or settings.ai_api_key
+        self.api_key = settings.litellm_api_key
         self._timeout = 120.0
 
     def _headers(self) -> dict:
         headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        if not self.api_key:
+            raise RuntimeError("LITELLM_API_KEY is required when AI_PROVIDER=litellm")
+        headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
     async def _chat(self, system: str, user: str, model: str | None = None, timeout: float | None = None) -> str:

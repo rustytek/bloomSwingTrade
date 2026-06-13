@@ -24,6 +24,7 @@
     .btn { display:inline-flex; align-items:center; gap:5px; padding:5px 10px; border-radius:3px; border:1px solid #2a2a2a; background:#1a1a1a; color:#999; font-size:11px; font-weight:600; cursor:pointer; text-decoration:none; font-family:'Inter',sans-serif; }
     .btn:hover { color:#ddd; background:#222; }
     .btn-primary { background:#f0a500; color:#000; border-color:#f0a500; }
+    .btn-active { color:#f0a500; border-color:#3a2f10; background:#1c1810; }
     .hint { position:relative; }
     .hint::after { content:attr(data-tip); position:absolute; left:50%; bottom:calc(100% + 9px); transform:translateX(-50%); display:none; width:min(280px, 70vw); padding:8px 10px; background:#1e1e1e; border:1px solid #333; border-radius:4px; color:#d8d8d8; font-size:11px; font-weight:400; line-height:1.45; letter-spacing:0; text-transform:none; white-space:normal; box-shadow:0 6px 18px #000c; z-index:200; pointer-events:none; }
     .hint::before { content:''; position:absolute; left:50%; bottom:calc(100% + 4px); transform:translateX(-50%); display:none; border:5px solid transparent; border-top-color:#333; z-index:201; pointer-events:none; }
@@ -90,6 +91,7 @@
       <a class="btn hint" data-tip="Your daily guided workflow: regime, position alerts, and top setups with trade plans." href="/">Today</a>
       <a class="btn hint" data-tip="Return to the main stock screener, filters, watchlist, portfolio, and ticker detail workspace." href="/screener">Screener</a>
       <a class="btn hint" data-tip="Open market-wide chart dashboards for VIX, sectors, ETFs, breadth, and macro context." href="/charts">Charts</a>
+      <a class="btn hint btn-active" data-tip="Backtest the swing strategies over cached history and compare them to SPY." href="/backtest">Backtest</a>
       <a class="btn hint" data-tip="Open the AI-assisted daily report page for saved market commentary and analysis." href="/report">Report</a>
       <a class="btn hint" data-tip="Closed-trade log with realized P&L, R-multiple, and win-rate stats." href="/journal">Journal</a>
       <span id="username" class="username"></span>

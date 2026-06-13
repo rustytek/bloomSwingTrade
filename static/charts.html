@@ -13,7 +13,7 @@
     body { background: #0d0d0d; color: #d8d8d8; font-family: 'Inter', sans-serif; font-size: 14px; line-height: 1.5; }
 
     /* ── Topbar ── */
-    .topbar { display: flex; align-items: center; gap: 10px; padding: 0 16px; height: 46px; background: #111; border-bottom: 1px solid #1e1e1e; flex-shrink: 0; position: sticky; top: 0; z-index: 50; }
+    .topbar { display: flex; align-items: center; gap: 10px; padding: 4px 16px; min-height: 46px; background: #111; border-bottom: 1px solid #1e1e1e; flex-shrink: 0; position: sticky; top: 0; z-index: 50; flex-wrap: wrap; }
     .logo { display: flex; align-items: center; gap: 8px; text-decoration: none; }
     .logo-icon { width: 28px; height: 28px; background: #f0a500; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 800; color: #000; font-family: 'JetBrains Mono', monospace; }
     .logo-text { font-weight: 700; font-size: 14px; letter-spacing: .08em; color: #fff; font-family: 'JetBrains Mono', monospace; }
@@ -24,6 +24,13 @@
     .btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 3px; border: none; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; text-decoration: none; white-space: nowrap; transition: opacity .15s; }
     .btn-ghost { background: transparent; color: #999; border: 1px solid #2a2a2a; }
     .btn-ghost:hover { background: #1a1a1a; color: #ddd; }
+    /* Canonical SwingTrader top-bar nav (shared look across all pages) */
+    .brand { font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 700; color: #fff; letter-spacing: 1px; text-decoration: none; white-space: nowrap; }
+    .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .navlink { display: inline-flex; align-items: center; padding: 5px 10px; border-radius: 3px; border: 1px solid #2a2a2a; background: #1a1a1a; color: #999; font-size: 11px; font-weight: 600; cursor: pointer; text-decoration: none; font-family: 'Inter', sans-serif; white-space: nowrap; }
+    .navlink:hover { color: #ddd; background: #222; }
+    .navlink.active { color: #f0a500; border-color: #3a2f10; background: #1c1810; }
+    .username { font-size: 11px; color: #555; }
     .btn-primary { background: #f0a500; color: #000; }
     .btn-primary:hover { opacity: .85; }
     .btn-active { background: #f0a500 !important; color: #000 !important; }
@@ -147,19 +154,10 @@
 
 <!-- ── Topbar ─────────────────────────────────────────────────────────────── -->
 <div class="topbar">
-  <a href="/" class="logo">
-    <div class="logo-icon">ST</div>
-    <span class="logo-text">SwingTrader</span>
-  </a>
+  <a href="/" class="brand">▲ SWING TRADER</a>
   <div class="topbar-sep"></div>
+  <!-- Page-specific controls (left, next to brand) -->
   <span class="topbar-title">Market Charts</span>
-  <div class="topbar-sep"></div>
-  <a href="/" class="btn btn-ghost" style="text-decoration:none;">Today</a>
-  <a href="/screener" class="btn btn-ghost" style="text-decoration:none;">Screener</a>
-  <a href="/report" class="btn btn-ghost" style="text-decoration:none;">📄 Report</a>
-  <a href="/backtest" class="btn btn-ghost" style="text-decoration:none;">Backtest</a>
-  <a href="/journal" class="btn btn-ghost" style="text-decoration:none;">Journal</a>
-  <div class="spacer"></div>
   <!-- Period buttons (apply to all LW Charts) -->
   <div class="period-group" id="periodGroup">
     <button class="period-btn" data-days="7">7D</button>
@@ -174,6 +172,17 @@
   <button class="spy-toggle on" id="spyToggle">SPY Benchmark</button>
   <span id="lastUpdatedBadge" style="font-size:10px;color:#555;display:none;">Updated: <span id="lastUpdatedTime"></span></span>
   <button class="btn btn-primary" id="btnRefresh">↻ Refresh</button>
+  <!-- Standard SwingTrader nav (right) -->
+  <div class="topbar-actions">
+    <a href="/" class="navlink">Today</a>
+    <a href="/screener" class="navlink">Screener</a>
+    <a href="/charts" class="navlink active">Charts</a>
+    <a href="/backtest" class="navlink">Backtest</a>
+    <a href="/report" class="navlink">Report</a>
+    <a href="/journal" class="navlink">Journal</a>
+    <span id="username" class="username"></span>
+    <button id="logoutBtn" class="navlink" type="button">Logout</button>
+  </div>
 </div>
 
 <!-- ── Page ───────────────────────────────────────────────────────────────── -->
@@ -567,6 +576,13 @@ async function apiFetch(url) {
   if (!resp.ok) { const t = await resp.text(); throw new Error(`${resp.status}: ${t}`); }
   return resp.json();
 }
+
+// ── Top-bar nav (logout + username) ───────────────────────────────────────────
+document.getElementById('logoutBtn').addEventListener('click', () => {
+  localStorage.removeItem('st_token');
+  window.location.href = '/login';
+});
+apiFetch('/auth/me').then(u => { document.getElementById('username').textContent = u.username || ''; }).catch(() => {});
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let globalPeriodDays = 30;    // current LW chart visible period

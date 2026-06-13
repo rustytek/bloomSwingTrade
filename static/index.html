@@ -1998,9 +1998,22 @@
             </span>
           )}
         </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {[
+            ['/', 'Today'], ['/screener', 'Screener'], ['/charts', 'Charts'],
+            ['/backtest', 'Backtest'], ['/report', 'Report'], ['/journal', 'Journal'],
+          ].map(([href, label]) => {
+            const active = href === '/screener';
+            return <a key={href} href={href} style={{
+              display: 'inline-flex', alignItems: 'center', padding: '5px 10px', borderRadius: 3,
+              border: '1px solid ' + (active ? '#3a2f10' : '#2a2a2a'),
+              background: active ? '#1c1810' : '#1a1a1a',
+              color: active ? '#f0a500' : '#999', fontSize: 11, fontWeight: 600,
+              textDecoration: 'none', fontFamily: "'Inter',sans-serif", whiteSpace: 'nowrap'
+            }}>{label}</a>;
+          })}
           <span style={{ fontSize: 11, color: '#555' }}>{user?.username}</span>
-          <button onClick={onLogout} style={{ background: '#1a1a1a', color: '#555', padding: '4px 10px', borderRadius: 3, fontSize: 11 }}>Logout</button>
+          <button onClick={onLogout} style={{ background: '#1a1a1a', color: '#999', padding: '5px 10px', borderRadius: 3, fontSize: 11, fontWeight: 600, border: '1px solid #2a2a2a', cursor: 'pointer' }}>Logout</button>
         </div>
       </div>;
     }

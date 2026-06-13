@@ -18,6 +18,7 @@
     .universe-text.loading { color:#f0a500; }
     .data-time { font-size:10px; color:#555; margin-left:8px; white-space:nowrap; }
     .topbar-actions { margin-left:auto; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .topbar-left { display:flex; align-items:center; gap:8px; }
     .username { font-size:11px; color:#555; }
     .btn { display:inline-flex; align-items:center; gap:5px; padding:5px 10px; border-radius:3px; border:1px solid #2a2a2a; background:#1a1a1a; color:#999; font-size:11px; font-weight:600; cursor:pointer; text-decoration:none; font-family:'Inter',sans-serif; }
     .btn:hover { color:#ddd; background:#222; }
@@ -110,7 +111,7 @@
       <h3 style="color:#eee;margin-bottom:14px;">Trading Settings</h3>
       <div class="form-row"><label>Account size ($)</label><input id="setAccount" type="number" min="1" step="100"></div>
       <div class="form-row"><label>Risk per trade (%)</label><input id="setRisk" type="number" min="0.1" max="5" step="0.1"></div>
-      <div class="form-row"><label>Max open positions</label><input id="setMax" type="number" min="1" max="25" step="1"></div>
+      <div class="form-row"><label>Max open positions</label><input id="setMax" type="number" min="1" max="50" step="1"></div>
       <div class="form-row"><label>ATR stop multiple</label><input id="setAtr" type="number" min="0.5" max="6" step="0.1"></div>
       <div class="form-row"><label>Target R-multiple</label><input id="setR" type="number" min="0.5" max="10" step="0.5"></div>
       <div id="settingsErr" class="error"></div>

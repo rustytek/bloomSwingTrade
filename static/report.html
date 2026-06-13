@@ -14,7 +14,7 @@
     .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
     /* ── Topbar ── */
-    .topbar { display: flex; align-items: center; gap: 10px; padding: 0 16px; height: 44px; background: #111; border-bottom: 1px solid #1e1e1e; flex-shrink: 0; }
+    .topbar { display: flex; align-items: center; gap: 10px; padding: 4px 16px; min-height: 44px; background: #111; border-bottom: 1px solid #1e1e1e; flex-shrink: 0; flex-wrap: wrap; }
     .logo { display: flex; align-items: center; gap: 8px; text-decoration: none; }
     .logo-icon { width: 26px; height: 26px; background: #f0a500; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 800; color: #000; font-family: 'JetBrains Mono', monospace; }
     .logo-text { font-weight: 700; font-size: 13px; letter-spacing: .08em; color: #fff; font-family: 'JetBrains Mono', monospace; }
@@ -29,6 +29,13 @@
     .btn-ghost { background: #1a1a1a; color: #aaa; border: 1px solid #2a2a2a; }
     .btn-ghost:hover:not(:disabled) { background: #222; }
     .btn-chat { background: #1a2a3a; color: #4a9eff; border: 1px solid #1e3a5a; }
+    /* Canonical SwingTrader top-bar nav (shared look across all pages) */
+    .brand { font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 700; color: #fff; letter-spacing: 1px; text-decoration: none; white-space: nowrap; }
+    .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .navlink { display: inline-flex; align-items: center; padding: 5px 10px; border-radius: 3px; border: 1px solid #2a2a2a; background: #1a1a1a; color: #999; font-size: 11px; font-weight: 600; cursor: pointer; text-decoration: none; font-family: 'Inter', sans-serif; white-space: nowrap; }
+    .navlink:hover { color: #ddd; background: #222; }
+    .navlink.active { color: #f0a500; border-color: #3a2f10; background: #1c1810; }
+    .username { font-size: 11px; color: #555; }
     .btn-chat.active { background: #1e3a5a; border-color: #4a9eff; }
 
     /* ── Model selector dropdown ── */
@@ -158,32 +165,32 @@
 
   <!-- Topbar -->
   <div class="topbar">
-    <a href="/" class="logo">
-      <div class="logo-icon">ST</div>
-      <span class="logo-text">SwingTrader</span>
-    </a>
+    <a href="/" class="brand">▲ SWING TRADER</a>
     <div class="topbar-sep"></div>
+    <!-- Page-specific controls (left, next to brand) -->
     <span class="topbar-title">Daily Report</span>
-    <div class="topbar-sep"></div>
-    <a href="/" class="btn btn-ghost" style="text-decoration:none;">Today</a>
-    <a href="/screener" class="btn btn-ghost" style="text-decoration:none;">Screener</a>
-    <a href="/charts" class="btn btn-ghost" style="text-decoration:none;">&#x1F4CA; Charts</a>
-    <a href="/backtest" class="btn btn-ghost" style="text-decoration:none;">Backtest</a>
-    <a href="/journal" class="btn btn-ghost" style="text-decoration:none;">Journal</a>
-    <div class="spacer"></div>
-
-    <!-- Report model picker -->
     <div class="model-select-wrap">
       <span class="model-label">Report</span>
       <select class="model-select" id="reportModelSelect" title="Model used to generate the report">
         <option value="">Loading…</option>
       </select>
     </div>
-
     <button class="btn btn-ghost" id="btnCopy" disabled>Copy MD</button>
     <button class="btn btn-ghost" id="btnSave" disabled>Save .md</button>
     <button class="btn btn-chat" id="btnToggleChat">&#x1F4AC; Chat</button>
     <button class="btn btn-primary" id="btnGenerate">Generate Report</button>
+
+    <!-- Standard SwingTrader nav (right) -->
+    <div class="topbar-actions">
+      <a href="/" class="navlink">Today</a>
+      <a href="/screener" class="navlink">Screener</a>
+      <a href="/charts" class="navlink">Charts</a>
+      <a href="/backtest" class="navlink">Backtest</a>
+      <a href="/report" class="navlink active">Report</a>
+      <a href="/journal" class="navlink">Journal</a>
+      <span id="username" class="username"></span>
+      <button id="logoutBtn" class="navlink" type="button">Logout</button>
+    </div>
   </div>
 
   <div class="body">
@@ -261,6 +268,16 @@
   const token = localStorage.getItem('st_token');
   if (!token) window.location.href = '/login';
   const authHdr = () => ({ 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' });
+
+  // ── Top-bar nav (logout + username) ────────────────────────────────────────
+  document.getElementById('logoutBtn').addEventListener('click', () => {
+    localStorage.removeItem('st_token');
+    window.location.href = '/login';
+  });
+  fetch('/auth/me', { headers: { 'Authorization': 'Bearer ' + token } })
+    .then(r => r.ok ? r.json() : null)
+    .then(u => { if (u) document.getElementById('username').textContent = u.username || ''; })
+    .catch(() => {});
 
   // ── State ─────────────────────────────────────────────────────────────────
   let currentMarkdown = '';

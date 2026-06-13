@@ -36,26 +36,28 @@ const NAV_LINKS = [
   ['/journal', 'Journal', 'Closed-trade log with realized P&L, R-multiple, and win-rate stats.'],
 ];
 
-function buildTopbar(active, extraActionsHtml = '') {
+function buildTopbar(active, leftExtraHtml = '') {
   const links = NAV_LINKS.map(([href, label, tip]) => {
     const cls = href === active ? 'btn hint btn-active' : 'btn hint';
     return `<a class="${cls}" data-tip="${esc(tip)}" href="${href}">${esc(label)}</a>`;
   }).join('');
+  // Page-specific controls (leftExtraHtml) sit next to the brand on the left;
+  // the standard nav + logout always live on the right.
   return `
     <a href="/" class="brand">▲ SWING TRADER</a>
     <div class="topbar-sep"></div>
     <div class="universe-status"><span id="universeText" class="universe-text">Loading…</span><span id="dataTime" class="data-time"></span></div>
+    ${leftExtraHtml ? `<div class="topbar-left">${leftExtraHtml}</div>` : ''}
     <div class="topbar-actions">
       ${links}
-      ${extraActionsHtml}
       <span id="username" class="username"></span>
       <button id="logoutBtn" class="btn hint" data-tip="End this browser session." type="button">Logout</button>
     </div>`;
 }
 
-async function initHeader(active, extraActionsHtml = '') {
+async function initHeader(active, leftExtraHtml = '') {
   const bar = document.getElementById('topbar');
-  if (bar) bar.innerHTML = buildTopbar(active, extraActionsHtml);
+  if (bar) bar.innerHTML = buildTopbar(active, leftExtraHtml);
   const logout = document.getElementById('logoutBtn');
   if (logout) logout.addEventListener('click', () => { clearToken(); window.location.href = '/login'; });
   try {

@@ -20,7 +20,7 @@ class SettingsResponse(BaseModel):
 class SettingsUpdate(BaseModel):
     account_size: float | None = Field(default=None, gt=0)
     risk_pct: float | None = Field(default=None, ge=0.1, le=5)
-    max_positions: int | None = Field(default=None, ge=1, le=25)
+    max_positions: int | None = Field(default=None, ge=1, le=50)
     atr_stop_mult: float | None = Field(default=None, ge=0.5, le=6)
     r_multiple: float | None = Field(default=None, ge=0.5, le=10)
 

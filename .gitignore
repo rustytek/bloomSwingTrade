@@ -9,5 +9,7 @@ __pycache__/
 *.db-shm
 *.db-wal
 docker_logs.txt
+docker_logs2.txt
 server.err.log
 server.out.log
+samples/

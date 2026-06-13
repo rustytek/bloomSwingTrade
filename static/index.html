@@ -1032,10 +1032,24 @@
       const [addTicker, setAddTkr] = useState('');
       const [addShares, setAddShares] = useState('');
       const [addCost, setAddCost] = useState('');
+      const [addStop, setAddStop] = useState('');
+      const [addTarget, setAddTarget] = useState('');
+      const [addStrategy, setAddStrategy] = useState('');
       const [csvFile, setCsvFile] = useState(null);
       const [msg, setMsg] = useState('');
       const [msgOk, setMsgOk] = useState(true);
+      const [closeTkr, setCloseTkr] = useState(null);
+      const [closePrice, setClosePrice] = useState('');
+      const [closeDate, setCloseDate] = useState('');
+      const [closeNotes, setCloseNotes] = useState('');
       const fileInputRef = useRef(null);
+
+      const STRATEGIES = [
+        { value: 'momentum_rotation', label: 'Momentum Rotation' },
+        { value: 'pullback_50ma', label: 'Pullback to 50MA' },
+        { value: 'breakout_volume', label: 'Breakout + Volume' },
+      ];
+      const stratLabel = v => (STRATEGIES.find(s => s.value === v) || {}).label || v;
 
       const load = async () => {
         const r = await apiFetch('/api/portfolio');
@@ -1051,13 +1065,33 @@
         if (!addTicker || !addShares) return;
         const r = await apiFetch('/api/portfolio', {
           method: 'POST',
-          body: JSON.stringify({ ticker: addTicker.toUpperCase(), shares: +addShares, avg_cost: addCost ? +addCost : 0 })
+          body: JSON.stringify({
+            ticker: addTicker.toUpperCase(), shares: +addShares, avg_cost: addCost ? +addCost : 0,
+            stop_loss: addStop ? +addStop : null,
+            target: addTarget ? +addTarget : null,
+            strategy: addStrategy || null
+          })
         });
-        if (r.ok) { setAddTkr(''); setAddShares(''); setAddCost(''); setShowAddForm(false); load(); }
+        if (r.ok) { setAddTkr(''); setAddShares(''); setAddCost(''); setAddStop(''); setAddTarget(''); setAddStrategy(''); setShowAddForm(false); load(); }
       };
       const handleDel = async (ticker) => {
-        if (!confirm(`Remove ${ticker}?`)) return;
+        if (!confirm(`Remove ${ticker} (no journal)? Use Close to record a real sale with P&L. Remove only erases a mistaken entry.`)) return;
         await apiFetch(`/api/portfolio/${ticker}`, { method: 'DELETE' }); load();
+      };
+      const openClose = (p) => {
+        setCloseTkr(p.ticker);
+        setClosePrice(p.current_price != null ? String(p.current_price) : '');
+        setCloseDate(new Date().toISOString().slice(0, 10));
+        setCloseNotes('');
+      };
+      const handleClose = async (e) => {
+        e.preventDefault();
+        if (!closeTkr || !closePrice) return;
+        const r = await apiFetch(`/api/portfolio/${closeTkr}/close`, {
+          method: 'POST',
+          body: JSON.stringify({ exit_price: +closePrice, exit_date: closeDate || null, notes: closeNotes || null })
+        });
+        if (r.ok) { setCloseTkr(null); setClosePrice(''); setCloseDate(''); setCloseNotes(''); load(); }
       };
       const handleCSVImport = async () => {
         if (!csvFile) { setMsg('Select a CSV file first.'); setMsgOk(false); return; }
@@ -1100,22 +1134,41 @@
         </div>
         {showAddForm && <form onSubmit={handleAdd} style={{
           padding: '10px 16px', borderBottom: '1px solid #1a1a1a',
-          display: 'flex', gap: 6, alignItems: 'flex-end'
+          display: 'flex', flexDirection: 'column', gap: 6
         }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>Ticker</div>
-            <input type="text" placeholder="AAPL" value={addTicker} onChange={e => setAddTkr(e.target.value.toUpperCase())}
-              style={{ width: '100%' }} required />
+          <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>Ticker</div>
+              <input type="text" placeholder="AAPL" value={addTicker} onChange={e => setAddTkr(e.target.value.toUpperCase())}
+                style={{ width: '100%' }} required />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>Shares</div>
+              <input type="number" placeholder="100" value={addShares} onChange={e => setAddShares(e.target.value)} step="any" style={{ width: '100%' }} required />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>Avg Cost</div>
+              <input type="number" placeholder="0.00" value={addCost} onChange={e => setAddCost(e.target.value)} step="any" style={{ width: '100%' }} />
+            </div>
           </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>Shares</div>
-            <input type="number" placeholder="100" value={addShares} onChange={e => setAddShares(e.target.value)} step="any" style={{ width: '100%' }} required />
+          <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>Stop Loss</div>
+              <input type="number" placeholder="0.00" value={addStop} onChange={e => setAddStop(e.target.value)} step="any" style={{ width: '100%' }} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>Target</div>
+              <input type="number" placeholder="0.00" value={addTarget} onChange={e => setAddTarget(e.target.value)} step="any" style={{ width: '100%' }} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>Strategy</div>
+              <select value={addStrategy} onChange={e => setAddStrategy(e.target.value)} style={{ width: '100%' }}>
+                <option value="">— strategy —</option>
+                {STRATEGIES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+              </select>
+            </div>
           </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>Avg Cost</div>
-            <input type="number" placeholder="0.00" value={addCost} onChange={e => setAddCost(e.target.value)} step="any" style={{ width: '100%' }} />
-          </div>
-          <button type="submit" style={{ background: '#f0a500', color: '#000', padding: '5px 12px', borderRadius: 3, fontWeight: 600, fontSize: 12 }}>Add</button>
+          <button type="submit" style={{ alignSelf: 'flex-end', background: '#f0a500', color: '#000', padding: '5px 12px', borderRadius: 3, fontWeight: 600, fontSize: 12 }}>Add</button>
         </form>}
         {showCSV && <div style={{ padding: '12px 16px', borderBottom: '1px solid #1a1a1a' }}>
           <div style={{ fontSize: 11, color: '#888', marginBottom: 8 }}>Import Fidelity CSV export</div>
@@ -1186,16 +1239,23 @@
             No positions — add one or import a CSV
           </div>}
           {positions.map(p => (
-            <div key={p.ticker} style={{
+            <div key={p.ticker} style={{ borderBottom: '1px solid #161616' }}>
+            <div style={{
               display: 'flex', alignItems: 'center', padding: '9px 16px',
-              borderBottom: '1px solid #161616', gap: 8, cursor: onSelectTicker ? 'pointer' : 'default'
+              gap: 8, cursor: onSelectTicker ? 'pointer' : 'default'
             }}
               onClick={() => onSelectTicker && onSelectTicker(p.ticker)}
               onMouseEnter={e => { if (onSelectTicker) e.currentTarget.style.background = '#161616'; }}
               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-              <div style={{ width: 60 }}>
+              <div style={{ width: 70 }}>
                 <div className="mono" style={{ fontWeight: 700, color: '#f0a500', fontSize: 13 }}>{p.ticker}</div>
                 <div style={{ fontSize: 10, color: '#555' }}>{p.shares} shares</div>
+                {(p.stop_loss != null || p.target != null) && <div style={{ fontSize: 9, color: '#666', marginTop: 1 }}>
+                  {p.stop_loss != null && <span>stop ${fmt2(p.stop_loss)}</span>}
+                  {p.stop_loss != null && p.target != null && ' · '}
+                  {p.target != null && <span>tgt ${fmt2(p.target)}</span>}
+                </div>}
+                {p.strategy && <span style={{ display: 'inline-block', marginTop: 2, fontSize: 8, color: '#aaa', background: '#1f1f1f', border: '1px solid #2a2a2a', borderRadius: 3, padding: '1px 4px' }}>{stratLabel(p.strategy)}</span>}
               </div>
               <div style={{ flex: 1 }}>
                 <div className="mono" style={{ fontSize: 12 }}>${fmt2(p.current_price)}</div>
@@ -1206,7 +1266,35 @@
                 <div className="mono" style={{ fontSize: 10, color: clr(p.pnl) }}>
                   {p.pnl >= 0 ? '+' : ''}{fmtPct(p.pnl_pct)} · ${p.pnl >= 0 ? '+' : ''}{fmt0(p.pnl)}</div>
               </div>
-              <button onClick={(e) => { e.stopPropagation(); handleDel(p.ticker); }} style={{ background: 'none', color: '#333', fontSize: 14, padding: '2px 6px' }}>✕</button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <button onClick={(e) => { e.stopPropagation(); openClose(p); }} style={{ background: '#1a1a1a', color: '#00d26a', fontSize: 10, padding: '2px 6px', borderRadius: 3 }}>Close</button>
+                <button onClick={(e) => { e.stopPropagation(); handleDel(p.ticker); }} style={{ background: '#1a1a1a', color: '#888', fontSize: 10, padding: '2px 6px', borderRadius: 3 }}>Remove</button>
+              </div>
+            </div>
+            {closeTkr === p.ticker && <form onSubmit={handleClose} onClick={e => e.stopPropagation()} style={{
+              padding: '10px 16px', background: '#0d0d0d', borderTop: '1px solid #1a1a1a',
+              display: 'flex', flexDirection: 'column', gap: 6
+            }}>
+              <div style={{ fontSize: 11, color: '#00d26a', fontWeight: 600 }}>Close {p.ticker} — record sale to journal</div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>Exit Price</div>
+                  <input type="number" placeholder="0.00" value={closePrice} onChange={e => setClosePrice(e.target.value)} step="any" style={{ width: '100%' }} required />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>Exit Date</div>
+                  <input type="date" value={closeDate} onChange={e => setCloseDate(e.target.value)} style={{ width: '100%' }} />
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>Notes</div>
+                <input type="text" placeholder="optional" value={closeNotes} onChange={e => setCloseNotes(e.target.value)} style={{ width: '100%' }} />
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button type="submit" style={{ flex: 1, background: '#00d26a', color: '#000', padding: '5px 12px', borderRadius: 3, fontWeight: 600, fontSize: 12 }}>Close Position</button>
+                <button type="button" onClick={() => setCloseTkr(null)} style={{ background: '#1a1a1a', color: '#888', padding: '5px 12px', borderRadius: 3, fontSize: 12 }}>Cancel</button>
+              </div>
+            </form>}
             </div>
           ))}
         </div>

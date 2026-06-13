@@ -87,9 +87,11 @@
       <span id="dataTime" class="data-time"></span>
     </div>
     <div class="topbar-actions">
-      <a class="btn hint" data-tip="Return to the main stock screener, filters, watchlist, portfolio, and ticker detail workspace." href="/">Screener</a>
+      <a class="btn hint" data-tip="Your daily guided workflow: regime, position alerts, and top setups with trade plans." href="/">Today</a>
+      <a class="btn hint" data-tip="Return to the main stock screener, filters, watchlist, portfolio, and ticker detail workspace." href="/screener">Screener</a>
       <a class="btn hint" data-tip="Open market-wide chart dashboards for VIX, sectors, ETFs, breadth, and macro context." href="/charts">Charts</a>
       <a class="btn hint" data-tip="Open the AI-assisted daily report page for saved market commentary and analysis." href="/report">Report</a>
+      <a class="btn hint" data-tip="Closed-trade log with realized P&L, R-multiple, and win-rate stats." href="/journal">Journal</a>
       <span id="username" class="username"></span>
       <button id="logoutBtn" class="btn hint" data-tip="End this browser session and return to the login page." type="button">Logout</button>
     </div>
@@ -107,7 +109,7 @@
         </div>
         <div class="workflow-actions">
           <button id="weeklyPresetBtn" class="btn btn-primary hint" data-tip="Sets Universe to Watchlist, Top N to 10, Rebalance to Weekly, keeps the SPY trend filter on, and reruns the test.">Weekly Saved Tickers</button>
-          <a class="btn hint" data-tip="Open the screener to add or remove saved tickers in your watchlist before running this weekly workflow." href="/">Edit Watchlist</a>
+          <a class="btn hint" data-tip="Open the screener to add or remove saved tickers in your watchlist before running this weekly workflow." href="/screener">Edit Watchlist</a>
         </div>
       </div>
       <div class="tutorial-list">
@@ -121,11 +123,19 @@
     </section>
 
     <section class="controls">
-      <label class="hint" data-tip="Choose which saved tickers the strategy tests. Watchlist uses idea candidates, Portfolio uses current holdings, and Both combines them.">Universe
+      <label class="hint" data-tip="The swing strategy to test. Momentum Rotation ranks by trend strength; Pullback buys dips to the 50-day MA in uptrends; Breakout buys new highs on volume.">Strategy
+        <select id="strategy">
+          <option value="momentum_rotation">Momentum Rotation</option>
+          <option value="pullback_50ma">Pullback to 50MA</option>
+          <option value="breakout_volume">Breakout + Volume</option>
+        </select>
+      </label>
+      <label class="hint" data-tip="Choose which tickers the strategy tests. Watchlist/Portfolio use your saved tickers; Full Universe tests the whole S&P 500 + ETF set (slower, needs the 2-year backfill complete).">Universe
         <select id="source">
           <option value="watchlist">Watchlist</option>
           <option value="portfolio">Portfolio</option>
           <option value="both">Both</option>
+          <option value="universe">Full Universe</option>
         </select>
       </label>
       <label class="hint" data-tip="Maximum number of ranked tickers held after each rebalance. Lower values concentrate the strategy; higher values diversify it.">Top N
@@ -145,7 +155,15 @@
         <input id="spyRegime" type="checkbox" checked> SPY regime filter
       </label>
       <button id="runBtn" class="btn btn-primary hint" data-tip="Run the walk-forward test with the selected settings and refresh the equity curve, metrics, trades, and notes.">Run Backtest</button>
+      <button id="compareBtn" class="btn hint" data-tip="Run all three strategies with the current settings and compare CAGR, drawdown, Sharpe, and equity curves side by side.">Compare Strategies</button>
       <span id="status" class="note" aria-live="polite"></span>
+    </section>
+
+    <section class="panel" id="compareWrap" hidden>
+      <div class="panel-title">Strategy Comparison <span class="panel-sub">same settings, all three strategies</span></div>
+      <div class="panel-desc">Overlaid equity curves and key metrics. Prefer the strategy that beats SPY with the smoother ride (lower max drawdown, higher Sharpe) — not just the highest total return.</div>
+      <div class="chart-wrap"><canvas id="compareChart"></canvas></div>
+      <div id="compareTable" style="margin-top:14px;"></div>
     </section>
 
     <section class="panel">
@@ -438,6 +456,7 @@ async function load() {
   const status = document.getElementById('status');
   status.textContent = 'Running...';
   const params = new URLSearchParams({
+    strategy: document.getElementById('strategy').value,
     source: document.getElementById('source').value,
     top_n: document.getElementById('topN').value,
     rebalance_days: document.getElementById('rebalance').value,
@@ -462,7 +481,62 @@ async function load() {
   }
 }
 
+const STRATEGY_LABELS = { momentum_rotation: 'Momentum Rotation', pullback_50ma: 'Pullback to 50MA', breakout_volume: 'Breakout + Volume' };
+const COMPARE_COLORS = ['#f0a500', '#7eb8f5', '#9b8cff'];
+let compareChart;
+
+async function compareStrategies() {
+  const status = document.getElementById('status');
+  status.textContent = 'Comparing strategies...';
+  const base = {
+    source: document.getElementById('source').value,
+    top_n: document.getElementById('topN').value,
+    rebalance_days: document.getElementById('rebalance').value,
+    cost_bps: document.getElementById('costBps').value,
+    spy_regime: document.getElementById('spyRegime').checked ? 'true' : 'false',
+  };
+  const ids = Object.keys(STRATEGY_LABELS);
+  try {
+    const results = [];
+    for (const sid of ids) {
+      const p = new URLSearchParams({ ...base, strategy: sid });
+      results.push(await api('/api/backtest/walk-forward?' + p.toString()));
+    }
+    const wrap = document.getElementById('compareWrap');
+    wrap.hidden = false;
+
+    // Overlaid equity curves (use the longest label set as the x-axis)
+    const longest = results.reduce((a, b) => (b.equity || []).length > (a.equity || []).length ? b : a, results[0]);
+    const labels = (longest.equity || []).map(p => p.date);
+    const datasets = results.map((bt, i) => ({
+      label: STRATEGY_LABELS[ids[i]], data: (bt.equity || []).map(p => p.value),
+      borderColor: COMPARE_COLORS[i], tension: .2, pointRadius: 0,
+    }));
+    datasets.push({ label: 'SPY', data: (longest.benchmark || []).map(p => p.value), borderColor: '#555', borderDash: [5, 4], tension: .2, pointRadius: 0 });
+    compareChart?.destroy();
+    compareChart = new Chart(document.getElementById('compareChart'), {
+      type: 'line', data: { labels, datasets },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#aaa' } } },
+        scales: { x: { ticks: { color: '#777', maxTicksLimit: 8 }, grid: { color: '#1a1a1a' } }, y: { ticks: { color: '#777' }, grid: { color: '#1a1a1a' } } } },
+    });
+
+    const spy = results[0].benchmark_metrics || {};
+    const rows = results.map((bt, i) => { const m = bt.metrics || {}; return `<tr>
+      <td><span class="pill" style="border-color:${COMPARE_COLORS[i]};color:${COMPARE_COLORS[i]};">${esc(STRATEGY_LABELS[ids[i]])}</span></td>
+      <td>${fmtPct(m.cagr)}</td><td>${fmtPct(m.total_return)}</td>
+      <td>${fmtNum(m.max_drawdown, 1)}%</td><td>${fmtNum(m.sharpe, 2)}</td>
+      <td>${m.win_rate ?? '--'}%</td><td class="mono">${bt.available_tickers?.length || 0}</td></tr>`; }).join('');
+    document.getElementById('compareTable').innerHTML = `<table><thead><tr><th>Strategy</th><th>CAGR</th><th>Total</th><th>Max DD</th><th>Sharpe</th><th>Win Rate</th><th>Tested</th></tr></thead>
+      <tbody>${rows}<tr><td><span class="pill" style="border-color:#555;color:#888;">SPY benchmark</span></td><td>${fmtPct(spy.cagr)}</td><td>${fmtPct(spy.total_return)}</td><td>${fmtNum(spy.max_drawdown, 1)}%</td><td>${fmtNum(spy.sharpe, 2)}</td><td>--</td><td>--</td></tr></tbody></table>`;
+    wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    status.textContent = 'Comparison complete';
+  } catch (e) {
+    status.innerHTML = `<span class="error">${esc(e.message)}</span>`;
+  }
+}
+
 document.getElementById('runBtn').addEventListener('click', load);
+document.getElementById('compareBtn').addEventListener('click', compareStrategies);
 document.getElementById('snapshotBtn').addEventListener('click', async () => {
   const status = document.getElementById('snapshotStatus');
   status.textContent = 'Saving snapshot...';

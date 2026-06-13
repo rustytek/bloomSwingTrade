@@ -32,7 +32,7 @@ async def get_stock(
 @router.get("/{ticker}/history")
 async def get_history(
     ticker: str,
-    period: str = Query("6mo", description="yfinance period: 1mo, 3mo, 6mo, 1y, 2y"),
+    period: str = Query("2y", description="yfinance period: 1mo, 3mo, 6mo, 1y, 2y"),
     force_refresh: bool = Query(False),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),

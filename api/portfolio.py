@@ -1,8 +1,10 @@
+from datetime import date, datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from database.db import get_db
-from database.models import User, PortfolioPosition
+from database.models import User, PortfolioPosition, ClosedTrade
 from auth.deps import get_current_user
 from services import market_data
 from services.tickers import normalize_ticker
@@ -15,6 +17,16 @@ class PositionRequest(BaseModel):
     ticker: str
     shares: float
     avg_cost: float
+    notes: str | None = None
+    stop_loss: float | None = None
+    target: float | None = None
+    entry_date: date | None = None
+    strategy: str | None = None
+
+
+class CloseRequest(BaseModel):
+    exit_price: float
+    exit_date: date | None = None
     notes: str | None = None
 
 
@@ -56,6 +68,10 @@ async def get_portfolio(
             "pnl_pct": round(pnl_pct, 2),
             "added_at": pos.added_at.isoformat(),
             "notes": pos.notes,
+            "stop_loss": pos.stop_loss,
+            "target": pos.target,
+            "entry_date": pos.entry_date.isoformat() if pos.entry_date else None,
+            "strategy": pos.strategy,
         })
 
     total_pnl = total_mv - total_cost
@@ -87,15 +103,87 @@ def upsert_position(
         pos.avg_cost = req.avg_cost
         if req.notes is not None:
             pos.notes = req.notes
+        if req.stop_loss is not None:
+            pos.stop_loss = req.stop_loss
+        if req.target is not None:
+            pos.target = req.target
+        if req.entry_date is not None:
+            pos.entry_date = req.entry_date
+        if req.strategy is not None:
+            pos.strategy = req.strategy
     else:
         pos = PortfolioPosition(
             user_id=user.id, ticker=ticker,
-            shares=req.shares, avg_cost=req.avg_cost, notes=req.notes
+            shares=req.shares, avg_cost=req.avg_cost, notes=req.notes,
+            stop_loss=req.stop_loss, target=req.target,
+            entry_date=req.entry_date, strategy=req.strategy,
         )
         db.add(pos)
 
     db.commit()
     return {"ticker": ticker, "shares": pos.shares, "avg_cost": pos.avg_cost}
+
+
+@router.post("/{ticker}/close", status_code=status.HTTP_201_CREATED)
+def close_position(
+    ticker: str,
+    req: CloseRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Close (sell) a position and archive it to the trade journal.
+
+    Use this — not DELETE — when you actually exit a trade, so the realized
+    P&L and R-multiple are recorded. DELETE remains for correcting mistaken
+    entries that were never really held.
+    """
+    ticker = normalize_ticker(ticker)
+    pos = (
+        db.query(PortfolioPosition)
+        .filter(PortfolioPosition.user_id == user.id, PortfolioPosition.ticker == ticker)
+        .first()
+    )
+    if not pos:
+        raise HTTPException(status_code=404, detail="Position not found")
+
+    cost_basis = pos.shares * pos.avg_cost
+    pnl = pos.shares * req.exit_price - cost_basis
+    pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0.0
+
+    # R-multiple only meaningful when a real stop below cost was set
+    r_multiple = None
+    if pos.stop_loss is not None and pos.avg_cost - pos.stop_loss > 0:
+        r_multiple = round((req.exit_price - pos.avg_cost) / (pos.avg_cost - pos.stop_loss), 2)
+
+    trade = ClosedTrade(
+        user_id=user.id,
+        ticker=ticker,
+        shares=pos.shares,
+        avg_cost=pos.avg_cost,
+        exit_price=req.exit_price,
+        entry_date=pos.entry_date,
+        exit_date=req.exit_date or date.today(),
+        stop_loss=pos.stop_loss,
+        target=pos.target,
+        strategy=pos.strategy,
+        pnl=round(pnl, 2),
+        pnl_pct=round(pnl_pct, 2),
+        r_multiple=r_multiple,
+        notes=req.notes or pos.notes,
+        opened_at=pos.added_at,
+        closed_at=datetime.now(timezone.utc),
+    )
+    db.add(trade)
+    db.delete(pos)
+    db.commit()
+    db.refresh(trade)
+    return {
+        "id": trade.id,
+        "ticker": trade.ticker,
+        "pnl": trade.pnl,
+        "pnl_pct": trade.pnl_pct,
+        "r_multiple": trade.r_multiple,
+    }
 
 
 @router.delete("/{ticker}", status_code=status.HTTP_204_NO_CONTENT)

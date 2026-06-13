@@ -33,6 +33,9 @@ from api.portfolio import router as portfolio_router
 from api.ai import router as ai_router
 from api.charts import router as charts_router
 from api.backtest import router as backtest_router
+from api.settings import router as settings_router
+from api.journal import router as journal_router
+from api.today import router as today_router
 from generate_ssl import generate_ssl_cert
 from services.universe import UNIVERSE
 from services.market_data import (
@@ -83,12 +86,14 @@ async def _scheduled_market_refresh_job():
         result.get("skipped"),
         result.get("hit_limit"),
     )
+    from services.today import invalidate_cache
+    invalidate_cache()
 
 
 def init_db():
     """Create all tables and sync the configured admin account."""
     Base.metadata.create_all(bind=engine)
-    ensure_cache_columns()
+    ensure_schema_migrations()
     db = SessionLocal()
     try:
         admin = db.query(User).filter(User.username == settings.admin_user).first()
@@ -131,19 +136,40 @@ async def _scheduled_watchlist_snapshot_job():
         db.close()
 
 
-def ensure_cache_columns():
+def _ensure_columns(conn, table: str, columns: dict[str, str]):
+    """ALTER TABLE ADD COLUMN for any column in `columns` (name -> DDL) not yet present."""
+    existing = {
+        row[1]
+        for row in conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+    }
+    for name, ddl in columns.items():
+        if name not in existing:
+            conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
+
+def ensure_schema_migrations():
     """Add lightweight SQLite columns needed by older installs."""
     if engine.dialect.name != "sqlite":
         return
 
     with engine.begin() as conn:
-        existing = {
-            row[1]
-            for row in conn.exec_driver_sql("PRAGMA table_info(stock_cache)").fetchall()
-        }
-        for column in ("quote_cached_at", "history_cached_at"):
-            if column not in existing:
-                conn.exec_driver_sql(f"ALTER TABLE stock_cache ADD COLUMN {column} DATETIME")
+        _ensure_columns(conn, "stock_cache", {
+            "quote_cached_at": "DATETIME",
+            "history_cached_at": "DATETIME",
+        })
+        _ensure_columns(conn, "users", {
+            "account_size": "FLOAT DEFAULT 10000",
+            "risk_pct": "FLOAT DEFAULT 1.0",
+            "max_positions": "INTEGER DEFAULT 8",
+            "atr_stop_mult": "FLOAT DEFAULT 2.5",
+            "r_multiple": "FLOAT DEFAULT 2.0",
+        })
+        _ensure_columns(conn, "portfolio_positions", {
+            "stop_loss": "FLOAT",
+            "target": "FLOAT",
+            "entry_date": "DATE",
+            "strategy": "VARCHAR(32)",
+        })
 
 
 @asynccontextmanager
@@ -196,7 +222,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.6.7",
+    version="1.7.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -220,11 +246,17 @@ app.include_router(portfolio_router)
 app.include_router(ai_router)
 app.include_router(charts_router)
 app.include_router(backtest_router)
+app.include_router(settings_router)
+app.include_router(journal_router)
+app.include_router(today_router)
 
 
 # ── Static files (React SPA) ─────────────────────────────────────────────────
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+# Serve shared static assets (e.g. /static/js/common.js)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/login")
@@ -247,18 +279,33 @@ async def backtest_page():
     return FileResponse(os.path.join(STATIC_DIR, "backtest.html"))
 
 
-@app.get("/")
-async def root():
+@app.get("/screener")
+async def screener_page():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 
-# Catch-all: serve index.html for any unknown routes (SPA routing)
+@app.get("/journal")
+async def journal_page():
+    return FileResponse(os.path.join(STATIC_DIR, "journal.html"))
+
+
+@app.get("/today")
+async def today_page():
+    return FileResponse(os.path.join(STATIC_DIR, "today.html"))
+
+
+@app.get("/")
+async def root():
+    return FileResponse(os.path.join(STATIC_DIR, "today.html"))
+
+
+# Catch-all: serve the Today dashboard for any unknown routes
 @app.exception_handler(404)
 async def spa_handler(request: Request, exc):
     # API routes should return proper 404 JSON
-    if request.url.path.startswith(("/api/", "/auth/")):
+    if request.url.path.startswith(("/api/", "/auth/", "/static/")):
         return JSONResponse({"detail": "Not found"}, status_code=404)
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    return FileResponse(os.path.join(STATIC_DIR, "today.html"))
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────

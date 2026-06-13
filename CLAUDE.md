@@ -33,24 +33,66 @@ The app runs on HTTPS at `https://localhost:8443`. Swagger docs at `/api/docs`.
 ```
 React SPA (static/*.html) → FastAPI (main.py)
   → auth/ (JWT login/register)
-  → api/ (stocks, screener, watchlist, portfolio, ai, charts)
-  → services/ (market_data, indicators, ai_service, chart_service, report_service)
+  → api/ (stocks, screener, watchlist, portfolio, ai, charts, today, settings, journal, backtest)
+  → services/ (market_data, indicators, ai_service, chart_service, report_service,
+               strategies, trade_plan, today)
   → SQLite via SQLAlchemy (database/)
 ```
+
+### Page Routes
+- `/` — Today dashboard (`static/today.html`): regime light, position health, top setups with trade plans, checklist, capacity. (Also the 404 catch-all fallback.)
+- `/screener` — the screener (`static/index.html`, formerly served at `/`).
+- `/journal` — trade journal (`static/journal.html`).
+- `/charts` — chart dashboard (`static/charts.html`).
+- Shared front-end helpers live in `static/js/common.js`, served via a `/static` StaticFiles mount in `main.py`.
 
 ### Key Files
 | File | Purpose |
 |---|---|
 | `config.py` | Pydantic Settings — all env vars with defaults |
-| `database/models.py` | ORM models: User, WatchlistItem, PortfolioPosition, StockCache, AICache, ReportCache |
+| `database/models.py` | ORM models: User, WatchlistItem, PortfolioPosition, StockCache, AICache, ReportCache, ClosedTrade |
 | `database/db.py` | SQLAlchemy engine, `get_db()` FastAPI dependency |
 | `auth/deps.py` | `get_current_user` / `get_current_admin` JWT dependencies |
 | `services/market_data.py` | yfinance wrapper, dual-layer cache (in-memory dict + SQLite), indicator calculation |
 | `services/universe.py` | ~450 tickers: S&P 500 constituents + ETF lists |
 | `services/ai_service.py` | Abstract `AIService` base + Mock/Anthropic/OpenAI/Ollama implementations |
+| `services/indicators.py` | Technical indicators; includes `calc_atr(highs, lows, closes, period=14)` (Wilder-smoothed) |
+| `services/strategies.py` | 3-strategy framework; registry `STRATEGIES` (see below) |
+| `services/trade_plan.py` | `build_trade_plan(...)`: ATR entry zone, stop, fixed-fractional sizing, R-multiple target (see below) |
+| `services/today.py` | Builds the `/api/today` payload; exposes `position_flags()` helper (see below) |
+| `api/today.py` | `GET /api/today` — daily dashboard |
+| `api/settings.py` | `GET`/`PUT /api/settings` — account_size, risk_pct, max_positions, atr_stop_mult, r_multiple |
+| `api/journal.py` | `GET /api/journal` (stats + per-strategy breakdown), `DELETE /api/journal/{id}` |
+| `api/backtest.py` | Walk-forward backtest; `GET /api/backtest/strategies` (see below) |
 
 ### Caching Strategy
 Two-layer cache: in-memory Python dict (`_mem_cache`) → SQLite `StockCache` table. Data is considered "fresh" if cached **after the most recent NYSE market close (4pm ET)** — not a rolling TTL. Quote and history TTLs are configurable via env vars but default to daily refresh.
+
+History cache extended from 1 year to 2 years in `services/market_data.py` (needed for the 200-day MA regime gate and longer backtest windows); `invalidate_short_history_cache` `min_bars` was raised so existing installs refetch.
+
+### Strategy Framework (`services/strategies.py`)
+Registry `STRATEGIES` maps ids to `Strategy` instances:
+- `momentum_rotation` — Clenow-style 90-bar exponential regression slope × R².
+- `pullback_50ma` — buy dips to the 50MA in an uptrend.
+- `breakout_volume` — 60-day-high breakout on >=1.5x volume.
+
+Each `Strategy` exposes `candidate(bars, idx)` (backtest hook, uses `bars[:idx+1]`) and `scan(ticker, bars, quote)` (live hook returning a `Setup`).
+
+### Trade Plans (`services/trade_plan.py`)
+`build_trade_plan(...)` produces an ATR-based entry zone, a stop (`entry − atr_mult×ATR`), a fixed-fractional position size from account size + risk %, and an R-multiple target.
+
+### Today Dashboard (`services/today.py`)
+Builds the `/api/today` payload (regime light, position health, top setups with trade plans, checklist, capacity). Exposes the shared `position_flags()` helper, also reused by `build_decision_cockpit`. Per-user in-memory cache (15-min TTL), invalidated by the scheduler.
+
+### Backtesting (`api/backtest.py`)
+Walk-forward backtest now takes a `strategy` param (one of the 3 ids); `source` can be `universe` (the whole cached universe). `GET /api/backtest/strategies` lists available strategies.
+
+### Database / Migrations
+- New `ClosedTrade` model (`closed_trades` table) backs the trade journal — records realized `pnl`, `pnl_pct`, and `r_multiple` (when a stop was set).
+- `User` gained trading-settings columns: `account_size`, `risk_pct`, `max_positions`, `atr_stop_mult`, `r_multiple`.
+- `PortfolioPosition` gained `stop_loss`, `target`, `entry_date`, `strategy`.
+- Closing a position (`POST /api/portfolio/{ticker}/close`) archives it to the journal and deletes it; `DELETE /api/portfolio/{ticker}` remains a non-journaled hard delete for correcting mistaken entries.
+- Lightweight SQLite `ALTER` migrations are handled by `ensure_schema_migrations()` in `main.py` (renamed from `ensure_cache_columns`, now with a generic `_ensure_columns` helper).
 
 ### Frontend
 Vanilla JS + Fetch API in `static/` — no build step. Files are served directly by FastAPI as static assets. Edit `.html` files directly; changes are live when using Docker volume mount (`./static:/app/static`).

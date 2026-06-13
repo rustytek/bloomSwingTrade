@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SwingTrader — Today</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background:#0d0d0d; color:#d8d8d8; font-family:'Inter',sans-serif; font-size:14px; line-height:1.5; }
+    .topbar { min-height:44px; background:#111; border-bottom:1px solid #1a1a1a; display:flex; align-items:center; padding:0 16px; gap:12px; position:sticky; top:0; z-index:10; flex-wrap:wrap; }
+    .brand { font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:700; color:#fff; letter-spacing:1px; text-decoration:none; white-space:nowrap; }
+    .topbar-sep { width:1px; height:20px; background:#222; flex-shrink:0; }
+    .universe-status { display:flex; align-items:center; gap:6px; min-width:0; }
+    .universe-text { font-size:11px; color:#444; white-space:nowrap; }
+    .universe-text.loading { color:#f0a500; }
+    .data-time { font-size:10px; color:#555; margin-left:8px; white-space:nowrap; }
+    .topbar-actions { margin-left:auto; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .username { font-size:11px; color:#555; }
+    .btn { display:inline-flex; align-items:center; gap:5px; padding:5px 10px; border-radius:3px; border:1px solid #2a2a2a; background:#1a1a1a; color:#999; font-size:11px; font-weight:600; cursor:pointer; text-decoration:none; font-family:'Inter',sans-serif; }
+    .btn:hover { color:#ddd; background:#222; }
+    .btn-active { color:#f0a500; border-color:#3a2f10; background:#1c1810; }
+    .btn-primary { background:#f0a500; color:#000; border-color:#f0a500; }
+    .btn-sm { padding:3px 8px; font-size:10px; }
+    .hint { position:relative; }
+    .hint::after { content:attr(data-tip); position:absolute; left:50%; bottom:calc(100% + 9px); transform:translateX(-50%); display:none; width:min(280px,70vw); padding:8px 10px; background:#1e1e1e; border:1px solid #333; border-radius:4px; color:#d8d8d8; font-size:11px; font-weight:400; line-height:1.45; white-space:normal; box-shadow:0 6px 18px #000c; z-index:200; pointer-events:none; }
+    .hint:hover::after, .hint:focus-within::after { display:block; }
+    .topbar .hint::after { top:calc(100% + 9px); bottom:auto; }
+    .page { max-width:1500px; margin:0 auto; padding:18px; display:flex; flex-direction:column; gap:16px; }
+    .mono { font-family:'JetBrains Mono',monospace; }
+    .muted { color:#777; } .up { color:#26a65b; } .down { color:#e05252; } .warn { color:#f0a500; }
+    .ticker-link { color:#f0a500; cursor:pointer; font-family:'JetBrains Mono',monospace; font-weight:700; }
+    .ticker-link:hover { text-decoration:underline; }
+    .panel { background:#111; border:1px solid #1e1e1e; border-radius:6px; padding:16px; }
+    .panel-title { font-size:13px; color:#ccc; font-weight:700; margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em; }
+    .panel-desc { color:#777; font-size:12px; margin-bottom:12px; }
+    /* Regime banner */
+    .regime { display:flex; align-items:center; gap:18px; padding:18px 20px; border-radius:8px; border:1px solid #1e1e1e; }
+    .regime.green { background:linear-gradient(90deg,#0e1b0e,#111); border-color:#1d3a1d; }
+    .regime.yellow { background:linear-gradient(90deg,#1c1808,#111); border-color:#3a3110; }
+    .regime.red { background:linear-gradient(90deg,#1e0d0d,#111); border-color:#3a1414; }
+    .regime-light { width:54px; height:54px; border-radius:50%; flex-shrink:0; box-shadow:0 0 22px; }
+    .regime-light.green { background:#26a65b; color:#26a65b; }
+    .regime-light.yellow { background:#f0a500; color:#f0a500; }
+    .regime-light.red { background:#e05252; color:#e05252; }
+    .regime-head { font-size:20px; font-weight:800; color:#fff; }
+    .regime-sub { color:#aaa; font-size:12px; margin-top:3px; }
+    .chips { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+    .chip { font-size:11px; padding:2px 8px; border-radius:3px; background:#171717; border:1px solid #262626; color:#aaa; }
+    /* Tables */
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th { text-align:left; padding:7px 8px; color:#666; border-bottom:1px solid #222; font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+    td { padding:8px; border-bottom:1px solid #171717; vertical-align:middle; }
+    tr:hover td { background:#151515; }
+    .badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:3px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+    .badge.ok { background:#0e1b0e; color:#4ec27a; border:1px solid #1d3a1d; }
+    .badge.stop_hit { background:#2a0d0d; color:#ff6b6b; border:1px solid #4a1414; }
+    .badge.near_stop, .badge.trend_break { background:#1c1808; color:#f0a500; border:1px solid #3a3110; }
+    .badge.target_hit { background:#0e1b1b; color:#4ec9c2; border:1px solid #1d3a3a; }
+    .strat-badge { background:#15131f; color:#b69cff; border:1px solid #2c2546; }
+    .state-forming { color:#f0a500; } .state-triggered { color:#4ec27a; }
+    /* Setup cards */
+    .setups-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:14px; }
+    .setup-card { background:#141414; border:1px solid #222; border-radius:6px; padding:14px; }
+    .setup-card-head { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+    .setup-reasons { font-size:11px; color:#9a9a9a; margin:6px 0 10px; line-height:1.5; }
+    .plan { display:grid; grid-template-columns:1fr 1fr; gap:6px 14px; background:#0f0f0f; border:1px solid #1d1d1d; border-radius:5px; padding:10px; }
+    .plan-row { display:flex; justify-content:space-between; font-size:11px; }
+    .plan-row .k { color:#777; text-transform:uppercase; letter-spacing:.04em; font-size:10px; }
+    .plan-row .v { font-family:'JetBrains Mono',monospace; color:#ddd; font-weight:700; }
+    /* Checklist */
+    .checklist { display:flex; flex-direction:column; gap:8px; }
+    .check-item { display:flex; align-items:center; gap:10px; padding:8px 10px; background:#141414; border:1px solid #1f1f1f; border-radius:5px; }
+    .check-item input { width:16px; height:16px; accent-color:#f0a500; }
+    .check-item.done label { color:#666; text-decoration:line-through; }
+    .check-count { margin-left:auto; font-size:11px; color:#777; }
+    /* Modal + forms */
+    .modal { position:fixed; inset:0; background:rgba(0,0,0,.72); display:none; align-items:center; justify-content:center; z-index:100; padding:20px; }
+    .modal-card { width:min(980px,96vw); max-height:88vh; overflow:auto; background:#111; border:1px solid #2a2a2a; border-radius:6px; box-shadow:0 18px 60px #000; }
+    .modal-head { display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid #1e1e1e; position:sticky; top:0; background:#111; }
+    .modal-body { padding:16px; display:grid; grid-template-columns:1.2fr .8fr; gap:16px; }
+    .chart-wrap { height:300px; }
+    .icon-btn { margin-left:auto; background:#1a1a1a; color:#888; border:1px solid #2a2a2a; border-radius:4px; padding:4px 10px; cursor:pointer; }
+    .form-card { width:min(420px,96vw); background:#111; border:1px solid #2a2a2a; border-radius:6px; padding:18px; }
+    .form-row { display:flex; flex-direction:column; gap:5px; margin-bottom:12px; }
+    .form-row label { font-size:11px; color:#888; text-transform:uppercase; letter-spacing:.05em; }
+    .form-row input { background:#1a1a1a; border:1px solid #2a2a2a; color:#ddd; border-radius:4px; padding:8px 10px; font-family:'Inter',sans-serif; }
+    .form-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:6px; }
+    .empty { color:#666; font-size:12px; padding:14px; text-align:center; }
+    .error { color:#e05252; font-size:12px; }
+    @media (max-width:900px){ .modal-body{ grid-template-columns:1fr; } .plan{ grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <div class="topbar" id="topbar"></div>
+  <main class="page" id="page">
+    <div id="loading" class="empty">Loading your daily briefing…</div>
+    <section id="regimeWrap"></section>
+    <section id="positionsWrap" class="panel" hidden></section>
+    <section id="setupsWrap" class="panel" hidden></section>
+    <section id="checklistWrap" class="panel" hidden></section>
+    <div id="disclaimer" class="muted" style="font-size:11px;"></div>
+  </main>
+
+  <!-- Settings modal -->
+  <div id="settingsModal" class="modal">
+    <div class="form-card">
+      <h3 style="color:#eee;margin-bottom:14px;">Trading Settings</h3>
+      <div class="form-row"><label>Account size ($)</label><input id="setAccount" type="number" min="1" step="100"></div>
+      <div class="form-row"><label>Risk per trade (%)</label><input id="setRisk" type="number" min="0.1" max="5" step="0.1"></div>
+      <div class="form-row"><label>Max open positions</label><input id="setMax" type="number" min="1" max="25" step="1"></div>
+      <div class="form-row"><label>ATR stop multiple</label><input id="setAtr" type="number" min="0.5" max="6" step="0.1"></div>
+      <div class="form-row"><label>Target R-multiple</label><input id="setR" type="number" min="0.5" max="10" step="0.5"></div>
+      <div id="settingsErr" class="error"></div>
+      <div class="form-actions">
+        <button class="btn" onclick="closeSettings()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Close-trade modal -->
+  <div id="closeModal" class="modal">
+    <div class="form-card">
+      <h3 style="color:#eee;margin-bottom:6px;">Close Trade — <span id="closeTicker" class="mono warn"></span></h3>
+      <div class="muted" style="font-size:11px;margin-bottom:14px;">Records realized P&L and R-multiple to your journal.</div>
+      <div class="form-row"><label>Exit price ($)</label><input id="closePrice" type="number" min="0" step="0.01"></div>
+      <div class="form-row"><label>Exit date</label><input id="closeDate" type="date"></div>
+      <div class="form-row"><label>Notes (optional)</label><input id="closeNotes" type="text" placeholder="why you exited"></div>
+      <div id="closeErr" class="error"></div>
+      <div class="form-actions">
+        <button class="btn" onclick="closeCloseModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="submitClose()">Close & Journal</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/common.js"></script>
+  <script>
+  'use strict';
+  let DATA = null;
+  const todayISO = () => new Date().toISOString().slice(0, 10);
+  const checkKey = () => 'st_checks_' + todayISO();
+
+  function loadManualChecks() { try { return JSON.parse(localStorage.getItem(checkKey()) || '{}'); } catch { return {}; } }
+  function saveManualCheck(id, val) { const c = loadManualChecks(); c[id] = val; localStorage.setItem(checkKey(), JSON.stringify(c)); }
+
+  async function load() {
+    try {
+      DATA = await api('/api/today');
+    } catch (e) {
+      document.getElementById('loading').innerHTML = `<span class="error">${esc(e.message)}</span>`;
+      return;
+    }
+    document.getElementById('loading').hidden = true;
+    renderRegime(DATA.regime);
+    renderPositions(DATA.positions);
+    renderSetups(DATA);
+    renderChecklist(DATA.checklist);
+    document.getElementById('disclaimer').textContent = DATA.disclaimer || '';
+  }
+
+  function renderRegime(r) {
+    const when = DATA.as_of ? new Date(DATA.as_of).toLocaleString() : '';
+    const cap = DATA.capacity || {};
+    document.getElementById('regimeWrap').innerHTML = `
+      <div class="regime ${r.light}">
+        <div class="regime-light ${r.light}"></div>
+        <div style="flex:1;min-width:0;">
+          <div class="regime-head">${r.light === 'green' ? 'RISK-ON' : r.light === 'yellow' ? 'CAUTION' : 'RISK-OFF'}
+            <span class="regime-sub" style="font-weight:400;">· as of ${esc(when)}</span></div>
+          <div class="regime-sub">SPY ${r.spy.price != null ? '$' + r.spy.price : '--'} · vs50 ${r.spy.vs_ma50 ?? '--'}% · vs200 ${r.spy.vs_ma200 ?? '--'}% · ${cap.open_positions}/${cap.max_positions} positions (${cap.slots_free} slots free)</div>
+          <div class="chips">${(r.reasons || []).map(x => `<span class="chip">${esc(x)}</span>`).join('')}</div>
+        </div>
+      </div>`;
+  }
+
+  function renderPositions(positions) {
+    const wrap = document.getElementById('positionsWrap');
+    wrap.hidden = false;
+    const alerts = positions.filter(p => p.status !== 'ok');
+    const body = positions.length === 0
+      ? `<div class="empty">No open positions. Add holdings on the <a class="ticker-link" href="/screener">Screener</a> to track them here.</div>`
+      : `<table><thead><tr><th>Ticker</th><th>Status</th><th>P&L</th><th>Price</th><th>Stop</th><th>Target</th><th>Open R</th><th>Action</th><th></th></tr></thead><tbody>
+        ${positions.map(p => `
+          <tr>
+            <td><span class="ticker-link" onclick="openTickerDetail('${esc(p.ticker)}')">${esc(p.ticker)}</span></td>
+            <td><span class="badge ${p.status}">${esc(p.status.replace('_', ' '))}</span></td>
+            <td>${fmtPct(p.pnl_pct)}</td>
+            <td class="mono">${p.price != null ? '$' + Number(p.price).toFixed(2) : '--'}</td>
+            <td class="mono">${p.stop_loss != null ? '$' + Number(p.stop_loss).toFixed(2) : '<span class="muted">none</span>'}${p.suggested_stop != null && (p.stop_loss == null || p.suggested_stop > p.stop_loss) ? `<br><span class="muted" style="font-size:10px;">trail → $${p.suggested_stop}</span>` : ''}</td>
+            <td class="mono">${p.target != null ? '$' + Number(p.target).toFixed(2) : '<span class="muted">--</span>'}</td>
+            <td class="mono">${p.open_r != null ? (p.open_r >= 0 ? '+' : '') + p.open_r + 'R' : '--'}</td>
+            <td style="font-size:11px;color:#bbb;">${(p.actions || []).map(esc).join('<br>') || '<span class="muted">hold</span>'}</td>
+            <td><button class="btn btn-sm" onclick="openCloseModal('${esc(p.ticker)}', ${p.price ?? 'null'})">Close</button></td>
+          </tr>`).join('')}
+        </tbody></table>`;
+    wrap.innerHTML = `<div class="panel-title">Your Positions${alerts.length ? ` <span class="warn">(${alerts.length} need action)</span>` : ''}</div>
+      <div class="panel-desc">Stops, targets, and trend checks against your current holdings. "Close" records the trade to your journal.</div>${body}`;
+  }
+
+  function renderSetups(d) {
+    const wrap = document.getElementById('setupsWrap');
+    wrap.hidden = false;
+    if (d.suppressed_by_regime) {
+      wrap.innerHTML = `<div class="panel-title">Today's Top Setups</div>
+        <div class="empty warn">Market regime is risk-off — new long setups are suppressed. Protect capital and let the regime turn back green before adding risk.</div>`;
+      return;
+    }
+    const setups = d.setups || [];
+    const body = setups.length === 0
+      ? `<div class="empty">No qualifying setups in the universe right now. Data may still be backfilling, or no charts meet the strategy filters today.</div>`
+      : `<div class="setups-grid">${setups.map(s => {
+          const p = s.plan;
+          const planHtml = p ? `
+            <div class="plan">
+              <div class="plan-row"><span class="k">Entry</span><span class="v">$${p.entry}</span></div>
+              <div class="plan-row"><span class="k">Stop</span><span class="v down">$${p.stop} (${p.stop_pct}%)</span></div>
+              <div class="plan-row"><span class="k">Zone</span><span class="v">$${p.entry_zone[0]}–${p.entry_zone[1]}</span></div>
+              <div class="plan-row"><span class="k">Target</span><span class="v up">$${p.target} (+${p.target_pct}%)</span></div>
+              <div class="plan-row"><span class="k">Shares</span><span class="v">${p.shares}${p.capped_by_max_position ? '*' : ''}</span></div>
+              <div class="plan-row"><span class="k">Risk</span><span class="v">$${p.risk_dollars} (${p.r_multiple}R)</span></div>
+            </div>${p.capped_by_max_position ? '<div class="muted" style="font-size:10px;margin-top:4px;">*size capped by max-position limit</div>' : ''}`
+            : `<div class="muted" style="font-size:11px;">Trade plan unavailable (insufficient history).</div>`;
+          return `<div class="setup-card">
+            <div class="setup-card-head">
+              <span class="ticker-link" style="font-size:15px;" onclick="openTickerDetail('${esc(s.ticker)}')">${esc(s.ticker)}</span>
+              <span class="badge strat-badge">${esc(s.strategy_name)}</span>
+              <span class="state-${s.state}" style="font-size:11px;font-weight:700;">${esc(s.state)}</span>
+              ${s.swing_score ? `<span class="muted" style="margin-left:auto;font-size:11px;">score ${s.swing_score.score} (${esc(s.swing_score.grade)})</span>` : ''}
+            </div>
+            <div class="muted" style="font-size:11px;">${esc([s.name, s.sector].filter(Boolean).join(' · '))}</div>
+            <div class="setup-reasons">• ${(s.reasons || []).map(esc).join('<br>• ')}</div>
+            ${planHtml}
+          </div>`;
+        }).join('')}</div>`;
+    wrap.innerHTML = `<div class="panel-title">Today's Top Setups</div>
+      <div class="panel-desc">Best candidates across all three strategies, skipping names you already hold. Each plan sizes from your account & risk settings.</div>${body}`;
+  }
+
+  function renderChecklist(items) {
+    const wrap = document.getElementById('checklistWrap');
+    wrap.hidden = false;
+    const manual = loadManualChecks();
+    wrap.innerHTML = `<div class="panel-title">Daily Checklist</div>
+      <div class="panel-desc">Work top to bottom. Computed steps tick automatically; manual ones you check off persist for today.</div>
+      <div class="checklist">${items.map(it => {
+        const done = it.done || manual[it.id] === true;
+        return `<div class="check-item ${done ? 'done' : ''}">
+          <input type="checkbox" id="chk_${it.id}" ${done ? 'checked' : ''} ${it.done ? 'disabled' : ''} onchange="onCheck('${it.id}', this.checked, this)">
+          <label for="chk_${it.id}">${esc(it.label)}</label>
+          ${it.count != null ? `<span class="check-count">${it.count}</span>` : ''}
+          ${it.detail ? `<span class="check-count">${esc(it.detail)}</span>` : ''}
+        </div>`;
+      }).join('')}</div>`;
+  }
+
+  function onCheck(id, val, el) {
+    saveManualCheck(id, val);
+    el.closest('.check-item').classList.toggle('done', val);
+  }
+
+  /* ── Settings ── */
+  function openSettings() {
+    const s = DATA?.settings_used || {};
+    document.getElementById('setAccount').value = s.account_size ?? '';
+    document.getElementById('setRisk').value = s.risk_pct ?? '';
+    document.getElementById('setMax').value = s.max_positions ?? '';
+    document.getElementById('setAtr').value = s.atr_stop_mult ?? '';
+    document.getElementById('setR').value = s.r_multiple ?? '';
+    document.getElementById('settingsErr').textContent = '';
+    document.getElementById('settingsModal').style.display = 'flex';
+  }
+  function closeSettings() { document.getElementById('settingsModal').style.display = 'none'; }
+  async function saveSettings() {
+    const body = {
+      account_size: parseFloat(document.getElementById('setAccount').value),
+      risk_pct: parseFloat(document.getElementById('setRisk').value),
+      max_positions: parseInt(document.getElementById('setMax').value, 10),
+      atr_stop_mult: parseFloat(document.getElementById('setAtr').value),
+      r_multiple: parseFloat(document.getElementById('setR').value),
+    };
+    try {
+      await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      closeSettings();
+      DATA = await api('/api/today?force=true');
+      renderRegime(DATA.regime); renderSetups(DATA);
+    } catch (e) { document.getElementById('settingsErr').textContent = e.message; }
+  }
+
+  /* ── Close trade ── */
+  function openCloseModal(ticker, price) {
+    document.getElementById('closeTicker').textContent = ticker;
+    document.getElementById('closePrice').value = price != null ? price : '';
+    document.getElementById('closeDate').value = todayISO();
+    document.getElementById('closeNotes').value = '';
+    document.getElementById('closeErr').textContent = '';
+    document.getElementById('closeModal').dataset.ticker = ticker;
+    document.getElementById('closeModal').style.display = 'flex';
+  }
+  function closeCloseModal() { document.getElementById('closeModal').style.display = 'none'; }
+  async function submitClose() {
+    const ticker = document.getElementById('closeModal').dataset.ticker;
+    const body = {
+      exit_price: parseFloat(document.getElementById('closePrice').value),
+      exit_date: document.getElementById('closeDate').value || null,
+      notes: document.getElementById('closeNotes').value || null,
+    };
+    if (!(body.exit_price > 0)) { document.getElementById('closeErr').textContent = 'Enter a valid exit price.'; return; }
+    try {
+      await api(`/api/portfolio/${encodeURIComponent(ticker)}/close`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      closeCloseModal();
+      DATA = await api('/api/today?force=true');
+      renderPositions(DATA.positions); renderChecklist(DATA.checklist);
+    } catch (e) { document.getElementById('closeErr').textContent = e.message; }
+  }
+
+  const gearBtn = '<button class="btn hint" data-tip="Set account size, risk %, max positions, and stop/target defaults." onclick="openSettings()">⚙ Settings</button>';
+  initHeader('/', gearBtn).then(load);
+  </script>
+</body>
+</html>

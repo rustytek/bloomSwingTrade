@@ -22,6 +22,13 @@ class User(Base):
     created_at = Column(DateTime, default=utcnow)
     last_login = Column(DateTime, nullable=True)
 
+    # Trading settings (fixed-fractional risk model)
+    account_size = Column(Float, default=10000, nullable=False)
+    risk_pct = Column(Float, default=1.0, nullable=False)
+    max_positions = Column(Integer, default=8, nullable=False)
+    atr_stop_mult = Column(Float, default=2.5, nullable=False)
+    r_multiple = Column(Float, default=2.0, nullable=False)
+
     watchlist = relationship("WatchlistItem", back_populates="user", cascade="all, delete-orphan")
     portfolio = relationship("PortfolioPosition", back_populates="user", cascade="all, delete-orphan")
 
@@ -65,10 +72,39 @@ class PortfolioPosition(Base):
     avg_cost = Column(Float, nullable=False)
     added_at = Column(DateTime, default=utcnow)
     notes = Column(Text, nullable=True)
+    stop_loss = Column(Float, nullable=True)
+    target = Column(Float, nullable=True)
+    entry_date = Column(Date, nullable=True)
+    strategy = Column(String(32), nullable=True)
 
     user = relationship("User", back_populates="portfolio")
 
     __table_args__ = (UniqueConstraint("user_id", "ticker", name="uq_portfolio_user_ticker"),)
+
+
+class ClosedTrade(Base):
+    """Journal entry created when a portfolio position is closed (sold)."""
+    __tablename__ = "closed_trades"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    ticker = Column(String(16), nullable=False)
+    shares = Column(Float, nullable=False)
+    avg_cost = Column(Float, nullable=False)
+    exit_price = Column(Float, nullable=False)
+    entry_date = Column(Date, nullable=True)
+    exit_date = Column(Date, nullable=True)
+    stop_loss = Column(Float, nullable=True)
+    target = Column(Float, nullable=True)
+    strategy = Column(String(32), nullable=True)
+    pnl = Column(Float, nullable=False)
+    pnl_pct = Column(Float, nullable=False)
+    r_multiple = Column(Float, nullable=True)   # null when no valid stop was set
+    notes = Column(Text, nullable=True)
+    opened_at = Column(DateTime, nullable=True)
+    closed_at = Column(DateTime, default=utcnow)
+
+    user = relationship("User")
 
 
 class StockCache(Base):

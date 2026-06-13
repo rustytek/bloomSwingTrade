@@ -7,7 +7,8 @@ import numpy as np
 from sqlalchemy.orm import Session
 
 from database.models import PortfolioPosition, StockCache, WatchlistItem, WatchlistSnapshot
-from services.indicators import calc_ma, calc_rsi
+from services.indicators import calc_ma
+from services.strategies import STRATEGIES
 
 
 def _safe_float(value):
@@ -28,11 +29,22 @@ def _load_history(db: Session, ticker: str) -> list[dict]:
         bars = json.loads(row.history_json)
     except Exception:
         return []
-    return [
-        {"date": b.get("date"), "close": _safe_float(b.get("close")), "vol": _safe_float(b.get("vol"))}
-        for b in bars
-        if b.get("date") and _safe_float(b.get("close"))
-    ]
+    out = []
+    for b in bars:
+        close = _safe_float(b.get("close"))
+        if not b.get("date") or not close:
+            continue
+        # Carry OHLC so high/low-dependent strategies (pullback, breakout) work.
+        # Fall back to close when a legacy bar lacks high/low/open.
+        out.append({
+            "date": b.get("date"),
+            "open": _safe_float(b.get("open")) or close,
+            "high": _safe_float(b.get("high")) or close,
+            "low": _safe_float(b.get("low")) or close,
+            "close": close,
+            "vol": _safe_float(b.get("vol")) or 0,
+        })
+    return out
 
 
 def _load_quote(db: Session, ticker: str) -> dict:
@@ -49,6 +61,10 @@ def _load_quote(db: Session, ticker: str) -> dict:
 
 def _source_tickers(db: Session, user_id: int, source: str) -> list[str]:
     tickers = set()
+    if source == "universe":
+        from services.universe import UNIVERSE
+        cached = {t for (t,) in db.query(StockCache.ticker).filter(StockCache.history_json.isnot(None)).all()}
+        tickers.update(cached & set(UNIVERSE))
     if source in ("watchlist", "both"):
         tickers.update(t for (t,) in db.query(WatchlistItem.ticker).filter(WatchlistItem.user_id == user_id).all())
     if source in ("portfolio", "both"):
@@ -129,27 +145,8 @@ def _latest_on_or_before(series: list[dict], day: date) -> tuple[int, float, str
 
 
 def _rank_candidate(series: list[dict], idx: int) -> dict | None:
-    closes = [b["close"] for b in series[: idx + 1]]
-    if len(closes) < 70:
-        return None
-    ret_21 = closes[-1] / closes[-22] - 1
-    ret_63 = closes[-1] / closes[-64] - 1
-    daily = np.diff(np.array(closes[-64:], dtype=float)) / np.array(closes[-64:-1], dtype=float)
-    vol_63 = float(np.std(daily) * math.sqrt(252)) if len(daily) else 0
-    ma50 = calc_ma(closes, 50)[-1]
-    rsi = calc_rsi(closes, 14)[-1]
-    if ma50 is None or closes[-1] <= ma50 or ret_21 <= 0:
-        return None
-    if rsi is not None and not (40 <= rsi <= 72):
-        return None
-    score = (ret_21 * 0.45) + (ret_63 * 0.55) - (vol_63 * 0.15)
-    return {
-        "score": score,
-        "ret_21": ret_21,
-        "ret_63": ret_63,
-        "vol_63": vol_63,
-        "rsi": rsi,
-    }
+    """Momentum ranking at a historical bar — delegates to the shared strategy."""
+    return STRATEGIES["momentum_rotation"].candidate(series, idx)
 
 
 def create_watchlist_snapshot(db: Session, user_id: int, week_start: date | None = None, notes: str | None = None) -> dict:
@@ -237,7 +234,7 @@ def _evaluate_snapshot(db: Session, snapshot: WatchlistSnapshot, top_n: int, spy
             "return": round(perf, 2) if perf is not None else None,
             "selected": False,
             "score": round(rank["score"], 4) if rank else None,
-            "rsi": round(rank["rsi"], 1) if rank and rank["rsi"] is not None else None,
+            "rsi": round(rank["rsi"], 1) if rank and rank.get("rsi") is not None else None,
         })
         if regime_ok and rank:
             ranked.append((ticker, rank, perf))
@@ -253,9 +250,11 @@ def _evaluate_snapshot(db: Session, snapshot: WatchlistSnapshot, top_n: int, spy
             "ticker": ticker,
             "score": round(rank["score"], 4),
             "return": round(perf, 2) if perf is not None else None,
-            "ret_21": round(rank["ret_21"] * 100, 2),
-            "ret_63": round(rank["ret_63"] * 100, 2),
-            "rsi": round(rank["rsi"], 1) if rank["rsi"] is not None else None,
+            "ret_21": rank.get("ret_21"),
+            "ret_63": rank.get("ret_63"),
+            "slope_ann": rank.get("slope_ann"),
+            "r2": rank.get("r2"),
+            "rsi": round(rank["rsi"], 1) if rank.get("rsi") is not None else None,
         }
         for ticker, rank, perf in selected
     ]
@@ -301,30 +300,49 @@ def build_watchlist_replay(db: Session, user_id: int, weeks: int = 8, top_n: int
 def run_walk_forward_backtest(
     db: Session,
     user_id: int,
+    strategy_id: str = "momentum_rotation",
     source: str = "watchlist",
     top_n: int = 5,
     rebalance_days: int = 5,
     cost_bps: float = 10,
     spy_regime: bool = True,
+    regime_ma: int = 200,
 ) -> dict:
+    strategy = STRATEGIES.get(strategy_id) or STRATEGIES["momentum_rotation"]
+    strategy_meta = {"id": strategy.id, "name": strategy.name}
+    params = {
+        "strategy": strategy.id,
+        "source": source,
+        "top_n": top_n,
+        "rebalance_days": rebalance_days,
+        "cost_bps": cost_bps,
+        "spy_regime": spy_regime,
+        "regime_ma": regime_ma,
+    }
+    # Warm-up: enough bars for both the regime MA and the strategy's own filters
+    warmup = max(regime_ma, strategy.min_bars) + 5
+
     tickers = _source_tickers(db, user_id, source)
     histories = {ticker: _load_history(db, ticker) for ticker in tickers}
-    histories = {ticker: bars for ticker, bars in histories.items() if len(bars) >= 75}
+    histories = {ticker: bars for ticker, bars in histories.items() if len(bars) >= warmup}
     spy = _load_history(db, "SPY")
-    dates = [b["date"] for b in spy] if len(spy) >= 75 else []
-    dates = dates[70:: max(1, rebalance_days)]
+    dates = [b["date"] for b in spy] if len(spy) >= warmup else []
+    dates = dates[warmup:: max(1, rebalance_days)]
     if len(dates) < 4 or not histories:
         return {
-            "strategy": "Regime Relative Strength",
+            "strategy": strategy_meta,
             "source": source,
-            "parameters": {"top_n": top_n, "rebalance_days": rebalance_days, "cost_bps": cost_bps, "spy_regime": spy_regime},
+            "parameters": params,
             "available_tickers": sorted(histories),
             "equity": [],
             "benchmark": [],
             "trades": [],
             "metrics": {},
             "benchmark_metrics": {},
-            "notes": ["Need cached SPY history and at least 75 bars for selected tickers."],
+            "notes": [
+                f"Need cached SPY history and at least {warmup} bars for selected tickers.",
+                "Tip: use the Full Universe source after the 2-year history backfill completes.",
+            ],
         }
 
     equity = [{"date": dates[0], "value": 1.0}]
@@ -334,7 +352,7 @@ def run_walk_forward_backtest(
     cost = cost_bps / 10000
 
     spy_closes = [b["close"] for b in spy]
-    spy_ma = calc_ma(spy_closes, 50)
+    spy_ma = calc_ma(spy_closes, regime_ma)
 
     for start, end in zip(dates, dates[1:]):
         spy_start = _value_on_or_before(spy, start)
@@ -352,7 +370,7 @@ def run_walk_forward_backtest(
                 end_point = _value_on_or_before(bars, end)
                 if not start_point or not end_point or end_point[0] <= start_point[0]:
                     continue
-                rank = _rank_candidate(bars, start_point[0])
+                rank = strategy.candidate(bars, start_point[0])
                 if rank:
                     ranked.append((ticker, rank, start_point[1], end_point[1]))
         ranked.sort(key=lambda item: item[1]["score"], reverse=True)
@@ -373,9 +391,9 @@ def run_walk_forward_backtest(
                 {
                     "ticker": ticker,
                     "score": round(rank["score"], 4),
-                    "ret_21": round(rank["ret_21"] * 100, 2),
-                    "ret_63": round(rank["ret_63"] * 100, 2),
-                    "rsi": round(rank["rsi"], 1) if rank["rsi"] is not None else None,
+                    "ret_21": rank.get("ret_21"),
+                    "ret_63": rank.get("ret_63"),
+                    "rsi": round(rank["rsi"], 1) if rank.get("rsi") is not None else None,
                 }
                 for ticker, rank, _, _ in selected
             ],
@@ -385,9 +403,9 @@ def run_walk_forward_backtest(
         prev_holdings = holdings
 
     return {
-        "strategy": "Regime Relative Strength",
+        "strategy": strategy_meta,
         "source": source,
-        "parameters": {"top_n": top_n, "rebalance_days": rebalance_days, "cost_bps": cost_bps, "spy_regime": spy_regime},
+        "parameters": params,
         "available_tickers": sorted(histories),
         "equity": equity,
         "benchmark": benchmark,
@@ -396,7 +414,10 @@ def run_walk_forward_backtest(
         "benchmark_metrics": _metrics(benchmark),
         "notes": [
             "Hypothetical backtest using cached adjusted daily closes only.",
-            "Rules use trailing momentum, volatility, moving-average trend, RSI filter, transaction costs, and optional SPY regime filter.",
+            f"Strategy: {strategy.name}. {strategy.description}",
+            "Modeled as an equal-weight top-N rotation rebalanced on the chosen cadence "
+            "with turnover cost and an optional SPY regime filter. ATR stops/targets are "
+            "NOT simulated intrabar — live trade plans add those on top.",
         ],
     }
 
@@ -444,18 +465,11 @@ def build_decision_cockpit(db: Session, user_id: int) -> dict:
         reverse=True,
     )[:12]
 
+    from services.today import position_flags
     exits = []
     for pos in positions:
         q = quotes.get(pos.ticker, {})
-        reasons = []
-        if (q.get("vs_ma200") or 0) < 0:
-            reasons.append("below 200MA")
-        if (q.get("ann_ret") or 0) < 10:
-            reasons.append("weak 1M annualized return")
-        if q.get("sharpe") is not None and q.get("sharpe") < 0.5:
-            reasons.append("low Sharpe")
-        if q.get("max_dd_1m") is not None and q.get("max_dd_1m") > 8:
-            reasons.append("drawdown pressure")
+        reasons = position_flags(pos, q)["reasons"]
         if reasons:
             exits.append({
                 "ticker": pos.ticker,

@@ -60,6 +60,33 @@ def calc_rsi(closes: list[float], period: int = 14) -> list[Optional[float]]:
     return result
 
 
+def calc_atr(
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    period: int = 14,
+) -> list[Optional[float]]:
+    """Wilder-smoothed Average True Range, list-aligned with None padding."""
+    n = min(len(highs), len(lows), len(closes))
+    result: list[Optional[float]] = [None] * n
+    if n < period + 1:
+        return result
+    trs = []
+    for i in range(1, n):
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+        trs.append(tr)
+    atr = float(np.mean(trs[:period]))
+    result[period] = atr
+    for i in range(period, len(trs)):
+        atr = (atr * (period - 1) + trs[i]) / period
+        result[i + 1] = atr
+    return result
+
+
 def calc_macd(closes: list[float]) -> dict:
     ema12 = calc_ema(closes, 12)
     ema26 = calc_ema(closes, 26)

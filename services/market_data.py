@@ -190,7 +190,7 @@ def _fetch_quote_sync(ticker: str) -> dict:
     }
 
 
-def _fetch_history_sync(ticker: str, period: str = "1y") -> list[dict]:
+def _fetch_history_sync(ticker: str, period: str = "2y") -> list[dict]:
     """Fetch OHLCV history synchronously."""
     t = yf.Ticker(ticker)
     hist = t.history(period=period, interval="1d", auto_adjust=True)
@@ -392,7 +392,7 @@ async def get_quote(ticker: str, db: Session, force_refresh: bool = False) -> Op
     return _attach_cache_metadata(enriched, now)
 
 
-async def get_history(ticker: str, db: Session, period: str = "1y", force_refresh: bool = False) -> list[dict]:
+async def get_history(ticker: str, db: Session, period: str = "2y", force_refresh: bool = False) -> list[dict]:
     """Return OHLCV history list, using cache."""
     ticker = ticker.upper()
     cache_key = f"history:{ticker}"
@@ -554,11 +554,11 @@ def invalidate_legacy_cache(db: Session) -> int:
     return count
 
 
-def invalidate_short_history_cache(db: Session, min_bars: int = 200) -> int:
-    """Force refresh for legacy 6-month histories that cannot compute MA200.
+def invalidate_short_history_cache(db: Session, min_bars: int = 420) -> int:
+    """Force refresh for histories shorter than the 2-year window.
 
-    Older installs cached about 6 months of bars, so quote enrichment could not
-    produce vs_ma200 and market breadth showed 0% above the 200-day average.
+    Older installs cached 6 months or 1 year of bars — not enough for the
+    200-day MA regime gate plus a meaningful walk-forward backtest window.
     """
     epoch = datetime(2000, 1, 1, tzinfo=timezone.utc)
     rows = db.query(StockCache).filter(StockCache.history_json.isnot(None)).all()

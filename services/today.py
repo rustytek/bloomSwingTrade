@@ -63,18 +63,33 @@ def position_flags(pos: PortfolioPosition, quote: dict, bars: list[dict] | None 
     if close is not None:
         if stop is not None and close <= stop:
             status = "stop_hit"
-            actions.append("Stop hit — honor your stop and exit")
+            actions.append(
+                "SELL NOW — price dropped to your stop. Exit to cap the loss before it grows."
+            )
         elif target is not None and close >= target:
             status = "target_hit"
-            actions.append("Target reached — scale out or trail your stop up")
+            actions.append(
+                "TAKE PROFITS — price hit your target. Sell part of the position (or all of it), "
+                "or raise your stop up to lock in the gain."
+            )
         elif stop is not None and close <= stop * 1.03:
             status = "near_stop"
-            actions.append("Within 3% of stop — be ready to exit")
+            actions.append(
+                "GET READY TO SELL — within 3% of your stop. Set a price alert and exit if it "
+                "closes below the stop."
+            )
         elif (quote.get("vs_ma200") or 0) < 0:
             status = "trend_break"
-            actions.append("Below 200-day MA — trend broken, review the thesis")
+            actions.append(
+                "CONSIDER SELLING — it closed below its 200-day average, so the long-term uptrend "
+                "is broken. Re-check why you own it and tighten your stop."
+            )
     if not actions and reasons:
-        actions.append("Review: " + ", ".join(reasons))
+        actions.append(
+            "HOLD, BUT WATCH — okay to keep for now, but it's weakening (" + ", ".join(reasons) + ")."
+        )
+    if not actions:
+        actions.append("HOLD — on track. Nothing to do; leave your stop where it is.")
 
     # ATR trailing-stop suggestion (never below an existing stop)
     suggested_stop = None

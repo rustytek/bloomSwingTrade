@@ -382,6 +382,7 @@ def run_walk_forward_backtest(
             period_ret = mean((end_px / start_px - 1) for _, _, start_px, end_px in selected)
         turnover = len(holdings.symmetric_difference(prev_holdings)) / max(top_n, 1)
         period_ret -= min(1.0, turnover) * cost
+        spy_ret = (spy_end_px / spy_start_px - 1) if spy_start_px else 0.0
 
         equity.append({"date": end, "value": round(equity[-1]["value"] * (1 + period_ret), 6)})
         benchmark.append({"date": end, "value": round(benchmark[-1]["value"] * (spy_end_px / spy_start_px), 6)})
@@ -399,6 +400,8 @@ def run_walk_forward_backtest(
             ],
             "regime": "risk_on" if regime_ok else "cash",
             "period_return": round(period_ret * 100, 2),
+            "spy_return": round(spy_ret * 100, 2),
+            "excess_return": round((period_ret - spy_ret) * 100, 2),
         })
         prev_holdings = holdings
 

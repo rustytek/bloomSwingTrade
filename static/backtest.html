@@ -386,12 +386,14 @@ function renderChart(bt) {
 
 function renderTrades(bt) {
   const trades = (bt.trades || []).slice(-10).reverse();
-  const help = '<div class="panel-desc">Date is the rebalance day, Regime shows whether the SPY trend filter allowed risk, Return is the next holding-period result, and Holdings are the tickers the model selected. Repeated tickers are stronger watch candidates than one-off appearances.</div>';
-  document.getElementById('trades').innerHTML = trades.length ? `${help}<table><thead><tr><th>Date</th><th>Regime</th><th>Return</th><th>Holdings</th></tr></thead><tbody>${trades.map(t => `
+  const help = '<div class="panel-desc">Date is the rebalance day and Regime shows whether the SPY trend filter allowed risk. <b>Return</b> is how the model\'s selected holdings did over that holding period (their own absolute return after costs — <i>not</i> measured against SPY). <b>SPY</b> is what the market did over the same dates, and <b>vs SPY</b> is the difference (green means the picks beat the market that week). Holdings are the tickers the model selected; repeated tickers are stronger watch candidates than one-off appearances.</div>';
+  document.getElementById('trades').innerHTML = trades.length ? `${help}<table><thead><tr><th>Date</th><th>Regime</th><th>Return</th><th>SPY</th><th>vs SPY</th><th>Holdings</th></tr></thead><tbody>${trades.map(t => `
     <tr>
       <td class="mono">${esc(t.date)}</td>
       <td>${t.regime === 'risk_on' ? '<span class="up">Risk on</span>' : '<span class="warn">Cash</span>'}</td>
       <td>${fmtPct(t.period_return)}</td>
+      <td>${fmtPct(t.spy_return)}</td>
+      <td>${fmtPct(t.excess_return)}</td>
       <td>${(t.holdings || []).map(h => `<span class="pill"><span class="ticker-link hint" data-tip="Open price chart and detailed metrics for this ticker." tabindex="0" onclick="openTicker('${esc(h.ticker)}')">${esc(h.ticker)}</span> ${h.ret_63}%</span>`).join('') || '<span class="muted">No holdings</span>'}</td>
     </tr>`).join('')}</tbody></table>` : `${help}<div class="note">No rebalance history available yet.</div>`;
 }

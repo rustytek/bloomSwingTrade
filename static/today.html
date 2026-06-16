@@ -199,7 +199,7 @@
           </tr>`).join('')}
         </tbody></table>`;
     wrap.innerHTML = `<div class="panel-title">Your Positions${alerts.length ? ` <span class="warn">(${alerts.length} need action)</span>` : ''}</div>
-      <div class="panel-desc">Stops, targets, and trend checks against your current holdings. "Close" records the trade to your journal.</div>${body}`;
+      <div class="panel-desc">Stops, targets, and trend checks against your current holdings. The <b>Action</b> column tells you in plain English what to do: <span class="up">HOLD</span> = nothing to do, <span class="warn">HOLD&nbsp;BUT&nbsp;WATCH / GET&nbsp;READY&nbsp;TO&nbsp;SELL / CONSIDER&nbsp;SELLING</span> = inspect it, <span class="down">SELL&nbsp;NOW / TAKE&nbsp;PROFITS</span> = act today. "Close" records the trade to your journal.</div>${body}`;
   }
 
   function renderSetups(d) {

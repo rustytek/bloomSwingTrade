@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SwingTrader — Users</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background:#0d0d0d; color:#d8d8d8; font-family:'Inter',sans-serif; font-size:14px; line-height:1.5; }
+    .topbar { min-height:44px; background:#111; border-bottom:1px solid #1a1a1a; display:flex; align-items:center; padding:0 16px; gap:12px; position:sticky; top:0; z-index:10; flex-wrap:wrap; }
+    .brand { font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:700; color:#fff; letter-spacing:1px; text-decoration:none; white-space:nowrap; }
+    .topbar-sep { width:1px; height:20px; background:#222; flex-shrink:0; }
+    .universe-status { display:flex; align-items:center; gap:6px; min-width:0; }
+    .universe-text { font-size:11px; color:#444; white-space:nowrap; }
+    .universe-text.loading { color:#f0a500; }
+    .data-time { font-size:10px; color:#555; margin-left:8px; white-space:nowrap; }
+    .topbar-actions { margin-left:auto; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .topbar-left { display:flex; align-items:center; gap:8px; }
+    .username { font-size:11px; color:#555; }
+    .btn { display:inline-flex; align-items:center; gap:5px; padding:5px 10px; border-radius:3px; border:1px solid #2a2a2a; background:#1a1a1a; color:#999; font-size:11px; font-weight:600; cursor:pointer; text-decoration:none; font-family:'Inter',sans-serif; }
+    .btn:hover { color:#ddd; background:#222; }
+    .btn-active { color:#f0a500; border-color:#3a2f10; background:#1c1810; }
+    .btn-primary { background:#f0a500; color:#000; border-color:#f0a500; }
+    .btn-danger { color:#ff6b6b; border-color:#4a1414; }
+    .btn-danger:hover { background:#2a0d0d; color:#ff8a8a; }
+    .btn-sm { padding:3px 8px; font-size:10px; }
+    .hint { position:relative; }
+    .hint::after { content:attr(data-tip); position:absolute; left:50%; bottom:calc(100% + 9px); transform:translateX(-50%); display:none; width:min(280px,70vw); padding:8px 10px; background:#1e1e1e; border:1px solid #333; border-radius:4px; color:#d8d8d8; font-size:11px; font-weight:400; line-height:1.45; white-space:normal; box-shadow:0 6px 18px #000c; z-index:200; pointer-events:none; }
+    .hint:hover::after, .hint:focus-within::after { display:block; }
+    .topbar .hint::after { top:calc(100% + 9px); bottom:auto; }
+    .page { max-width:1100px; margin:0 auto; padding:18px; display:flex; flex-direction:column; gap:16px; }
+    .mono { font-family:'JetBrains Mono',monospace; }
+    .muted { color:#777; } .up { color:#26a65b; } .down { color:#e05252; } .warn { color:#f0a500; }
+    .panel { background:#111; border:1px solid #1e1e1e; border-radius:6px; padding:16px; }
+    .panel-title { font-size:13px; color:#ccc; font-weight:700; margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em; }
+    .panel-desc { color:#777; font-size:12px; margin-bottom:12px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th { text-align:left; padding:7px 8px; color:#666; border-bottom:1px solid #222; font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+    td { padding:8px; border-bottom:1px solid #171717; vertical-align:middle; }
+    tr:hover td { background:#151515; }
+    .badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:3px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+    .badge.admin { background:#1c1810; color:#f0a500; border:1px solid #3a3110; }
+    .badge.keyset { background:#0e1b0e; color:#4ec27a; border:1px solid #1d3a1d; }
+    .badge.nokey { background:#1a1a1a; color:#888; border:1px solid #2a2a2a; }
+    .row-actions { display:flex; gap:6px; justify-content:flex-end; }
+    /* Forms */
+    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .form-row { display:flex; flex-direction:column; gap:5px; margin-bottom:12px; }
+    .form-row label { font-size:11px; color:#888; text-transform:uppercase; letter-spacing:.05em; }
+    .form-row input { background:#1a1a1a; border:1px solid #2a2a2a; color:#ddd; border-radius:4px; padding:8px 10px; font-family:'Inter',sans-serif; }
+    .check-row { display:flex; align-items:center; gap:8px; margin-bottom:12px; font-size:12px; color:#bbb; }
+    .check-row input { width:16px; height:16px; accent-color:#f0a500; }
+    .form-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:6px; }
+    .error { color:#e05252; font-size:12px; min-height:16px; }
+    .ok-msg { color:#4ec27a; font-size:12px; min-height:16px; }
+    .empty { color:#666; font-size:12px; padding:14px; text-align:center; }
+    /* Modal */
+    .modal { position:fixed; inset:0; background:rgba(0,0,0,.72); display:none; align-items:center; justify-content:center; z-index:100; padding:20px; }
+    .form-card { width:min(460px,96vw); background:#111; border:1px solid #2a2a2a; border-radius:6px; padding:18px; }
+    @media (max-width:700px){ .grid2{ grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <div class="topbar" id="topbar"></div>
+  <main class="page" id="page">
+    <div id="loading" class="empty">Loading users…</div>
+    <div id="denied" class="panel" hidden><div class="panel-title warn">Admin access required</div>
+      <div class="panel-desc">This page is only available to administrator accounts.</div></div>
+
+    <section id="content" hidden>
+      <div class="panel" style="margin-bottom:16px;">
+        <div class="panel-title">Users</div>
+        <div class="panel-desc">Each user has their own login and tracks their own watchlist, portfolio, journal, and reports. Give each person a separate LiteLLM key so their AI usage draws from their own token budget.</div>
+        <div id="usersTable"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">Add User</div>
+        <div class="panel-desc">Create a login. The LiteLLM key is optional — leave it blank to fall back to the global key.</div>
+        <div class="grid2">
+          <div class="form-row"><label>Username</label><input id="newUser" type="text" autocomplete="off"></div>
+          <div class="form-row"><label>Password</label><input id="newPass" type="text" autocomplete="off"></div>
+          <div class="form-row"><label>Email (optional)</label><input id="newEmail" type="email" autocomplete="off"></div>
+          <div class="form-row"><label>LiteLLM key (optional)</label><input id="newKey" type="text" autocomplete="off" placeholder="sk-..."></div>
+        </div>
+        <div class="check-row"><input id="newAdmin" type="checkbox"><label for="newAdmin">Administrator (can manage users)</label></div>
+        <div id="createErr" class="error"></div>
+        <div class="form-actions"><button class="btn btn-primary" onclick="createUser()">Create User</button></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Edit modal -->
+  <div id="editModal" class="modal">
+    <div class="form-card">
+      <h3 style="color:#eee;margin-bottom:4px;">Edit User — <span id="editName" class="mono warn"></span></h3>
+      <div class="muted" style="font-size:11px;margin-bottom:14px;">Leave password blank to keep it unchanged. Keys are write-only — the current value is never shown.</div>
+      <div class="form-row"><label>New password (optional)</label><input id="editPass" type="text" autocomplete="off" placeholder="leave blank to keep"></div>
+      <div class="form-row"><label>Email</label><input id="editEmail" type="email" autocomplete="off"></div>
+      <div class="form-row"><label>LiteLLM key — <span id="editKeyState" class="muted"></span></label><input id="editKey" type="text" autocomplete="off" placeholder="enter a new key to replace"></div>
+      <div class="check-row"><input id="editClearKey" type="checkbox"><label for="editClearKey">Remove this user's LiteLLM key (fall back to global)</label></div>
+      <div class="check-row"><input id="editAdmin" type="checkbox"><label for="editAdmin">Administrator</label></div>
+      <div id="editErr" class="error"></div>
+      <div class="form-actions">
+        <button class="btn" onclick="closeEdit()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveEdit()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/common.js"></script>
+  <script>
+  'use strict';
+  let ME = null;
+  let USERS = [];
+
+  async function load() {
+    try {
+      ME = await api('/auth/me');
+    } catch (e) { return; }
+    if (!ME.is_admin) {
+      document.getElementById('loading').hidden = true;
+      document.getElementById('denied').hidden = false;
+      return;
+    }
+    document.getElementById('content').hidden = false;
+    await refresh();
+    document.getElementById('loading').hidden = true;
+  }
+
+  async function refresh() {
+    try {
+      USERS = await api('/auth/users');
+    } catch (e) {
+      document.getElementById('usersTable').innerHTML = `<div class="error">${esc(e.message)}</div>`;
+      return;
+    }
+    renderUsers();
+  }
+
+  function fmtDate(s) { return s ? new Date(s).toLocaleString() : '<span class="muted">never</span>'; }
+
+  function renderUsers() {
+    const wrap = document.getElementById('usersTable');
+    if (!USERS.length) { wrap.innerHTML = '<div class="empty">No users yet.</div>'; return; }
+    wrap.innerHTML = `<table><thead><tr>
+      <th>Username</th><th>Email</th><th>Role</th><th>LiteLLM Key</th><th>Last Login</th><th></th>
+    </tr></thead><tbody>${USERS.map(u => `
+      <tr>
+        <td class="mono" style="color:#ddd;font-weight:700;">${esc(u.username)}</td>
+        <td>${u.email ? esc(u.email) : '<span class="muted">—</span>'}</td>
+        <td>${u.is_admin ? '<span class="badge admin">Admin</span>' : '<span class="muted">User</span>'}</td>
+        <td>${u.has_litellm_key ? '<span class="badge keyset">Own key</span>' : '<span class="badge nokey">Global</span>'}</td>
+        <td class="muted" style="font-size:11px;">${fmtDate(u.last_login)}</td>
+        <td><div class="row-actions">
+          <button class="btn btn-sm" onclick="openEdit(${u.id})">Edit</button>
+          ${u.id === ME.id ? '' : `<button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id})">Delete</button>`}
+        </div></td>
+      </tr>`).join('')}</tbody></table>`;
+  }
+
+  async function createUser() {
+    const err = document.getElementById('createErr');
+    err.textContent = '';
+    const body = {
+      username: document.getElementById('newUser').value.trim(),
+      password: document.getElementById('newPass').value,
+      email: document.getElementById('newEmail').value.trim() || null,
+      is_admin: document.getElementById('newAdmin').checked,
+      litellm_api_key: document.getElementById('newKey').value.trim() || null,
+    };
+    if (!body.username || !body.password) { err.textContent = 'Username and password are required.'; return; }
+    try {
+      await api('/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      ['newUser', 'newPass', 'newEmail', 'newKey'].forEach(id => document.getElementById(id).value = '');
+      document.getElementById('newAdmin').checked = false;
+      await refresh();
+    } catch (e) { err.textContent = e.message; }
+  }
+
+  function openEdit(id) {
+    const u = USERS.find(x => x.id === id);
+    if (!u) return;
+    document.getElementById('editModal').dataset.id = id;
+    document.getElementById('editName').textContent = u.username;
+    document.getElementById('editPass').value = '';
+    document.getElementById('editEmail').value = u.email || '';
+    document.getElementById('editKey').value = '';
+    document.getElementById('editClearKey').checked = false;
+    document.getElementById('editAdmin').checked = u.is_admin;
+    document.getElementById('editKeyState').textContent = u.has_litellm_key ? 'currently set' : 'not set (using global)';
+    document.getElementById('editErr').textContent = '';
+    document.getElementById('editModal').style.display = 'flex';
+  }
+  function closeEdit() { document.getElementById('editModal').style.display = 'none'; }
+
+  async function saveEdit() {
+    const id = parseInt(document.getElementById('editModal').dataset.id, 10);
+    const err = document.getElementById('editErr');
+    err.textContent = '';
+    const pass = document.getElementById('editPass').value;
+    const key = document.getElementById('editKey').value.trim();
+    const body = {
+      email: document.getElementById('editEmail').value.trim() || null,
+      is_admin: document.getElementById('editAdmin').checked,
+      clear_litellm_key: document.getElementById('editClearKey').checked,
+    };
+    if (pass) body.password = pass;
+    if (key && !body.clear_litellm_key) body.litellm_api_key = key;
+    try {
+      await api(`/auth/users/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      closeEdit();
+      await refresh();
+    } catch (e) { err.textContent = e.message; }
+  }
+
+  async function deleteUser(id) {
+    const u = USERS.find(x => x.id === id);
+    if (!u) return;
+    if (!confirm(`Delete user "${u.username}"? This removes their login and tracked data. This cannot be undone.`)) return;
+    try {
+      await api(`/auth/users/${id}`, { method: 'DELETE' });
+      await refresh();
+    } catch (e) { alert(e.message); }
+  }
+
+  initHeader('/admin').then(load);
+  </script>
+</body>
+</html>

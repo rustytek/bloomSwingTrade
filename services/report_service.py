@@ -340,7 +340,8 @@ async def _gather_context(user_id: int, db: Session) -> dict:
 
 # ── Ollama call ───────────────────────────────────────────────────────────────
 
-async def _call_ollama(system: str, user_msg: str, model: str | None = None) -> str:
+async def _call_ollama(system: str, user_msg: str, model: str | None = None,
+                       api_key: str | None = None) -> str:
     s = current_settings()
     provider = s.ai_provider.lower()
     timeout_seconds = 900.0
@@ -368,9 +369,10 @@ async def _call_ollama(system: str, user_msg: str, model: str | None = None) -> 
         url = base_url + "/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
         if provider == "litellm":
-            if not s.litellm_api_key:
+            key = api_key or s.litellm_api_key
+            if not key:
                 raise RuntimeError("LITELLM_API_KEY is required when AI_PROVIDER=litellm")
-            headers["Authorization"] = f"Bearer {s.litellm_api_key}"
+            headers["Authorization"] = f"Bearer {key}"
         else:
             if not s.ai_api_key:
                 raise RuntimeError("AI_API_KEY is required when AI_PROVIDER=openai")
@@ -487,6 +489,7 @@ async def generate_daily_report(
     user_id: int,
     triggered_by: str = "user",
     model: str | None = None,
+    api_key: str | None = None,
 ) -> str:
     """
     Generate the daily market analysis report for *user_id*.
@@ -638,7 +641,7 @@ Use the live macro numbers provided — do not use placeholder text like [CHECK:
 Do not add new sections. Return only the completed markdown — no preamble."""
 
     try:
-        markdown = await _call_ollama(_SYSTEM_PROMPT, user_msg, model=model)
+        markdown = await _call_ollama(_SYSTEM_PROMPT, user_msg, model=model, api_key=api_key)
     except Exception as e:
         logger.error(
             "Report generation LLM call failed provider=%s model=%s error_type=%s error_repr=%r",

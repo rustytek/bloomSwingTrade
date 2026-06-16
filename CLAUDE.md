@@ -44,6 +44,7 @@ React SPA (static/*.html) → FastAPI (main.py)
 - `/screener` — the screener (`static/index.html`, formerly served at `/`).
 - `/journal` — trade journal (`static/journal.html`).
 - `/charts` — chart dashboard (`static/charts.html`).
+- `/admin` — user management (`static/admin.html`), admin-only. Create/edit/delete users, reset passwords, toggle admin, and set/clear each user's per-user LiteLLM key. The header "Users" link (in `common.js`) is shown only to admins.
 - Shared front-end helpers live in `static/js/common.js`, served via a `/static` StaticFiles mount in `main.py`.
 
 ### Key Files
@@ -90,6 +91,7 @@ Walk-forward backtest now takes a `strategy` param (one of the 3 ids); `source` 
 ### Database / Migrations
 - New `ClosedTrade` model (`closed_trades` table) backs the trade journal — records realized `pnl`, `pnl_pct`, and `r_multiple` (when a stop was set).
 - `User` gained trading-settings columns: `account_size`, `risk_pct`, `max_positions`, `atr_stop_mult`, `r_multiple`.
+- `User.litellm_api_key` (nullable) gives each user their own LiteLLM virtual key so AI token usage is separate. The AI path (`api/ai.py` `llm_headers`/`call_chat_model`, `services/ai_service.py` `LiteLLMAIService`/`ai_service` dependency, `services/report_service.py` `_call_ollama`/`generate_daily_report`) takes an optional `api_key` and falls back to the global config key when a user has none. The auth API never returns the raw key — only a `has_litellm_key` boolean. The 05:30 scheduler now generates a report for every user with their own key.
 - `PortfolioPosition` gained `stop_loss`, `target`, `entry_date`, `strategy`.
 - Closing a position (`POST /api/portfolio/{ticker}/close`) archives it to the journal and deletes it; `DELETE /api/portfolio/{ticker}` remains a non-journaled hard delete for correcting mistaken entries.
 - Lightweight SQLite `ALTER` migrations are handled by `ensure_schema_migrations()` in `main.py` (renamed from `ensure_cache_columns`, now with a generic `_ensure_columns` helper).

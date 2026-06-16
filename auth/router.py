@@ -28,6 +28,7 @@ class UserResponse(BaseModel):
     is_admin: bool
     created_at: datetime
     last_login: datetime | None
+    has_litellm_key: bool = False
 
     class Config:
         from_attributes = True
@@ -38,12 +39,15 @@ class CreateUserRequest(BaseModel):
     password: str
     email: str | None = None
     is_admin: bool = False
+    litellm_api_key: str | None = None
 
 
 class UpdateUserRequest(BaseModel):
     password: str | None = None
     email: str | None = None
     is_admin: bool | None = None
+    litellm_api_key: str | None = None   # set the per-user LiteLLM key
+    clear_litellm_key: bool = False      # set true to remove an existing key
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -87,6 +91,7 @@ def register(
         password_hash=hash_password(req.password),
         email=req.email,
         is_admin=req.is_admin,
+        litellm_api_key=(req.litellm_api_key or None),
     )
     db.add(user)
     db.commit()
@@ -116,6 +121,10 @@ def update_user(
         user.email = req.email
     if req.is_admin is not None:
         user.is_admin = req.is_admin
+    if req.clear_litellm_key:
+        user.litellm_api_key = None
+    elif req.litellm_api_key:
+        user.litellm_api_key = req.litellm_api_key
 
     db.commit()
     db.refresh(user)

@@ -22,6 +22,10 @@ class User(Base):
     created_at = Column(DateTime, default=utcnow)
     last_login = Column(DateTime, nullable=True)
 
+    # Per-user LiteLLM virtual key — keeps each user's AI token usage separate.
+    # When null, the AI path falls back to the global key from config.
+    litellm_api_key = Column(String(256), nullable=True)
+
     # Trading settings (fixed-fractional risk model)
     account_size = Column(Float, default=10000, nullable=False)
     risk_pct = Column(Float, default=1.0, nullable=False)
@@ -31,6 +35,10 @@ class User(Base):
 
     watchlist = relationship("WatchlistItem", back_populates="user", cascade="all, delete-orphan")
     portfolio = relationship("PortfolioPosition", back_populates="user", cascade="all, delete-orphan")
+
+    @property
+    def has_litellm_key(self) -> bool:
+        return bool(self.litellm_api_key)
 
 
 class WatchlistItem(Base):

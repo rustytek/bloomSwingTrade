@@ -56,17 +56,24 @@ _scheduler = AsyncIOScheduler()
 
 
 async def _scheduled_report_job():
-    """Generate the daily report for the admin user at 05:30."""
+    """Generate the daily report for every user at 05:30, each using their own
+    LiteLLM key (falls back to the global key when a user has none)."""
     from services.report_service import generate_daily_report
     db = SessionLocal()
     try:
-        admin = db.query(User).filter(User.is_admin.is_(True)).first()
-        if admin:
-            logger.info("Scheduler: generating daily report for admin user %s", admin.username)
-            await generate_daily_report(db, admin.id, triggered_by="schedule")
-            logger.info("Scheduler: daily report complete")
-        else:
-            logger.warning("Scheduler: no admin user found — skipping report")
+        users = db.query(User).all()
+        if not users:
+            logger.warning("Scheduler: no users found — skipping report")
+            return
+        logger.info("Scheduler: generating daily reports for %s users", len(users))
+        for user in users:
+            try:
+                await generate_daily_report(
+                    db, user.id, triggered_by="schedule", api_key=user.litellm_api_key
+                )
+            except Exception as e:
+                logger.error("Scheduler: report failed for user %s: %s", user.username, e)
+        logger.info("Scheduler: daily reports complete")
     except Exception as e:
         logger.error("Scheduler: report generation failed: %s", e)
     finally:
@@ -163,6 +170,7 @@ def ensure_schema_migrations():
             "max_positions": "INTEGER DEFAULT 8",
             "atr_stop_mult": "FLOAT DEFAULT 2.5",
             "r_multiple": "FLOAT DEFAULT 2.0",
+            "litellm_api_key": "VARCHAR(256)",
         })
         _ensure_columns(conn, "portfolio_positions", {
             "stop_loss": "FLOAT",
@@ -222,7 +230,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.7.2",
+    version="1.8.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -292,6 +300,11 @@ async def journal_page():
 @app.get("/today")
 async def today_page():
     return FileResponse(os.path.join(STATIC_DIR, "today.html"))
+
+
+@app.get("/admin")
+async def admin_page():
+    return FileResponse(os.path.join(STATIC_DIR, "admin.html"))
 
 
 @app.get("/")

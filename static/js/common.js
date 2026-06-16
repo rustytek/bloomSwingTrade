@@ -64,6 +64,16 @@ async function initHeader(active, leftExtraHtml = '') {
     const user = await api('/auth/me');
     const u = document.getElementById('username');
     if (u) u.textContent = user.username || '';
+    // Admin-only Users link, inserted before the username on the right.
+    if (user.is_admin && u && !document.getElementById('adminLink')) {
+      const a = document.createElement('a');
+      a.id = 'adminLink';
+      a.className = 'btn hint' + (active === '/admin' ? ' btn-active' : '');
+      a.href = '/admin';
+      a.textContent = 'Users';
+      a.setAttribute('data-tip', 'Manage users, passwords, and per-user LiteLLM keys.');
+      u.parentNode.insertBefore(a, u);
+    }
   } catch (e) { return; }
   try {
     const status = await api('/api/screener/universe/status');

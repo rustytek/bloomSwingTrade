@@ -29,16 +29,17 @@ def llm_base_url() -> str:
     return s.ollama_url.rstrip("/")
 
 
-def llm_headers() -> dict:
+def llm_headers(api_key: str | None = None) -> dict:
     s = current_settings()
     provider = s.ai_provider.lower()
     if provider == "ollama":
         return {"Content-Type": "application/json"}
     headers = {"Content-Type": "application/json"}
     if provider == "litellm":
-        if not s.litellm_api_key:
+        key = api_key or s.litellm_api_key
+        if not key:
             raise RuntimeError("LITELLM_API_KEY is required when AI_PROVIDER=litellm")
-        headers["Authorization"] = f"Bearer {s.litellm_api_key}"
+        headers["Authorization"] = f"Bearer {key}"
     elif provider == "openai":
         if not s.ai_api_key:
             raise RuntimeError("AI_API_KEY is required when AI_PROVIDER=openai")
@@ -46,7 +47,8 @@ def llm_headers() -> dict:
     return headers
 
 
-async def call_chat_model(system: str, user_msg: str, model: str | None = None, timeout: float = 120.0) -> str:
+async def call_chat_model(system: str, user_msg: str, model: str | None = None, timeout: float = 120.0,
+                          api_key: str | None = None) -> str:
     import httpx
 
     s = current_settings()
@@ -76,7 +78,7 @@ async def call_chat_model(system: str, user_msg: str, model: str | None = None, 
         client_timeout = httpx.Timeout(timeout, connect=15.0, read=timeout, write=60.0, pool=15.0)
         try:
             async with httpx.AsyncClient(timeout=client_timeout) as client:
-                resp = await client.post(url, json=payload, headers=llm_headers())
+                resp = await client.post(url, json=payload, headers=llm_headers(api_key))
         except httpx.TimeoutException as e:
             logger.error(
                 "Market chat LLM timeout provider=%s url=%s model=%s timeout=%s error_type=%s error_repr=%r",
@@ -402,7 +404,7 @@ async def ollama_models(user: User = Depends(get_current_user)):
     url = f"{llm_base_url()}/v1/models" if provider in ("litellm", "openai") else s.ollama_url.rstrip("/") + "/api/tags"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, headers=llm_headers())
+            resp = await client.get(url, headers=llm_headers(getattr(user, "litellm_api_key", None)))
             resp.raise_for_status()
             data = resp.json()
     except Exception as e:
@@ -444,7 +446,8 @@ async def debug_litellm(
     system = "You are a concise SwingTrader LiteLLM diagnostic assistant."
     started = time.perf_counter()
     try:
-        answer = await call_chat_model(system, user_msg, model=model_name, timeout=req.timeout)
+        answer = await call_chat_model(system, user_msg, model=model_name, timeout=req.timeout,
+                                       api_key=getattr(user, "litellm_api_key", None))
     except Exception as e:
         elapsed = time.perf_counter() - started
         logger.error(
@@ -501,7 +504,8 @@ async def generate_report(
             user.username,
             req.model or "(default)",
         )
-        markdown = await generate_daily_report(db, user.id, triggered_by="user", model=req.model)
+        markdown = await generate_daily_report(db, user.id, triggered_by="user", model=req.model,
+                                               api_key=user.litellm_api_key)
     except RuntimeError as e:
         logger.error("Daily report request failed user_id=%s model=%s error=%s", user.id, req.model or "(default)", e)
         raise HTTPException(status_code=503, detail=str(e))
@@ -635,7 +639,8 @@ async def market_chat(
     user_msg = "\n".join(context_parts) + f"\n\n=== QUESTION ===\n{req.question}"
 
     try:
-        answer = await call_chat_model(system, user_msg, model=req.model, timeout=300.0)
+        answer = await call_chat_model(system, user_msg, model=req.model, timeout=300.0,
+                                       api_key=user.litellm_api_key)
     except Exception as e:
         logger.error(
             "Market chat failed user_id=%s model=%s error_type=%s error_repr=%r",

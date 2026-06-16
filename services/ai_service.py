@@ -17,6 +17,10 @@ from abc import ABC, abstractmethod
 from config import get_settings
 
 import httpx
+from fastapi import Depends
+
+from auth.deps import get_current_user
+from database.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -270,11 +274,12 @@ class LiteLLMAIService(AIService):
     Set AI_PROVIDER=litellm, LITELLM_URL, and model names in config.
     """
 
-    def __init__(self):
+    def __init__(self, api_key: str | None = None):
         settings = get_settings()
         self.base_url = (settings.litellm_url or settings.ollama_url).rstrip("/")
         self.model = settings.ai_model or settings.ollama_model
-        self.api_key = settings.litellm_api_key
+        # Per-user virtual key takes precedence; fall back to the global key.
+        self.api_key = api_key or settings.litellm_api_key
         self._timeout = 120.0
 
     def _headers(self) -> dict:
@@ -443,8 +448,9 @@ class LiteLLMAIService(AIService):
 
 # ── Factory ───────────────────────────────────────────────────────────────
 
-def get_ai_service() -> AIService:
-    """Return the configured AI service singleton."""
+def get_ai_service(api_key: str | None = None) -> AIService:
+    """Build the configured AI service. `api_key` overrides the global LiteLLM key
+    (used to give each user their own virtual key)."""
     settings = get_settings()
     provider = settings.ai_provider.lower()
 
@@ -452,7 +458,7 @@ def get_ai_service() -> AIService:
         return OllamaAIService()
 
     if provider == "litellm":
-        return LiteLLMAIService()
+        return LiteLLMAIService(api_key=api_key)
 
     if provider == "anthropic":
         # Uncomment when AnthropicAIService is implemented above
@@ -469,10 +475,7 @@ def get_ai_service() -> AIService:
     return MockAIService()
 
 
-# Singleton — created once at import time
-_ai_service: AIService = get_ai_service()
-
-
-def ai_service() -> AIService:
-    """FastAPI dependency: returns the singleton AI service."""
-    return _ai_service
+def ai_service(user: "User" = Depends(get_current_user)) -> AIService:
+    """FastAPI dependency: build an AI service bound to the current user's
+    LiteLLM key (falls back to the global key when the user has none)."""
+    return get_ai_service(api_key=getattr(user, "litellm_api_key", None))

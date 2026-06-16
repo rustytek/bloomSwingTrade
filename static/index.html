@@ -7,7 +7,11 @@
   <title>Swing Trader</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Pinned: unpinned @babel/standalone began defaulting to the automatic JSX
+       runtime, which emits `import` statements that a classic <script> can't run
+       (blank page). Pin the version and force the classic runtime via the
+       @jsxRuntime pragma at the top of the script below. -->
+  <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
   <link
     href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap"
     rel="stylesheet">
@@ -187,7 +191,8 @@
 
 <body>
   <div id="root"></div>
-  <script type="text/babel">
+  <script type="text/babel" data-presets="react">
+    /* @jsxRuntime classic */
     const { useState, useEffect, useRef, useCallback, useMemo } = React;
     const { createPortal } = ReactDOM;
 

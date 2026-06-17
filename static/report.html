@@ -177,6 +177,7 @@
     </div>
     <button class="btn btn-ghost" id="btnCopy" disabled>Copy MD</button>
     <button class="btn btn-ghost" id="btnSave" disabled>Save .md</button>
+    <button class="btn btn-ghost" id="btnPrompts" title="Edit your own AI report &amp; chat prompts">&#x270E; Prompts</button>
     <button class="btn btn-chat" id="btnToggleChat">&#x1F4AC; Chat</button>
     <button class="btn btn-primary" id="btnGenerate">Generate Report</button>
 
@@ -263,6 +264,48 @@
   </div><!-- body -->
 </div>
 
+<!-- AI Prompts editor modal -->
+<div id="promptsModal" style="position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;align-items:center;justify-content:center;z-index:200;padding:20px;">
+  <div style="width:min(820px,96vw);max-height:90vh;overflow:auto;background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:18px;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+      <h3 style="color:#eee;font-size:15px;font-weight:700;margin:0;">Your AI Prompts</h3>
+      <span style="color:#777;font-size:11px;">Personal — only affects your account.</span>
+      <button id="promptsClose" style="margin-left:auto;background:#1a1a1a;color:#888;border:1px solid #2a2a2a;border-radius:4px;padding:4px 10px;cursor:pointer;">✕ Close</button>
+    </div>
+    <p style="color:#888;font-size:12px;line-height:1.5;margin:0 0 14px;">
+      These are the <strong>system prompts</strong> (the instructions/persona) for your daily report and chat.
+      The report's fixed layout template and your live portfolio data are added automatically and aren't editable here.
+      Leave a box empty (or click <em>Reset to default</em>) to use the built-in prompt.
+    </p>
+
+    <div style="margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <label style="color:#ccc;font-size:12px;font-weight:600;">Daily Report — system prompt</label>
+        <span id="reportState" style="color:#777;font-size:10px;"></span>
+        <button class="btn btn-ghost" id="reportReset" style="margin-left:auto;padding:2px 8px;font-size:10px;">Reset to default</button>
+      </div>
+      <textarea id="reportPrompt" rows="9" spellcheck="false"
+        style="width:100%;background:#0d0d0d;border:1px solid #2a2a2a;color:#ddd;border-radius:5px;padding:10px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;line-height:1.5;resize:vertical;"></textarea>
+    </div>
+
+    <div style="margin-bottom:14px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <label style="color:#ccc;font-size:12px;font-weight:600;">Chat — system prompt</label>
+        <span id="chatState" style="color:#777;font-size:10px;"></span>
+        <button class="btn btn-ghost" id="chatReset" style="margin-left:auto;padding:2px 8px;font-size:10px;">Reset to default</button>
+      </div>
+      <textarea id="chatPrompt" rows="5" spellcheck="false"
+        style="width:100%;background:#0d0d0d;border:1px solid #2a2a2a;color:#ddd;border-radius:5px;padding:10px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;line-height:1.5;resize:vertical;"></textarea>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span id="promptsMsg" style="font-size:12px;min-height:16px;"></span>
+      <button class="btn btn-ghost" id="promptsCancel" style="margin-left:auto;">Cancel</button>
+      <button class="btn btn-primary" id="promptsSave">Save</button>
+    </div>
+  </div>
+</div>
+
 <script>
   // ── Auth ──────────────────────────────────────────────────────────────────
   const token = localStorage.getItem('st_token');
@@ -325,6 +368,9 @@
     genStatus.textContent = msg;
     genStatus.className = 'status ' + cls;
   }
+
+  // " · <model>" suffix when a model name is known (older reports may lack one).
+  function modelTag(m) { return m ? ' · ' + m : ''; }
 
   function renderMarkdown(md) {
     currentMarkdown = md;
@@ -485,7 +531,8 @@
         el.dataset.id = r.id;
         el.innerHTML = `
           <div class="d">${dt.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'2-digit' })}</div>
-          <div class="m">${dt.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' })} · ${r.triggered_by}</div>`;
+          <div class="m">${dt.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' })} · ${r.triggered_by}</div>
+          ${r.model ? `<div class="m" style="opacity:.7;">${r.model}</div>` : ''}`;
         el.addEventListener('click', () => loadById(r.id, el));
         sidebarList.appendChild(el);
       });
@@ -500,7 +547,7 @@
       const data = await res.json();
       renderMarkdown(data.markdown);
       currentDate = new Date(data.generated_at).toISOString().slice(0,10).replace(/-/g,'');
-      setStatus('Loaded · ' + new Date(data.generated_at).toLocaleString(), 'ok');
+      setStatus('Loaded · ' + new Date(data.generated_at).toLocaleString() + modelTag(data.model), 'ok');
       document.querySelectorAll('.s-item').forEach(i => i.classList.remove('active'));
       el?.classList.add('active');
     } catch (e) { setStatus('Load failed: ' + e.message, 'err'); }
@@ -514,7 +561,7 @@
       if (!data.markdown) return;
       renderMarkdown(data.markdown);
       currentDate = new Date(data.generated_at).toISOString().slice(0,10).replace(/-/g,'');
-      setStatus('Last generated ' + new Date(data.generated_at).toLocaleString() + ' · ' + data.triggered_by, 'ok');
+      setStatus('Last generated ' + new Date(data.generated_at).toLocaleString() + ' · ' + data.triggered_by + modelTag(data.model), 'ok');
     } catch (e) { console.warn('loadLatest', e); }
   }
 
@@ -546,7 +593,7 @@
       const data = await res.json();
       renderMarkdown(data.markdown);
       currentDate = new Date(data.generated_at).toISOString().slice(0,10).replace(/-/g,'');
-      setStatus('Generated at ' + new Date(data.generated_at).toLocaleString(), 'ok');
+      setStatus('Generated at ' + new Date(data.generated_at).toLocaleString() + modelTag(data.model), 'ok');
       await loadHistory();
       const first = sidebarList.querySelector('.s-item');
       if (first) { document.querySelectorAll('.s-item').forEach(i => i.classList.remove('active')); first.classList.add('active'); }
@@ -579,6 +626,67 @@
       setTimeout(() => btnCopy.textContent = orig, 1500);
     } catch {}
   });
+
+  // ── AI Prompts editor ───────────────────────────────────────────────────
+  const promptsModal  = document.getElementById('promptsModal');
+  const reportPromptEl = document.getElementById('reportPrompt');
+  const chatPromptEl   = document.getElementById('chatPrompt');
+  const reportStateEl  = document.getElementById('reportState');
+  const chatStateEl     = document.getElementById('chatState');
+  const promptsMsg     = document.getElementById('promptsMsg');
+  let PROMPT_DEFAULTS  = { report: '', chat: '' };
+
+  function setPromptState(el, isCustom) {
+    el.textContent = isCustom ? '(customized)' : '(using default)';
+    el.style.color = isCustom ? '#f0a500' : '#777';
+  }
+
+  async function openPrompts() {
+    promptsMsg.textContent = '';
+    try {
+      const res = await fetch('/api/ai/prompts', { headers: authHdr() });
+      if (!res.ok) throw new Error(await res.text());
+      const d = await res.json();
+      PROMPT_DEFAULTS = { report: d.report.default || '', chat: d.chat.default || '' };
+      reportPromptEl.value = d.report.custom ?? d.report.default ?? '';
+      chatPromptEl.value   = d.chat.custom ?? d.chat.default ?? '';
+      setPromptState(reportStateEl, d.report.custom != null);
+      setPromptState(chatStateEl, d.chat.custom != null);
+      promptsModal.style.display = 'flex';
+    } catch (e) {
+      alert('Could not load prompts: ' + e.message);
+    }
+  }
+  function closePrompts() { promptsModal.style.display = 'none'; }
+
+  async function savePrompts() {
+    // Treat "empty" or "identical to default" as a reset (store null on server).
+    const rp = reportPromptEl.value, cp = chatPromptEl.value;
+    const body = {
+      report_system_prompt: (!rp.trim() || rp.trim() === PROMPT_DEFAULTS.report.trim()) ? '' : rp,
+      chat_system_prompt:   (!cp.trim() || cp.trim() === PROMPT_DEFAULTS.chat.trim())   ? '' : cp,
+    };
+    promptsMsg.textContent = 'Saving…'; promptsMsg.style.color = '#888';
+    try {
+      const res = await fetch('/api/ai/prompts', { method: 'PUT', headers: authHdr(), body: JSON.stringify(body) });
+      if (!res.ok) throw new Error(await res.text());
+      const d = await res.json();
+      setPromptState(reportStateEl, d.report.custom != null);
+      setPromptState(chatStateEl, d.chat.custom != null);
+      promptsMsg.textContent = 'Saved.'; promptsMsg.style.color = '#4ec27a';
+      setTimeout(() => { promptsMsg.textContent = ''; }, 1500);
+    } catch (e) {
+      promptsMsg.textContent = 'Error: ' + e.message; promptsMsg.style.color = '#e05252';
+    }
+  }
+
+  document.getElementById('btnPrompts').addEventListener('click', openPrompts);
+  document.getElementById('promptsClose').addEventListener('click', closePrompts);
+  document.getElementById('promptsCancel').addEventListener('click', closePrompts);
+  document.getElementById('promptsSave').addEventListener('click', savePrompts);
+  document.getElementById('reportReset').addEventListener('click', () => { reportPromptEl.value = PROMPT_DEFAULTS.report; });
+  document.getElementById('chatReset').addEventListener('click', () => { chatPromptEl.value = PROMPT_DEFAULTS.chat; });
+  promptsModal.addEventListener('click', (e) => { if (e.target === promptsModal) closePrompts(); });
 
   // ── Init ──────────────────────────────────────────────────────────────────
   (async () => {

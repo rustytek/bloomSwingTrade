@@ -69,7 +69,8 @@ async def _scheduled_report_job():
         for user in users:
             try:
                 await generate_daily_report(
-                    db, user.id, triggered_by="schedule", api_key=user.litellm_api_key
+                    db, user.id, triggered_by="schedule", api_key=user.litellm_api_key,
+                    system_prompt=user.report_system_prompt,
                 )
             except Exception as e:
                 logger.error("Scheduler: report failed for user %s: %s", user.username, e)
@@ -171,12 +172,17 @@ def ensure_schema_migrations():
             "atr_stop_mult": "FLOAT DEFAULT 2.5",
             "r_multiple": "FLOAT DEFAULT 2.0",
             "litellm_api_key": "VARCHAR(256)",
+            "report_system_prompt": "TEXT",
+            "chat_system_prompt": "TEXT",
         })
         _ensure_columns(conn, "portfolio_positions", {
             "stop_loss": "FLOAT",
             "target": "FLOAT",
             "entry_date": "DATE",
             "strategy": "VARCHAR(32)",
+        })
+        _ensure_columns(conn, "report_cache", {
+            "model": "VARCHAR(128)",
         })
 
 
@@ -230,7 +236,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.8.1",
+    version="1.9.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

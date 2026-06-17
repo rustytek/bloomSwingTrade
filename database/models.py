@@ -26,6 +26,12 @@ class User(Base):
     # When null, the AI path falls back to the global key from config.
     litellm_api_key = Column(String(256), nullable=True)
 
+    # Per-user AI system-prompt overrides. When null, the built-in default
+    # (services/report_service._SYSTEM_PROMPT / api.ai.DEFAULT_CHAT_SYSTEM_PROMPT)
+    # is used. The fixed report _TEMPLATE is never user-editable.
+    report_system_prompt = Column(Text, nullable=True)
+    chat_system_prompt = Column(Text, nullable=True)
+
     # Trading settings (fixed-fractional risk model)
     account_size = Column(Float, default=10000, nullable=False)
     risk_pct = Column(Float, default=1.0, nullable=False)
@@ -142,3 +148,4 @@ class ReportCache(Base):
     report_markdown = Column(Text, nullable=False)
     generated_at = Column(DateTime, default=utcnow)
     triggered_by = Column(String(16), default="user")   # "user" | "schedule"
+    model = Column(String(128), nullable=True)          # resolved model that generated it

@@ -14,6 +14,15 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
+# Default system prompt for market chat. Users may override this per-account via
+# PUT /api/ai/prompts; when their override is null this default is used.
+DEFAULT_CHAT_SYSTEM_PROMPT = (
+    "You are a professional swing-trading assistant with access to the user's live portfolio "
+    "and watchlist data. Answer questions concisely and specifically using the data provided. "
+    "Use markdown formatting. Cite specific tickers and numbers from the data when relevant. "
+    "Keep answers focused and under 400 words unless a detailed breakdown is requested."
+)
+
 
 def current_settings():
     return get_settings()
@@ -329,6 +338,54 @@ def ai_status(user: User = Depends(get_current_user)):
     }
 
 
+class PromptsUpdate(BaseModel):
+    report_system_prompt: str | None = None
+    chat_system_prompt: str | None = None
+
+
+def _prompts_payload(user: User) -> dict:
+    """Per-user prompt overrides plus the built-in defaults (so the UI can show
+    the template and offer a reset)."""
+    from services.report_service import _SYSTEM_PROMPT as DEFAULT_REPORT_SYSTEM_PROMPT
+    return {
+        "report": {
+            "custom": user.report_system_prompt,
+            "default": DEFAULT_REPORT_SYSTEM_PROMPT,
+        },
+        "chat": {
+            "custom": user.chat_system_prompt,
+            "default": DEFAULT_CHAT_SYSTEM_PROMPT,
+        },
+    }
+
+
+@router.get("/prompts")
+def get_prompts(user: User = Depends(get_current_user)):
+    """Return this user's AI system-prompt overrides and the built-in defaults."""
+    return _prompts_payload(user)
+
+
+@router.put("/prompts")
+def update_prompts(
+    req: PromptsUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Set or clear this user's AI system-prompt overrides. An omitted field is
+    left unchanged; an empty/whitespace value clears the override (revert to
+    the built-in default)."""
+    data = req.model_dump(exclude_unset=True)
+    if "report_system_prompt" in data:
+        v = (data["report_system_prompt"] or "").strip()
+        user.report_system_prompt = v or None
+    if "chat_system_prompt" in data:
+        v = (data["chat_system_prompt"] or "").strip()
+        user.chat_system_prompt = v or None
+    db.commit()
+    db.refresh(user)
+    return _prompts_payload(user)
+
+
 @router.get("/{ticker}/analysis")
 async def analyze_stock(
     ticker: str,
@@ -504,8 +561,9 @@ async def generate_report(
             user.username,
             req.model or "(default)",
         )
-        markdown = await generate_daily_report(db, user.id, triggered_by="user", model=req.model,
-                                               api_key=user.litellm_api_key)
+        result = await generate_daily_report(db, user.id, triggered_by="user", model=req.model,
+                                             api_key=user.litellm_api_key,
+                                             system_prompt=user.report_system_prompt)
     except RuntimeError as e:
         logger.error("Daily report request failed user_id=%s model=%s error=%s", user.id, req.model or "(default)", e)
         raise HTTPException(status_code=503, detail=str(e))
@@ -513,7 +571,8 @@ async def generate_report(
         logger.exception("Daily report request crashed user_id=%s model=%s", user.id, req.model or "(default)")
         raise HTTPException(status_code=503, detail=f"Report generation crashed: {e}")
     return {
-        "markdown": markdown,
+        "markdown": result["markdown"],
+        "model": result["model"],
         "generated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
     }
 
@@ -531,11 +590,12 @@ def get_latest_report(
         .first()
     )
     if not report:
-        return {"markdown": None, "generated_at": None, "triggered_by": None}
+        return {"markdown": None, "generated_at": None, "triggered_by": None, "model": None}
     return {
         "markdown": report.report_markdown,
         "generated_at": report.generated_at.isoformat(),
         "triggered_by": report.triggered_by,
+        "model": report.model,
     }
 
 
@@ -556,6 +616,7 @@ def list_reports(
             "id": r.id,
             "generated_at": r.generated_at.isoformat(),
             "triggered_by": r.triggered_by,
+            "model": r.model,
         }
         for r in rows
     ]
@@ -620,12 +681,7 @@ async def market_chat(
         for w in watchlist
     ]
 
-    system = (
-        "You are a professional swing-trading assistant with access to the user's live portfolio "
-        "and watchlist data. Answer questions concisely and specifically using the data provided. "
-        "Use markdown formatting. Cite specific tickers and numbers from the data when relevant. "
-        "Keep answers focused and under 400 words unless a detailed breakdown is requested."
-    )
+    system = user.chat_system_prompt or DEFAULT_CHAT_SYSTEM_PROMPT
 
     context_parts = [
         f"=== PORTFOLIO ({len(portfolio_data)} positions, Total MV: ${total_mv:,.0f}) ===",
@@ -674,4 +730,5 @@ def get_report_by_id(
         "markdown": report.report_markdown,
         "generated_at": report.generated_at.isoformat(),
         "triggered_by": report.triggered_by,
+        "model": report.model,
     }

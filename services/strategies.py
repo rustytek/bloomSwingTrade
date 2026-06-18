@@ -61,6 +61,7 @@ class Strategy(ABC):
     id: str
     name: str
     description: str
+    details: dict = {}          # horizon / how / rules / scoring / parameters
     min_bars: int = 220
 
     @abstractmethod
@@ -93,6 +94,25 @@ class MomentumRotation(Strategy):
         "(annualized) x R². Smooth, persistent uptrends rank highest; gappy or "
         "choppy charts are filtered out. Hold the top names, rotate on rebalance."
     )
+    details = {
+        "horizon": "Trend-following; rotate on each rebalance (weekly–monthly).",
+        "how": "Ranks every candidate by how strong AND how smooth its 90-day uptrend is, then holds the top N.",
+        "rules": [
+            "Skip names with any single-day move > 15% over the window (avoids gap-driven scores).",
+            "Trend filter: price must be above its 100-day moving average.",
+            "Fit a linear regression to the last 90 daily log-closes.",
+            "Annualize the slope: exp(slope × 252) − 1.",
+            "Multiply by R² so choppy, low-fit trends are penalized.",
+            "Rank all candidates by score; hold the top N; re-rank at each rebalance.",
+        ],
+        "scoring": "score = (exp(slope × 252) − 1) × R²   — annualized 90-day log-price slope weighted by fit quality (R²). Must be > 0.",
+        "parameters": [
+            ["Regression window", "90 bars"],
+            ["Trend filter", "above 100-day MA"],
+            ["Gap filter", "reject if any 1-day move > 15%"],
+            ["Min history", "110 bars"],
+        ],
+    }
     min_bars = 110
     REGRESSION_BARS = 90
 
@@ -153,6 +173,24 @@ class Pullback50MA(Strategy):
         "reset below 45), then entry when price closes back above the prior "
         "day's high."
     )
+    details = {
+        "horizon": "Buy-the-dip swing entry inside an established uptrend (2 weeks–2 months).",
+        "how": "Waits for a healthy uptrend to pull back to support, then triggers when price turns back up.",
+        "rules": [
+            "Uptrend gate: price > 200-day MA AND 50-day MA > 200-day MA.",
+            "Momentum gate: 63-day (≈3-month) return must be positive.",
+            "Pullback: price tagged the 50-day MA within ~2% recently, OR RSI(14) reset below 45 after having been above 60.",
+            "State = 'triggered' when price closes back above the prior day's high (confirmation); otherwise 'forming'.",
+        ],
+        "scoring": "score = ret_63 / 100 − distance_to_50MA / 200   — rewards a stronger 3-month trend and a tighter pullback to the 50-day MA.",
+        "parameters": [
+            ["Trend filter", "close > 200MA, 50MA > 200MA"],
+            ["Pullback band", "within ~2% of 50-day MA"],
+            ["RSI reset", "RSI(14) < 45 after > 60"],
+            ["Confirmation", "close > prior day's high"],
+            ["Min history", "220 bars"],
+        ],
+    }
     min_bars = 220
 
     def candidate(self, bars: list[dict], idx: int) -> dict | None:
@@ -216,6 +254,25 @@ class BreakoutVolume(Strategy):
         "20-day average, with the trend template intact (close > 50MA > 200MA, "
         "upper third of the 52-week range)."
     )
+    details = {
+        "horizon": "Momentum breakout entry; ride strength for 2 weeks–2 months.",
+        "how": "Buys a fresh 60-day high confirmed by a surge in volume, only while the broader trend is healthy.",
+        "rules": [
+            "Trend template: close > 50-day MA > 200-day MA.",
+            "Range filter: in the upper third of the 52-week range (position ≥ 70%).",
+            "Breakout: close at/above the highest high of the prior 60 bars.",
+            "Volume confirmation: today's volume ≥ 1.5× the 20-day average → 'triggered'.",
+            "Within 2% of the breakout level on ≥ 1.1× volume → 'forming'.",
+        ],
+        "scoring": "score = volume_ratio × (1 + max(0, ret_63)/100)   — rewards a bigger volume surge and a stronger 3-month trend behind the breakout.",
+        "parameters": [
+            ["Breakout lookback", "60-day high"],
+            ["Volume confirm", "≥ 1.5× 20-day avg"],
+            ["52-week position", "≥ 70%"],
+            ["Trend template", "close > 50MA > 200MA"],
+            ["Min history", "220 bars"],
+        ],
+    }
     min_bars = 220
     LOOKBACK = 60
     VOL_RATIO_MIN = 1.5
@@ -283,6 +340,6 @@ STRATEGIES: dict[str, Strategy] = {
 
 def strategy_catalog() -> list[dict]:
     return [
-        {"id": s.id, "name": s.name, "description": s.description}
+        {"id": s.id, "name": s.name, "description": s.description, "details": s.details}
         for s in STRATEGIES.values()
     ]

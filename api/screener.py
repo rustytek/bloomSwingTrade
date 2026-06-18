@@ -60,6 +60,30 @@ class ScreenerFilters(BaseModel):
     # Universe filters
     asset_type: Optional[str] = None     # "stocks" | "etfs" | None (all)
     cap_tier: Optional[str] = None       # "Large" | "Mid" | "Small" | None (all)
+    mkt_cap_min: Optional[float] = None   # market cap in $B
+    mkt_cap_max: Optional[float] = None
+
+    # Momentum / returns
+    chg_pct_min: Optional[float] = None
+    chg_pct_max: Optional[float] = None
+    ann_ret_min: Optional[float] = None
+    ann_ret_max: Optional[float] = None
+    ret_5d_min: Optional[float] = None
+    ret_5d_max: Optional[float] = None
+    ret_21d_min: Optional[float] = None
+    ret_21d_max: Optional[float] = None
+    ret_63d_min: Optional[float] = None
+    ret_63d_max: Optional[float] = None
+    rel_spy_21d_min: Optional[float] = None
+    rel_spy_21d_max: Optional[float] = None
+
+    # Other — price & liquidity
+    price_min: Optional[float] = None
+    price_max: Optional[float] = None
+    dollar_vol_min: Optional[float] = None   # avg dollar volume, $M
+    dollar_vol_max: Optional[float] = None
+    share_vol_min: Optional[float] = None     # raw share volume
+    share_vol_max: Optional[float] = None
 
     # Score filters
     swing_score_min: Optional[int] = None
@@ -107,6 +131,7 @@ def _passes(stock: dict, f: ScreenerFilters) -> bool:
         return False
     if f.cap_tier == "Small" and (mc is None or mc >= 2):
         return False
+    if not between(mc, f.mkt_cap_min, f.mkt_cap_max): return False
 
     if not between(stock.get("pe"), f.pe_min, f.pe_max): return False
     if not between(stock.get("fwd_pe"), f.fwd_pe_min, f.fwd_pe_max): return False
@@ -142,6 +167,19 @@ def _passes(stock: dict, f: ScreenerFilters) -> bool:
     if f.score_f_min is not None and (sc.get("f") or 0) < f.score_f_min: return False
     if f.score_t_min is not None and (sc.get("t") or 0) < f.score_t_min: return False
     if f.score_m_min is not None and (sc.get("m") or 0) < f.score_m_min: return False
+
+    # Momentum / returns ranges
+    if not between(stock.get("chg_pct"), f.chg_pct_min, f.chg_pct_max): return False
+    if not between(stock.get("ann_ret"), f.ann_ret_min, f.ann_ret_max): return False
+    if not between(stock.get("ret_5d"), f.ret_5d_min, f.ret_5d_max): return False
+    if not between(stock.get("ret_21d"), f.ret_21d_min, f.ret_21d_max): return False
+    if not between(stock.get("ret_63d"), f.ret_63d_min, f.ret_63d_max): return False
+    if not between(stock.get("rel_spy_21d"), f.rel_spy_21d_min, f.rel_spy_21d_max): return False
+
+    # Other — price & liquidity ranges
+    if not between(stock.get("price"), f.price_min, f.price_max): return False
+    if not between(stock.get("avg_dollar_vol_m"), f.dollar_vol_min, f.dollar_vol_max): return False
+    if not between(stock.get("vol"), f.share_vol_min, f.share_vol_max): return False
 
     if f.sharpe_min is not None and (stock.get("sharpe") or 0) < f.sharpe_min: return False
     if f.sortino_min is not None and (stock.get("sortino") or stock.get("gain_sharpe") or 0) < f.sortino_min: return False

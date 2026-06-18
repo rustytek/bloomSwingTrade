@@ -391,7 +391,11 @@
       vol_r_min: '', p52w_min: '', p52w_max: '', earn_beat: false, earn_soon: false,
       gain_sharpe_min: '', vol_max: '',
       beta_min: '', beta_max: '', div_min: '', div_max: '', sectors: [],
-      asset_type: '', cap_tier: '',
+      asset_type: '', cap_tier: '', mkt_cap_min: '', mkt_cap_max: '',
+      chg_pct_min: '', chg_pct_max: '', ann_ret_min: '', ann_ret_max: '',
+      ret_5d_min: '', ret_5d_max: '', ret_21d_min: '', ret_21d_max: '',
+      ret_63d_min: '', ret_63d_max: '', rel_spy_21d_min: '', rel_spy_21d_max: '',
+      price_min: '', price_max: '', dollar_vol_min: '', dollar_vol_max: '', share_vol_min: '', share_vol_max: '',
       swing_score_min: '', score_min: '', score_f_min: '', score_t_min: '', score_m_min: '',
       sharpe_min: '', sortino_min: '', calmar_min: '', info_ratio_min: '', treynor_min: '', max_dd_1m_max: '',
       tickers: [],
@@ -2031,9 +2035,12 @@
         .filter(v => v !== '' && v !== false && v != null).length;
       const countTech = () => [f.rsi_min, f.rsi_max, f.macd, f.vs_ma200, f.vs_ma50, f.gc, f.dc]
         .filter(v => v !== '' && v !== false && v != null).length;
-      const countMom = () => [f.vol_r_min, f.p52w_min, f.p52w_max, f.earn_beat, f.earn_soon, f.gain_sharpe_min, f.vol_max]
+      const countMom = () => [f.vol_r_min, f.p52w_min, f.p52w_max, f.earn_beat, f.earn_soon, f.gain_sharpe_min, f.vol_max,
+        f.chg_pct_min, f.chg_pct_max, f.ann_ret_min, f.ann_ret_max, f.ret_5d_min, f.ret_5d_max,
+        f.ret_21d_min, f.ret_21d_max, f.ret_63d_min, f.ret_63d_max, f.rel_spy_21d_min, f.rel_spy_21d_max]
         .filter(v => v !== '' && v !== false && v != null).length;
-      const countUni = () => [f.asset_type, f.cap_tier, ...f.sectors].filter(v => v !== '' && v != null).length;
+      const countUni = () => [f.asset_type, f.cap_tier, f.mkt_cap_min, f.mkt_cap_max, ...f.sectors].filter(v => v !== '' && v != null).length;
+      const countOther = () => [f.price_min, f.price_max, f.dollar_vol_min, f.dollar_vol_max, f.share_vol_min, f.share_vol_max].filter(v => v !== '' && v != null).length;
       const countScore = () => [f.swing_score_min, f.score_min, f.score_f_min, f.score_t_min, f.score_m_min].filter(v => v !== '' && v != null).length;
       const countPort = () => [f.div_min, f.div_max].filter(v => v !== '' && v != null).length;
       const countRisk = () => [f.sharpe_min, f.sortino_min, f.calmar_min, f.info_ratio_min, f.treynor_min, f.beta_min, f.beta_max, f.max_dd_1m_max].filter(v => v !== '' && v != null).length;
@@ -2074,6 +2081,9 @@
                     {lbl}
                   </button>
                 ))}
+              </div>
+              <div style={{ marginTop: 6 }}>
+                <RangeRow label="Market Cap ($B)" tip={COL_TIPS.mkt_cap} minKey="mkt_cap_min" maxKey="mkt_cap_max" filters={f} setFilters={setFilters} step="0.1" />
               </div>
             </div>
             {sectors.length > 0 && <div>
@@ -2146,10 +2156,16 @@
               <input type="number" placeholder="e.g. 0.3" step="any" value={f.vol_max}
                 onChange={e => setFilters(p => ({ ...p, vol_max: e.target.value }))} style={{ width: '100%' }} />
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4, marginBottom: 8 }}>
               <Toggle checked={f.earn_beat} onChange={v => setFilters(p => ({ ...p, earn_beat: v }))} label="Earnings Beat" />
               <Toggle checked={f.earn_soon} onChange={v => setFilters(p => ({ ...p, earn_soon: v }))} label="Earnings Soon" />
             </div>
+            <RangeRow label="Today Chg %" tip={COL_TIPS.chg_pct} minKey="chg_pct_min" maxKey="chg_pct_max" filters={f} setFilters={setFilters} step="0.1" />
+            <RangeRow label="Ann Return %" tip={COL_TIPS.ann_ret} minKey="ann_ret_min" maxKey="ann_ret_max" filters={f} setFilters={setFilters} step="1" />
+            <RangeRow label="5D Return %" tip={COL_TIPS.ret_5d} minKey="ret_5d_min" maxKey="ret_5d_max" filters={f} setFilters={setFilters} step="0.1" />
+            <RangeRow label="21D Return %" tip={COL_TIPS.ret_21d} minKey="ret_21d_min" maxKey="ret_21d_max" filters={f} setFilters={setFilters} step="0.1" />
+            <RangeRow label="63D Return %" tip={COL_TIPS.ret_63d} minKey="ret_63d_min" maxKey="ret_63d_max" filters={f} setFilters={setFilters} step="0.1" />
+            <RangeRow label="RS vs SPY 21D %" tip={COL_TIPS.rel_spy_21d} minKey="rel_spy_21d_min" maxKey="rel_spy_21d_max" filters={f} setFilters={setFilters} step="0.1" />
           </FilterSection>
 
           <FilterSection title="Portfolio" badge={countPort()}>
@@ -2201,6 +2217,12 @@
                 </div>
               </div>
             ))}
+          </FilterSection>
+
+          <FilterSection title="Other" badge={countOther()}>
+            <RangeRow label="Price ($)" tip={COL_TIPS.price} minKey="price_min" maxKey="price_max" filters={f} setFilters={setFilters} step="0.01" />
+            <RangeRow label="Avg $ Vol (M)" tip={COL_TIPS.avg_dollar_vol_m} minKey="dollar_vol_min" maxKey="dollar_vol_max" filters={f} setFilters={setFilters} step="1" />
+            <RangeRow label="Share Volume" tip="Raw daily share volume (number of shares traded)." minKey="share_vol_min" maxKey="share_vol_max" filters={f} setFilters={setFilters} step="1000" />
           </FilterSection>
 
         </div>

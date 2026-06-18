@@ -52,6 +52,28 @@ def _stats(trades: list[ClosedTrade]) -> dict:
     }
 
 
+def _equity_curve(trades: list[ClosedTrade]) -> list[dict]:
+    """Cumulative realized P&L over time, oldest→newest, from ALL closed trades.
+    Each point: {date, pnl, cum_pnl}. Ordered by exit_date (fallback closed_at)."""
+    from datetime import date as _date
+    ordered = sorted(
+        trades,
+        key=lambda t: (t.exit_date or (t.closed_at.date() if t.closed_at else None) or _date.min, t.id),
+    )
+    curve = []
+    cum = 0.0
+    for t in ordered:
+        cum += t.pnl
+        when = t.exit_date or (t.closed_at.date() if t.closed_at else None)
+        curve.append({
+            "date": when.isoformat() if when else None,
+            "ticker": t.ticker,
+            "pnl": round(t.pnl, 2),
+            "cum_pnl": round(cum, 2),
+        })
+    return curve
+
+
 @router.get("")
 def get_journal(
     limit: int = Query(100, ge=1, le=500),
@@ -65,6 +87,8 @@ def get_journal(
         .limit(limit)
         .all()
     )
+    # Equity curve uses ALL closed trades, not just the limited page.
+    all_trades = db.query(ClosedTrade).filter(ClosedTrade.user_id == user.id).all()
     # Per-strategy breakdown
     by_strategy: dict[str, list[ClosedTrade]] = {}
     for t in trades:
@@ -73,6 +97,7 @@ def get_journal(
         "trades": [_trade_dict(t) for t in trades],
         "stats": _stats(trades),
         "by_strategy": {k: _stats(v) for k, v in by_strategy.items()},
+        "equity_curve": _equity_curve(all_trades),
     }
 
 

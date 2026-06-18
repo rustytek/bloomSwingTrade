@@ -63,8 +63,8 @@ React SPA (static/*.html) → FastAPI (main.py)
 | `services/today.py` | Builds the `/api/today` payload; exposes `position_flags()` helper (see below) |
 | `api/today.py` | `GET /api/today` — daily dashboard |
 | `api/settings.py` | `GET`/`PUT /api/settings` — account_size, risk_pct, max_positions, atr_stop_mult, r_multiple |
-| `api/journal.py` | `GET /api/journal` (stats + per-strategy breakdown), `DELETE /api/journal/{id}` |
-| `api/backtest.py` | Walk-forward backtest; `GET /api/backtest/strategies` (see below) |
+| `api/journal.py` | `GET /api/journal` (stats + per-strategy breakdown + `equity_curve`: cumulative realized P&L over time from all closed trades), `DELETE /api/journal/{id}` |
+| `api/backtest.py` | Walk-forward backtest; `GET /api/backtest/strategies` returns each strategy's `details` (horizon/how/rules/scoring/parameters), rendered as a detail panel on the backtest page |
 
 ### Caching Strategy
 Two-layer cache: in-memory Python dict (`_mem_cache`) → SQLite `StockCache` table. Data is considered "fresh" if cached **after the most recent NYSE market close (4pm ET)** — not a rolling TTL. Quote and history TTLs are configurable via env vars but default to daily refresh.

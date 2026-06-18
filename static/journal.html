@@ -59,6 +59,7 @@
   <main class="page">
     <div id="loading" class="empty">Loading journal…</div>
     <section id="statsWrap" class="panel" hidden></section>
+    <section id="equityWrap" class="panel" hidden></section>
     <section id="strategyWrap" class="panel" hidden></section>
     <section id="tradesWrap" class="panel" hidden></section>
   </main>
@@ -74,8 +75,46 @@
     catch (e) { document.getElementById('loading').innerHTML = `<span class="error">${esc(e.message)}</span>`; return; }
     document.getElementById('loading').hidden = true;
     renderStats(d.stats);
+    renderEquity(d.equity_curve);
     renderStrategy(d.by_strategy);
     renderTrades(d.trades);
+  }
+
+  let _eqChart = null;
+  function renderEquity(curve) {
+    const wrap = document.getElementById('equityWrap');
+    if (!curve || curve.length < 1) { wrap.hidden = true; return; }
+    wrap.hidden = false;
+    const last = curve[curve.length - 1].cum_pnl;
+    const up = last >= 0;
+    wrap.innerHTML = `<div class="panel-title">Cumulative Realized P&amp;L
+      <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0;">— running total of closed-trade profit/loss over time (${curve.length} trades, now ${up ? '+' : ''}${fmtMoney(last)})</span></div>
+      <div class="chart-wrap"><canvas id="eqChart"></canvas></div>`;
+    _eqChart?.destroy();
+    _eqChart = new Chart(document.getElementById('eqChart'), {
+      type: 'line',
+      data: {
+        labels: curve.map(p => p.date),
+        datasets: [{
+          label: 'Cumulative P&L ($)',
+          data: curve.map(p => p.cum_pnl),
+          borderColor: up ? '#26a65b' : '#e05252',
+          backgroundColor: up ? 'rgba(38,166,91,.08)' : 'rgba(224,82,82,.08)',
+          fill: true, tension: .15, pointRadius: curve.length > 40 ? 0 : 2,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: c => ' ' + fmtMoney(c.parsed.y), title: items => curve[items[0].dataIndex]?.ticker ? `${curve[items[0].dataIndex].date} · ${curve[items[0].dataIndex].ticker}` : items[0].label } },
+        },
+        scales: {
+          x: { ticks: { color: '#777', maxTicksLimit: 8 }, grid: { color: '#1a1a1a' } },
+          y: { ticks: { color: '#777', callback: v => '$' + v }, grid: { color: '#1a1a1a' } },
+        },
+      },
+    });
   }
 
   function renderStats(s) {

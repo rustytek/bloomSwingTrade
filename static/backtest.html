@@ -161,6 +161,10 @@
       <span id="status" class="note" aria-live="polite"></span>
     </section>
 
+    <section class="panel" id="strategyDetailWrap">
+      <div id="strategyDetail" class="note">Loading strategy detail…</div>
+    </section>
+
     <section class="panel" id="compareWrap" hidden>
       <div class="panel-title">Strategy Comparison <span class="panel-sub">same settings, all three strategies</span></div>
       <div class="panel-desc">Overlaid equity curves and key metrics. Prefer the strategy that beats SPY with the smoother ride (lower max drawdown, higher Sharpe) — not just the highest total return.</div>
@@ -539,6 +543,41 @@ async function compareStrategies() {
   }
 }
 
+// ── Strategy detail ───────────────────────────────────────────────────────
+let STRATEGY_DETAILS = {};
+async function loadStrategyDetails() {
+  try {
+    const d = await api('/api/backtest/strategies');
+    STRATEGY_DETAILS = {};
+    (d.strategies || []).forEach(s => { STRATEGY_DETAILS[s.id] = s; });
+    renderStrategyDetail();
+  } catch (e) {
+    document.getElementById('strategyDetail').innerHTML = `<span class="error">${esc(e.message)}</span>`;
+  }
+}
+function renderStrategyDetail() {
+  const id = document.getElementById('strategy').value;
+  const s = STRATEGY_DETAILS[id];
+  const el = document.getElementById('strategyDetail');
+  if (!s) { el.textContent = 'Select a strategy to see its detail.'; return; }
+  const d = s.details || {};
+  const rules = (d.rules || []).map(r => `<li>${esc(r)}</li>`).join('');
+  const params = (d.parameters || []).map(([k, v]) =>
+    `<span class="pill"><span class="muted">${esc(k)}:</span>&nbsp;${esc(v)}</span>`).join('');
+  el.innerHTML = `
+    <div class="panel-title">Strategy Detail <span class="panel-sub">${esc(s.name)}</span></div>
+    <div class="panel-desc">${esc(s.description)}</div>
+    ${d.how ? `<div style="margin-bottom:10px;"><strong style="color:#ccc;">How it works:</strong> ${esc(d.how)}</div>` : ''}
+    ${d.horizon ? `<div style="margin-bottom:10px;color:#aaa;font-size:12px;"><strong style="color:#ccc;">Horizon:</strong> ${esc(d.horizon)}</div>` : ''}
+    ${rules ? `<div style="margin-bottom:6px;"><strong style="color:#ccc;font-size:12px;">Rules &amp; calculation</strong></div>
+      <ol style="margin:0 0 12px 18px;color:#bbb;font-size:12px;line-height:1.6;">${rules}</ol>` : ''}
+    ${d.scoring ? `<div style="margin-bottom:4px;"><strong style="color:#ccc;font-size:12px;">How it's scored</strong></div>
+      <div class="mono" style="background:#0f0f0f;border:1px solid #1d1d1d;border-radius:5px;padding:10px;font-size:11px;color:#ddd;line-height:1.5;margin-bottom:12px;">${esc(d.scoring)}</div>` : ''}
+    ${params ? `<div style="margin-bottom:6px;"><strong style="color:#ccc;font-size:12px;">Parameters</strong></div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;">${params}</div>` : ''}`;
+}
+document.getElementById('strategy').addEventListener('change', renderStrategyDetail);
+
 document.getElementById('runBtn').addEventListener('click', load);
 document.getElementById('compareBtn').addEventListener('click', compareStrategies);
 document.getElementById('snapshotBtn').addEventListener('click', async () => {
@@ -561,6 +600,7 @@ document.getElementById('weeklyPresetBtn').addEventListener('click', () => {
   load();
 });
 initHeader();
+loadStrategyDetails();
 load();
 </script>
 </body>

@@ -32,6 +32,10 @@ def walk_forward(
     cost_bps: float = Query(10, ge=0, le=100),
     spy_regime: bool = Query(True),
     regime_ma: int = Query(200, ge=20, le=200),
+    period: str = Query("all", pattern="^(1Y|2Y|all)$"),
+    start_date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    end_date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    archive: bool = Query(False),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -45,6 +49,10 @@ def walk_forward(
         cost_bps=cost_bps,
         spy_regime=spy_regime,
         regime_ma=regime_ma,
+        period=period,
+        start_date=start_date,
+        end_date=end_date,
+        archive=archive,
     )
 
 

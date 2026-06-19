@@ -19,6 +19,12 @@ class AddBatchRequest(BaseModel):
     tickers: list[str]
 
 
+class AutoPopulateRequest(BaseModel):
+    per_sector: int = 5          # max picks per sector
+    total: int = 30              # total picks
+    sectors: list[str] = []      # restrict to these sectors; empty = all
+
+
 @router.get("")
 def get_watchlist(
     db: Session = Depends(get_db),
@@ -116,13 +122,19 @@ def remove_ticker(
 
 @router.post("/auto-populate", status_code=status.HTTP_200_OK)
 def auto_populate_watchlist(
+    req: AutoPopulateRequest = AutoPopulateRequest(),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Score all cached stocks/ETFs and add the top 30 by composite quality to the watchlist.
+    """Score all cached stocks/ETFs and add the top picks by composite quality to the watchlist.
     Uses all filter dimensions: fundamentals, technical, momentum, risk ratios, and score.
-    Enforces max 5 per sector for diversification.
+    `per_sector` caps picks per sector; `total` caps the overall count; `sectors`
+    (when provided) restricts candidates to those sectors.
     """
+    per_sector = max(1, min(req.per_sector, 50))
+    total = max(1, min(req.total, 200))
+    want_sectors = {s for s in (req.sectors or []) if s}
+
     rows = db.query(StockCache).filter(StockCache.quote_json.isnot(None)).all()
 
     stocks = []
@@ -171,6 +183,10 @@ def auto_populate_watchlist(
         rank -= min(3.0, max_dd * 0.1)            # Penalize drawdown
         return rank
 
+    # Optional sector restriction
+    if want_sectors:
+        stocks = [q for q in stocks if (q.get("sector") or "Unknown") in want_sectors]
+
     # Minimum quality threshold
     qualified = [q for q in stocks if (q.get("score") or {}).get("o", 0) >= 3]
     if len(qualified) < 15:
@@ -178,16 +194,16 @@ def auto_populate_watchlist(
 
     qualified.sort(key=composite_rank, reverse=True)
 
-    # Sector diversity: max 5 per sector
+    # Sector diversity: max `per_sector` per sector, up to `total` overall
     sector_count: dict = {}
     selected = []
     for q in qualified:
         sector = q.get("sector") or "Unknown"
-        if sector_count.get(sector, 0) >= 5:
+        if sector_count.get(sector, 0) >= per_sector:
             continue
         selected.append(q)
         sector_count[sector] = sector_count.get(sector, 0) + 1
-        if len(selected) >= 30:
+        if len(selected) >= total:
             break
 
     # Add to watchlist (skip existing)

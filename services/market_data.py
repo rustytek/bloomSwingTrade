@@ -190,7 +190,7 @@ def _fetch_quote_sync(ticker: str) -> dict:
     }
 
 
-def _fetch_history_sync(ticker: str, period: str = "2y") -> list[dict]:
+def _fetch_history_sync(ticker: str, period: str = "5y") -> list[dict]:
     """Fetch OHLCV history synchronously."""
     t = yf.Ticker(ticker)
     hist = t.history(period=period, interval="1d", auto_adjust=True)
@@ -392,7 +392,7 @@ async def get_quote(ticker: str, db: Session, force_refresh: bool = False) -> Op
     return _attach_cache_metadata(enriched, now)
 
 
-async def get_history(ticker: str, db: Session, period: str = "2y", force_refresh: bool = False) -> list[dict]:
+async def get_history(ticker: str, db: Session, period: str = "5y", force_refresh: bool = False) -> list[dict]:
     """Return OHLCV history list, using cache."""
     ticker = ticker.upper()
     cache_key = f"history:{ticker}"
@@ -555,10 +555,14 @@ def invalidate_legacy_cache(db: Session) -> int:
 
 
 def invalidate_short_history_cache(db: Session, min_bars: int = 420) -> int:
-    """Force refresh for histories shorter than the 2-year window.
+    """Force refresh for histories shorter than `min_bars`.
 
     Older installs cached 6 months or 1 year of bars — not enough for the
     200-day MA regime gate plus a meaningful walk-forward backtest window.
+    The fetch window is now 5y; existing 2y caches (~501 bars) stay above this
+    threshold and upgrade to 5y naturally on the next post-close refresh (or
+    immediately via a manual screener refresh), avoiding repeated refetches of
+    genuinely short-history (recent-IPO) tickers.
     """
     epoch = datetime(2000, 1, 1, tzinfo=timezone.utc)
     rows = db.query(StockCache).filter(StockCache.history_json.isnot(None)).all()

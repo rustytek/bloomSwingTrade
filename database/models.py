@@ -132,6 +132,23 @@ class StockCache(Base):
     history_cached_at = Column(DateTime, nullable=True)
 
 
+class HistoryArchive(Base):
+    """On-demand long-history store for arbitrary-era backtests.
+
+    Separate from the rolling StockCache (which stays current for the live
+    screener). Each row holds the widest [start_date, end_date] daily range
+    fetched for a ticker; backtests over old eras fetch the missing span once
+    here and reuse it thereafter.
+    """
+    __tablename__ = "history_archive"
+
+    ticker = Column(String(16), primary_key=True)
+    bars_json = Column(Text, nullable=False)
+    start_date = Column(String(10), nullable=False)   # earliest bar date covered (YYYY-MM-DD)
+    end_date = Column(String(10), nullable=False)     # latest bar date covered
+    fetched_at = Column(DateTime, default=utcnow)
+
+
 class AICache(Base):
     __tablename__ = "ai_cache"
 

@@ -153,6 +153,22 @@
       <label class="hint" data-tip="Estimated trading cost per rebalance in basis points. 10 bps means 0.10%, used to make the backtest less optimistic.">Cost bps
         <input id="costBps" type="number" min="0" max="100" value="10">
       </label>
+      <label class="hint" data-tip="How far back to test. All history uses every cached bar; 1Y/2Y restrict to a recent window (or to Start date → Start date + that length).">Period
+        <select id="period">
+          <option value="all">All history</option>
+          <option value="1Y">1 Year</option>
+          <option value="2Y">2 Years</option>
+        </select>
+      </label>
+      <label class="hint" data-tip="Optional. Sets where the window begins. With a Period of 1Y/2Y, the test runs Start date → Start date + that length; leave blank to use the most recent window.">Start date
+        <input id="startDate" type="date">
+      </label>
+      <label class="hint" data-tip="Optional end of the test window. Mainly used with 'Fetch any era' to bound an arbitrary historical range (Start date → End date).">End date
+        <input id="endDate" type="date">
+      </label>
+      <label class="hint" data-tip="Test any historical era (e.g. 2 years a decade ago). Fetches the Start→End range from Yahoo on demand and caches it. Requires both dates; slower on first run, and best with Watchlist/Portfolio rather than Full Universe." style="flex-direction:row;align-items:center;text-transform:none;letter-spacing:0;font-size:12px;margin-bottom:7px;">
+        <input id="archiveMode" type="checkbox"> Fetch any era
+      </label>
       <label class="hint" data-tip="When enabled, the strategy only buys when SPY is above its trend filter. When disabled, it can hold ranked tickers in any market regime." style="flex-direction:row;align-items:center;text-transform:none;letter-spacing:0;font-size:12px;margin-bottom:7px;">
         <input id="spyRegime" type="checkbox" checked> SPY regime filter
       </label>
@@ -470,7 +486,13 @@ async function load() {
     rebalance_days: document.getElementById('rebalance').value,
     cost_bps: document.getElementById('costBps').value,
     spy_regime: document.getElementById('spyRegime').checked ? 'true' : 'false',
+    period: document.getElementById('period').value,
   });
+  const sd = document.getElementById('startDate').value;
+  if (sd) params.set('start_date', sd);
+  const ed = document.getElementById('endDate').value;
+  if (ed) params.set('end_date', ed);
+  if (document.getElementById('archiveMode').checked) params.set('archive', 'true');
   try {
     const [bt, cockpit] = await Promise.all([
       api('/api/backtest/walk-forward?' + params.toString()),
@@ -502,12 +524,19 @@ async function compareStrategies() {
     rebalance_days: document.getElementById('rebalance').value,
     cost_bps: document.getElementById('costBps').value,
     spy_regime: document.getElementById('spyRegime').checked ? 'true' : 'false',
+    period: document.getElementById('period').value,
   };
+  const sd = document.getElementById('startDate').value;
+  const ed = document.getElementById('endDate').value;
+  const arch = document.getElementById('archiveMode').checked;
   const ids = Object.keys(STRATEGY_LABELS);
   try {
     const results = [];
     for (const sid of ids) {
       const p = new URLSearchParams({ ...base, strategy: sid });
+      if (sd) p.set('start_date', sd);
+      if (ed) p.set('end_date', ed);
+      if (arch) p.set('archive', 'true');
       results.push(await api('/api/backtest/walk-forward?' + p.toString()));
     }
     const wrap = document.getElementById('compareWrap');

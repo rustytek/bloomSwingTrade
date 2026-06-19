@@ -113,6 +113,8 @@
     .spy-toggle { padding: 4px 12px; border-radius: 3px; border: 1px solid #2a2a2a; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; transition: all .15s; }
     .spy-toggle.on  { background: #1a3a1a; color: #26a65b; border-color: #26a65b; }
     .spy-toggle.off { background: #1a1a1a; color: #555; }
+    .tf-btn { padding: 3px 10px; border-radius: 3px; border: 1px solid #2a2a2a; background: #1a1a1a; color: #888; font-size: 11px; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .tf-btn.on { background: #1c1810; color: #f0a500; border-color: #3a2f10; }
 
     /* ── Sector cycle grid ── */
     .cycle-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
@@ -368,6 +370,22 @@
       <div class="panel-desc"><strong>Tip:</strong> Rank sectors by 1M return to see leadership. Compare 5D vs 1M: improving 5D in a lagging sector signals early rotation. Click any ticker to open in the screener.</div>
     </div>
 
+    <!-- Sector ETF performance comparison (selectable line chart) -->
+    <div class="panel" style="margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+        <div class="panel-title" style="margin-bottom:0;" title="Each SPDR sector ETF rebased to 0% at the start of the selected window. Compare slopes to see which sectors are leading and lagging, and click a sector in the legend to show or hide it.">Sector ETF Performance <span class="panel-sub">normalized % return · click a sector to toggle</span></div>
+        <div id="sectorPerfTf" style="margin-left:auto;display:flex;gap:4px;">
+          <button class="tf-btn" data-tf="21">1M</button>
+          <button class="tf-btn on" data-tf="63">3M</button>
+          <button class="tf-btn" data-tf="126">6M</button>
+          <button class="tf-btn" data-tf="252">1Y</button>
+        </div>
+      </div>
+      <div id="sectorPerfLegend" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;"></div>
+      <div class="canvas-wrap" style="height:340px;"><canvas id="sectorPerfChart"></canvas></div>
+      <div class="panel-desc"><strong>How to read:</strong> Each line is a SPDR sector ETF rebased to 0% at the start of the window (SPY dashed for reference). Rising lines lead; flat/falling lag. Click a sector in the legend to show/hide it; click the ticker to open its detail; use the timeframe buttons to zoom.</div>
+    </div>
+
     <!-- International ETFs -->
     <div class="grid2" style="margin-bottom:16px;">
       <div class="panel">
@@ -595,6 +613,12 @@ let watchlistTickers = [];
 let histories = {};           // ticker → [{date, close, volume}]
 let spyBars = [];
 const CMP_COLORS = ['#f0a500','#3b9eff','#00d26a','#ff4d4d','#a855f7','#06b6d4','#f97316','#ec4899','#84cc16','#f43f5e','#8b5cf6','#14b8a6','#fb923c','#c084fc','#34d399','#fbbf24','#60a5fa','#4ade80'];
+
+// Sector ETF performance chart (selectable)
+const SECTOR_ETF_LIST = [['XLK','Technology'],['XLF','Financials'],['XLE','Energy'],['XLV','Health Care'],['XLI','Industrials'],['XLY','Cons. Discr.'],['XLP','Cons. Staples'],['XLU','Utilities'],['XLRE','Real Estate'],['XLB','Materials'],['XLC','Comm. Services']];
+let sectorPerfN = 63;            // bars in window (default 3M)
+let sectorHidden = new Set();    // tickers toggled off
+let sectorPerfChartInst = null;
 
 // ── LW Chart factory ──────────────────────────────────────────────────────────
 function makeLWChart(id, height = 240) {
@@ -1155,6 +1179,65 @@ function renderPerfChart() {
   ).join('');
 }
 
+// ── Sector ETF performance (selectable) ───────────────────────────────────────
+async function loadSectorPerf() {
+  await fetchMissingHistories(SECTOR_ETF_LIST.map(s => s[0]));
+  renderSectorPerfChart();
+}
+function toggleSector(t) {
+  if (sectorHidden.has(t)) sectorHidden.delete(t); else sectorHidden.add(t);
+  renderSectorPerfChart();
+}
+function renderSectorPerfChart() {
+  const N = sectorPerfN;
+  const lines = [];
+  SECTOR_ETF_LIST.forEach(([t, name], i) => {
+    if (sectorHidden.has(t)) return;
+    const bars = (histories[t] || []).slice(-N);
+    if (bars.length < 2) return;
+    const base = bars[0].close;
+    lines.push({ ticker: t, name, color: CMP_COLORS[i % CMP_COLORS.length],
+      pct: bars.map(b => ((b.close - base) / base) * 100) });
+  });
+  let spyLine = null;
+  if (spyBars.length > 0) {
+    const bars = spyBars.slice(-N);
+    if (bars.length >= 2) { const base = bars[0].close; spyLine = { pct: bars.map(b => ((b.close - base) / base) * 100) }; }
+  }
+  const datasets = lines.map(l => ({ label: l.ticker, data: l.pct, borderColor: l.color,
+    backgroundColor: 'transparent', borderWidth: 2, pointRadius: 0, tension: 0.3 }));
+  if (spyLine) datasets.push({ label: 'SPY', data: spyLine.pct, borderColor: '#888',
+    backgroundColor: 'transparent', borderWidth: 1.5, borderDash: [4, 3], pointRadius: 0, tension: 0.3 });
+  const labels = Array.from({ length: Math.max(...datasets.map(d => d.data.length), 1) }, (_, i) => i);
+  const ctx = document.getElementById('sectorPerfChart').getContext('2d');
+  if (sectorPerfChartInst) sectorPerfChartInst.destroy();
+  sectorPerfChartInst = new Chart(ctx, {
+    type: 'line', data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { display: false },
+        tooltip: { mode: 'index', intersect: false,
+          callbacks: { label: c => ` ${c.dataset.label}: ${c.parsed.y >= 0 ? '+' : ''}${c.parsed.y.toFixed(2)}%` } } },
+      scales: { x: { display: false },
+        y: { grid: { color: '#1a1a1a' }, ticks: { color: '#888', font: { size: 11 }, callback: v => `${v > 0 ? '+' : ''}${v}%` } } },
+    },
+  });
+  const leg = document.getElementById('sectorPerfLegend');
+  leg.innerHTML = SECTOR_ETF_LIST.map(([t, name], i) => {
+    const on = !sectorHidden.has(t);
+    const col = CMP_COLORS[i % CMP_COLORS.length];
+    const line = lines.find(l => l.ticker === t);
+    const last = line ? line.pct.at(-1) ?? 0 : null;
+    return `<span onclick="toggleSector('${t}')" title="${name} — click to ${on ? 'hide' : 'show'}"
+        style="display:flex;align-items:center;gap:4px;cursor:pointer;opacity:${on ? 1 : .4};">
+        <span style="width:18px;height:3px;background:${col};display:inline-block;border-radius:2px;"></span>
+        <span class="ticker-link" onclick="event.stopPropagation();openTickerDetail('${t}')"
+          style="color:${on ? col : '#666'};font-family:JetBrains Mono,monospace;font-size:12px;font-weight:600;">${t}</span>
+        ${last != null ? `<span style="font-size:11px;color:#666;">${last >= 0 ? '+' : ''}${last.toFixed(1)}%</span>` : ''}
+      </span>`;
+  }).join('');
+}
+
 // ── Annualized returns table ───────────────────────────────────────────────────
 function calcAnnRet(bars, n) {
   const s = bars.slice(-n);
@@ -1608,9 +1691,17 @@ function _renderTdBody() {
 }
 
 // ── Main init ─────────────────────────────────────────────────────────────────
+document.querySelectorAll('#sectorPerfTf .tf-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('#sectorPerfTf .tf-btn').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  sectorPerfN = parseInt(btn.dataset.tf, 10);
+  renderSectorPerfChart();
+}));
+
 async function init() {
   await Promise.all([loadMacro(), loadPortfolioBase()]);
   await loadPortfolioAnalytics();
+  loadSectorPerf();
   buildWyckoffCharts();
 }
 

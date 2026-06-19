@@ -307,6 +307,10 @@ def run_walk_forward_backtest(
     cost_bps: float = 10,
     spy_regime: bool = True,
     regime_ma: int = 200,
+    period: str = "all",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    archive: bool = False,
 ) -> dict:
     strategy = STRATEGIES.get(strategy_id) or STRATEGIES["momentum_rotation"]
     strategy_meta = {"id": strategy.id, "name": strategy.name}
@@ -318,16 +322,69 @@ def run_walk_forward_backtest(
         "cost_bps": cost_bps,
         "spy_regime": spy_regime,
         "regime_ma": regime_ma,
+        "period": period,
+        "start_date": start_date,
+        "end_date": end_date,
+        "archive": archive,
     }
     # Warm-up: enough bars for both the regime MA and the strategy's own filters
     warmup = max(regime_ma, strategy.min_bars) + 5
 
     tickers = _source_tickers(db, user_id, source)
-    histories = {ticker: _load_history(db, ticker) for ticker in tickers}
+
+    if archive:
+        # Arbitrary-era mode: fetch/reuse a long-history archive for the exact
+        # [start_date, end_date] window (plus a warmup buffer before it).
+        if not (start_date and end_date):
+            return {
+                "strategy": strategy_meta, "source": source, "parameters": params,
+                "available_tickers": [], "equity": [], "benchmark": [], "trades": [],
+                "metrics": {}, "benchmark_metrics": {},
+                "notes": ["Archive mode requires both a start date and an end date."],
+            }
+        from services.history_archive import (
+            load_archived_histories, ensure_archive, shift_days, WARMUP_BUFFER_DAYS,
+        )
+        buf_start = shift_days(start_date, -WARMUP_BUFFER_DAYS)
+        histories = load_archived_histories(db, tickers, buf_start, end_date)
+        spy = ensure_archive(db, "SPY", buf_start, end_date)
+    else:
+        histories = {ticker: _load_history(db, ticker) for ticker in tickers}
+        spy = _load_history(db, "SPY")
+
     histories = {ticker: bars for ticker, bars in histories.items() if len(bars) >= warmup}
-    spy = _load_history(db, "SPY")
     dates = [b["date"] for b in spy] if len(spy) >= warmup else []
     dates = dates[warmup:: max(1, rebalance_days)]
+
+    # Restrict to the requested window: a period preset (1Y/2Y/all) and/or a
+    # custom start date. A custom start with a period bounds both ends
+    # (start → start+period); a period alone uses the most recent window.
+    full_dates = [b["date"] for b in spy]
+    latest = full_dates[-1] if full_dates else None
+    years = {"1Y": 1, "2Y": 2}.get((period or "all").upper())
+
+    def _shift_year(iso: str, yrs: int) -> str:
+        from datetime import date as _d
+        y, m, d = (int(x) for x in iso.split("-")[:3])
+        try:
+            return _d(y + yrs, m, d).isoformat()
+        except ValueError:          # e.g. Feb 29 → Feb 28
+            return _d(y + yrs, m, 28).isoformat()
+
+    win_start = win_end = None
+    if start_date:
+        win_start = start_date
+        if years:
+            win_end = _shift_year(start_date, years)
+    elif years and latest:
+        win_start = _shift_year(latest, -years)
+    if end_date:                    # explicit end overrides the period-derived end
+        win_end = end_date
+    if win_start:
+        dates = [d for d in dates if d >= win_start]
+    if win_end:
+        dates = [d for d in dates if d <= win_end]
+
     if len(dates) < 4 or not histories:
         return {
             "strategy": strategy_meta,

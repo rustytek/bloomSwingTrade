@@ -1311,10 +1311,14 @@
     }
 
     /* ── Watchlist Panel (sidebar tray) ── */
-    function WatchlistPanel({ watchlist, watchlistData, onAdd, onRemove, onClose, onSelectTicker, onAutoPopulate }) {
+    function WatchlistPanel({ watchlist, watchlistData, onAdd, onRemove, onClose, onSelectTicker, onAutoPopulate, allSectors }) {
       const [input, setInput] = useState('');
       const [autoLoading, setAutoLoading] = useState(false);
       const [autoMsg, setAutoMsg] = useState('');
+      const [perSector, setPerSector] = useState(5);
+      const [autoTotal, setAutoTotal] = useState(30);
+      const [selSectors, setSelSectors] = useState([]);
+      const [showOpts, setShowOpts] = useState(false);
 
       // Build ticker -> {sector, name} map from watchlistData
       const infoMap = useMemo(() => {
@@ -1346,7 +1350,14 @@
         setAutoLoading(true);
         setAutoMsg('');
         try {
-          const r = await apiFetch('/api/watchlist/auto-populate', { method: 'POST' });
+          const r = await apiFetch('/api/watchlist/auto-populate', {
+            method: 'POST',
+            body: JSON.stringify({
+              per_sector: Number(perSector) || 5,
+              total: Number(autoTotal) || 30,
+              sectors: selSectors,
+            }),
+          });
           if (r.ok) {
             const d = await r.json();
             setAutoMsg(`Added ${d.added.length} tickers (${d.skipped.length} already in watchlist)`);
@@ -1371,17 +1382,43 @@
           <span style={{ marginLeft: 'auto', fontSize: 11, color: '#444' }}>{watchlist.length} tickers</span>
         </div>
 
-        {/* Auto-populate button */}
+        {/* Auto-populate */}
         <div style={{ padding: '8px 16px', borderBottom: '1px solid #1a1a1a' }}>
-          <button onClick={handleAutoPopulate} disabled={autoLoading}
-            title="Automatically add top 30 stocks/ETFs scoring highest across fundamentals, technicals, momentum, and risk ratios. Max 5 per sector for diversification."
-            style={{
-              width: '100%', background: autoLoading ? '#2a2a2a' : '#1a2a1a', color: autoLoading ? '#444' : '#00d26a',
-              padding: '6px 12px', borderRadius: 3, fontSize: 11, border: '1px solid #2a3a2a',
-              fontWeight: 600, cursor: autoLoading ? 'not-allowed' : 'pointer'
-            }}>
-            {autoLoading ? '⏳ Scanning universe…' : '⚡ Auto-populate Top 30'}
-          </button>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={handleAutoPopulate} disabled={autoLoading}
+              title="Add the top-ranked stocks/ETFs across fundamentals, technicals, momentum, and risk ratios. Use ⚙ to set how many per sector, the total, and which sectors."
+              style={{
+                flex: 1, background: autoLoading ? '#2a2a2a' : '#1a2a1a', color: autoLoading ? '#444' : '#00d26a',
+                padding: '6px 12px', borderRadius: 3, fontSize: 11, border: '1px solid #2a3a2a',
+                fontWeight: 600, cursor: autoLoading ? 'not-allowed' : 'pointer'
+              }}>
+              {autoLoading ? '⏳ Scanning universe…' : `⚡ Auto-populate Top ${Number(autoTotal) || 30}`}
+            </button>
+            <button onClick={() => setShowOpts(o => !o)} title="Auto-populate options"
+              style={{ background: showOpts ? '#1c1810' : '#1a1a1a', color: showOpts ? '#f0a500' : '#888', padding: '6px 10px', borderRadius: 3, fontSize: 12, border: '1px solid #2a2a2a', cursor: 'pointer' }}>⚙</button>
+          </div>
+          {showOpts && <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <label style={{ flex: 1, fontSize: 10, color: '#888' }}>Per sector
+                <input type="number" min="1" max="50" value={perSector} onChange={e => setPerSector(e.target.value)} style={{ width: '100%', marginTop: 2 }} />
+              </label>
+              <label style={{ flex: 1, fontSize: 10, color: '#888' }}>Total
+                <input type="number" min="1" max="200" value={autoTotal} onChange={e => setAutoTotal(e.target.value)} style={{ width: '100%', marginTop: 2 }} />
+              </label>
+            </div>
+            {(allSectors || []).length > 0 && <div>
+              <div style={{ fontSize: 10, color: '#888', marginBottom: 3, display: 'flex', justifyContent: 'space-between' }}>
+                <span>Sectors {selSectors.length ? `(${selSectors.length})` : '(all)'}</span>
+                {selSectors.length > 0 && <span onClick={() => setSelSectors([])} style={{ color: '#f0a500', cursor: 'pointer' }}>clear</span>}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                {allSectors.map(s => { const on = selSectors.includes(s); return (
+                  <button key={s} onClick={() => setSelSectors(p => on ? p.filter(x => x !== s) : [...p, s])}
+                    style={{ padding: '2px 6px', borderRadius: 8, fontSize: 9, border: '1px solid #2a2a2a', background: on ? '#f0a500' : '#1a1a1a', color: on ? '#000' : '#777' }}>{s}</button>
+                ); })}
+              </div>
+            </div>}
+          </div>}
           {autoMsg && <div style={{ fontSize: 10, color: autoMsg.includes('Added') ? '#00d26a' : '#ff6b35', marginTop: 4, textAlign: 'center' }}>{autoMsg}</div>}
         </div>
 
@@ -2804,6 +2841,7 @@
             onClose={() => setShowWatchlist(false)}
             onAdd={addToWatchlist} onRemove={removeFromWatchlist}
             onSelectTicker={handleSelectByTicker}
+            allSectors={sectors}
             onAutoPopulate={loadWatchlist} />}
         </div>
         {showSave && <SaveModal filters={filters} onClose={(lf) => { setShowSave(false); if (lf) setFilters({ ...defFilters(), ...lf }); }} />}

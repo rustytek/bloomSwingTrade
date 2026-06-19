@@ -51,7 +51,7 @@ React SPA (static/*.html) → FastAPI (main.py)
 | File | Purpose |
 |---|---|
 | `config.py` | Pydantic Settings — all env vars with defaults |
-| `database/models.py` | ORM models: User, WatchlistItem, PortfolioPosition, StockCache, AICache, ReportCache, ClosedTrade |
+| `database/models.py` | ORM models: User, WatchlistItem, PortfolioPosition, StockCache, AICache, ReportCache, ClosedTrade, HistoryArchive |
 | `database/db.py` | SQLAlchemy engine, `get_db()` FastAPI dependency |
 | `auth/deps.py` | `get_current_user` / `get_current_admin` JWT dependencies |
 | `services/market_data.py` | yfinance wrapper, dual-layer cache (in-memory dict + SQLite), indicator calculation |
@@ -69,7 +69,7 @@ React SPA (static/*.html) → FastAPI (main.py)
 ### Caching Strategy
 Two-layer cache: in-memory Python dict (`_mem_cache`) → SQLite `StockCache` table. Data is considered "fresh" if cached **after the most recent NYSE market close (4pm ET)** — not a rolling TTL. Quote and history TTLs are configurable via env vars but default to daily refresh.
 
-History cache extended from 1 year to 2 years in `services/market_data.py` (needed for the 200-day MA regime gate and longer backtest windows); `invalidate_short_history_cache` `min_bars` was raised so existing installs refetch.
+History cache window is **5 years** in `services/market_data.py` (`get_history`/`_fetch_history_sync` defaults, and the `api/stocks.py` `/history` endpoint default — keep these in sync so a detail-view refetch can't shrink the shared cache). Existing shorter caches upgrade to 5y on the next post-close refresh (or a manual screener refresh). For backtests over **arbitrary historical eras** beyond the rolling window, see `services/history_archive.py` (below).
 
 ### Strategy Framework (`services/strategies.py`)
 Registry `STRATEGIES` maps ids to `Strategy` instances:
@@ -86,7 +86,9 @@ Each `Strategy` exposes `candidate(bars, idx)` (backtest hook, uses `bars[:idx+1
 Builds the `/api/today` payload (regime light, position health, top setups with trade plans, checklist, capacity). Exposes the shared `position_flags()` helper, also reused by `build_decision_cockpit`. Per-user in-memory cache (15-min TTL), invalidated by the scheduler.
 
 ### Backtesting (`api/backtest.py`)
-Walk-forward backtest now takes a `strategy` param (one of the 3 ids); `source` can be `universe` (the whole cached universe). `GET /api/backtest/strategies` lists available strategies.
+Walk-forward backtest now takes a `strategy` param (one of the 3 ids); `source` can be `universe` (the whole cached universe). `GET /api/backtest/strategies` lists available strategies. The backtest also accepts `period` (1Y/2Y/all), `start_date`, `end_date`, and `archive` params to bound the test window.
+
+**Arbitrary-era backtests (`archive=true`)** route through `services/history_archive.py` / the `history_archive` table instead of the rolling StockCache: it fetches the requested `start_date`→`end_date` span (plus a ~480-day warmup buffer) from yfinance once, stores the widest range per ticker, and reuses it. Best with Watchlist/Portfolio sources (Full Universe = many on-demand fetches). Requires both dates.
 
 ### Database / Migrations
 - New `ClosedTrade` model (`closed_trades` table) backs the trade journal — records realized `pnl`, `pnl_pct`, and `r_multiple` (when a stop was set).

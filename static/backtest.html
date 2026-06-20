@@ -250,7 +250,10 @@
   <div class="modal" id="strategyModal" onclick="if(event.target===this)closeStrategyModal()">
     <div class="modal-card" style="width:min(720px, 96vw);">
       <div class="modal-head">
-        <div class="mono" style="font-size:16px;font-weight:800;color:#f0a500;">Strategy Detail</div>
+        <div>
+          <div class="mono" style="font-size:16px;font-weight:800;color:#f0a500;">Strategy Details</div>
+          <div class="muted" style="font-size:11px;">All three strategies — your current selection is marked "selected".</div>
+        </div>
         <button class="icon-btn hint" data-tip="Close this strategy explanation." onclick="closeStrategyModal()">Close</button>
       </div>
       <div style="padding:16px;">
@@ -615,17 +618,14 @@ async function loadStrategyDetails() {
     document.getElementById('strategyDetail').innerHTML = `<span class="error">${esc(e.message)}</span>`;
   }
 }
-function renderStrategyDetail() {
-  const id = document.getElementById('strategy').value;
-  const s = STRATEGY_DETAILS[id];
-  const el = document.getElementById('strategyDetail');
-  if (!s) { el.textContent = 'Select a strategy to see its detail.'; return; }
+function strategyDetailBlock(s, isSelected) {
   const d = s.details || {};
   const rules = (d.rules || []).map(r => `<li>${esc(r)}</li>`).join('');
   const params = (d.parameters || []).map(([k, v]) =>
     `<span class="pill"><span class="muted">${esc(k)}:</span>&nbsp;${esc(v)}</span>`).join('');
-  el.innerHTML = `
-    <div style="font-size:15px;font-weight:800;color:#f0a500;margin-bottom:6px;">${esc(s.name)}</div>
+  const badge = isSelected ? ` <span class="pill" style="border-color:#3a2f10;color:#f0a500;background:#1c1810;">selected</span>` : '';
+  return `
+    <div style="font-size:15px;font-weight:800;color:#f0a500;margin-bottom:6px;">${esc(s.name)}${badge}</div>
     <div class="panel-desc">${esc(s.description)}</div>
     ${d.how ? `<div style="margin-bottom:10px;"><strong style="color:#ccc;">How it works:</strong> ${esc(d.how)}</div>` : ''}
     ${d.horizon ? `<div style="margin-bottom:10px;color:#aaa;font-size:12px;"><strong style="color:#ccc;">Horizon:</strong> ${esc(d.horizon)}</div>` : ''}
@@ -635,6 +635,16 @@ function renderStrategyDetail() {
       <div class="mono" style="background:#0f0f0f;border:1px solid #1d1d1d;border-radius:5px;padding:10px;font-size:11px;color:#ddd;line-height:1.5;margin-bottom:12px;">${esc(d.scoring)}</div>` : ''}
     ${params ? `<div style="margin-bottom:6px;"><strong style="color:#ccc;font-size:12px;">Parameters</strong></div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;">${params}</div>` : ''}`;
+}
+function renderStrategyDetail() {
+  const selectedId = document.getElementById('strategy').value;
+  const el = document.getElementById('strategyDetail');
+  // Show every strategy in the dropdown's order so the popup is a full reference.
+  const ids = Object.keys(STRATEGY_LABELS).filter(id => STRATEGY_DETAILS[id]);
+  if (!ids.length) { el.textContent = 'No strategy detail available.'; return; }
+  el.innerHTML = ids
+    .map(id => strategyDetailBlock(STRATEGY_DETAILS[id], id === selectedId))
+    .join('<hr style="border:none;border-top:1px solid #1e1e1e;margin:18px 0;">');
 }
 function openStrategyModal() {
   renderStrategyDetail();

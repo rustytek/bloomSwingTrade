@@ -244,7 +244,8 @@ def _build_positions(positions: list[PortfolioPosition], cache: dict[str, dict],
 
 # ── Setups ─────────────────────────────────────────────────────────────────
 
-def _build_setups(cache: dict[str, dict], held: set[str], user: User,
+def _build_setups(cache: dict[str, dict], held: set[str], account_size: float,
+                  risk_pct: float, atr_mult: float, r_multiple: float,
                   per_strategy: int = 3, overall: int = 8) -> list[dict]:
     by_strategy: dict[str, list] = {sid: [] for sid in STRATEGIES}
     for ticker in UNIVERSE:
@@ -272,10 +273,10 @@ def _build_setups(cache: dict[str, dict], held: set[str], user: User,
     for setup, bars, quote in selected:
         plan = build_trade_plan(
             bars,
-            account_size=user.account_size,
-            risk_pct=user.risk_pct,
-            atr_mult=user.atr_stop_mult,
-            r_multiple=user.r_multiple,
+            account_size=account_size,
+            risk_pct=risk_pct,
+            atr_mult=atr_mult,
+            r_multiple=r_multiple,
         )
         swing = compute_swing_score(quote) if quote else None
         out.append({
@@ -302,13 +303,21 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
             return hit[0]
 
     user = db.query(User).filter(User.id == user_id).first()
+    # Coerce trading settings to safe defaults. Older installs can carry NULLs
+    # (columns added without a DEFAULT), and None would crash the numeric paths.
+    account_size = user.account_size or 10000.0
+    risk_pct = user.risk_pct or 1.0
+    max_positions = user.max_positions or 8
+    atr_stop_mult = user.atr_stop_mult or 2.5
+    r_multiple = user.r_multiple or 2.0
+
     positions = db.query(PortfolioPosition).filter(PortfolioPosition.user_id == user_id).all()
     cache = _load_all_cache(db)
 
     regime = await _build_regime(cache)
-    pos_rows = _build_positions(positions, cache, user.atr_stop_mult)
+    pos_rows = _build_positions(positions, cache, atr_stop_mult)
     held = {p.ticker for p in positions}
-    setups = _build_setups(cache, held, user)
+    setups = _build_setups(cache, held, account_size, risk_pct, atr_stop_mult, r_multiple)
 
     # Data freshness from SPY cache row
     spy_row = db.query(StockCache).filter(StockCache.ticker == "SPY").first()
@@ -339,15 +348,15 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
         "checklist": checklist,
         "capacity": {
             "open_positions": len(positions),
-            "max_positions": user.max_positions,
-            "slots_free": max(0, user.max_positions - len(positions)),
+            "max_positions": max_positions,
+            "slots_free": max(0, max_positions - len(positions)),
         },
         "settings_used": {
-            "account_size": user.account_size,
-            "risk_pct": user.risk_pct,
-            "max_positions": user.max_positions,
-            "atr_stop_mult": user.atr_stop_mult,
-            "r_multiple": user.r_multiple,
+            "account_size": account_size,
+            "risk_pct": risk_pct,
+            "max_positions": max_positions,
+            "atr_stop_mult": atr_stop_mult,
+            "r_multiple": r_multiple,
         },
         "disclaimer": "Decision-support only. Verify position sizing, taxes, liquidity, and "
                       "your own risk tolerance before placing any order.",

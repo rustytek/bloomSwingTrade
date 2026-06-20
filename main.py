@@ -185,6 +185,20 @@ def ensure_schema_migrations():
             "model": "VARCHAR(128)",
         })
 
+        # Repair any NULL trading-settings left behind by older migrations that
+        # added these columns without a DEFAULT (those rows 500 the Today page
+        # because build_trade_plan / position_flags can't compare None to a number).
+        for col, default in (
+            ("account_size", 10000),
+            ("risk_pct", 1.0),
+            ("max_positions", 8),
+            ("atr_stop_mult", 2.5),
+            ("r_multiple", 2.0),
+        ):
+            conn.exec_driver_sql(
+                f"UPDATE users SET {col} = {default} WHERE {col} IS NULL"
+            )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -236,7 +250,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.11.0",
+    version="1.12.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

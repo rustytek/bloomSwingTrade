@@ -27,7 +27,7 @@ def build_trade_plan(
     Returns None when there isn't enough data to compute an ATR or when the
     inputs can't produce a sane plan (zero/negative risk per share).
     """
-    if not bars or account_size <= 0 or risk_pct <= 0:
+    if not bars or not account_size or account_size <= 0 or not risk_pct or risk_pct <= 0:
         return None
 
     highs = [b.get("high") for b in bars]

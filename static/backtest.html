@@ -111,6 +111,7 @@
         </div>
         <div class="workflow-actions">
           <button id="weeklyPresetBtn" class="btn btn-primary hint" data-tip="Sets Universe to Watchlist, Top N to 10, Rebalance to Weekly, keeps the SPY trend filter on, and reruns the test.">Weekly Saved Tickers</button>
+          <button id="strategyDetailBtn" class="btn hint" data-tip="Open a popup explaining the currently selected strategy — how it works, its rules, scoring, and parameters.">Strategy details ▸</button>
           <a class="btn hint" data-tip="Open the screener to add or remove saved tickers in your watchlist before running this weekly workflow." href="/screener">Edit Watchlist</a>
         </div>
       </div>
@@ -177,8 +178,10 @@
       <span id="status" class="note" aria-live="polite"></span>
     </section>
 
-    <section class="panel" id="strategyDetailWrap">
-      <div id="strategyDetail" class="note">Loading strategy detail…</div>
+    <section id="statsWrap" hidden>
+      <div class="panel-title" style="margin-bottom:10px;">Backtest Results <span id="statsStrategy" class="panel-sub"></span></div>
+      <div class="panel-desc" style="margin:0 0 12px;">These four numbers summarize the strategy named above over the selected window — they update each time you click Run Backtest. Compare each to the SPY benchmark shown beneath it.</div>
+      <section class="grid4" id="stats"></section>
     </section>
 
     <section class="panel" id="compareWrap" hidden>
@@ -189,8 +192,8 @@
     </section>
 
     <section class="panel">
-      <div class="panel-title">Weekly Watchlist Replay <span class="panel-sub">saved tickers at week start vs current performance</span></div>
-      <div class="panel-desc">This is the audit trail for your real watchlist decisions. Create a snapshot when you finish picking tickers for the week; the replay freezes that list and tracks what the model would have selected, how those selected names performed, and how they compare to SPY through the latest cached close.</div>
+      <div class="panel-title">Weekly Watchlist Replay <span class="panel-sub">momentum ranking · independent of the Strategy selector</span></div>
+      <div class="panel-desc">This is the audit trail for your real watchlist decisions. Create a snapshot when you finish picking tickers for the week; the replay freezes that list and tracks what a <strong>fixed momentum ranking</strong> would have selected (this panel does not use the Strategy dropdown above), how those selected names performed, and how they compare to SPY through the latest cached close.</div>
       <div class="replay-head">
         <button id="snapshotBtn" class="btn btn-primary hint" data-tip="Save the current watchlist for this Monday's week. If a snapshot already exists for this week, it will be updated to match the current watchlist.">Snapshot Current Watchlist</button>
         <span id="snapshotStatus" class="note" aria-live="polite"></span>
@@ -198,11 +201,9 @@
       <div id="weeklyReplay" class="note">Loading...</div>
     </section>
 
-    <section class="grid4" id="stats"></section>
-
     <section class="grid2">
       <div class="panel">
-        <div class="panel-title">Equity Curve <span class="panel-sub">strategy vs SPY benchmark</span></div>
+        <div class="panel-title">Equity Curve <span id="equityStrategy" class="panel-sub">strategy vs SPY benchmark</span></div>
         <div class="panel-desc">Look for whether the strategy line beats SPY while taking smaller drawdowns. A good setup is not just the highest ending value; it should recover quickly after dips and avoid long flat periods.</div>
         <div class="chart-wrap"><canvas id="equityChart"></canvas></div>
       </div>
@@ -215,7 +216,7 @@
 
     <section class="grid2">
       <div class="panel">
-        <div class="panel-title">Opportunity Queue <span class="panel-sub">watchlist ranked by setup quality</span></div>
+        <div class="panel-title">Opportunity Queue <span class="panel-sub">momentum ranking · independent of the Strategy selector</span></div>
         <div class="panel-desc">Start here for weekly candidates. The best names usually combine a high setup score, RSI that is not overheated, useful volume confirmation, and several clear reasons in the Why column.</div>
         <div id="opportunities"></div>
       </div>
@@ -228,8 +229,8 @@
 
     <section class="grid2">
       <div class="panel">
-        <div class="panel-title">Recent Rebalances <span class="panel-sub">what the model would have held</span></div>
-        <div class="panel-desc">This shows how often the model changed its mind. Consistent repeated holdings are stronger candidates; frequent cash periods or rapid turnover mean the rule set is less confident in the selected universe.</div>
+        <div class="panel-title">Recent Rebalances <span id="rebalSub" class="panel-sub">last 6 months — what the strategy would have held</span></div>
+        <div class="panel-desc">This shows how often the selected strategy changed its mind over the last 6 months. Consistent repeated holdings are stronger candidates; frequent cash periods or rapid turnover mean the rule set is less confident in the selected universe.</div>
         <div id="trades"></div>
       </div>
       <div class="panel">
@@ -245,6 +246,18 @@
       <div id="notes" class="note"></div>
     </section>
   </main>
+
+  <div class="modal" id="strategyModal" onclick="if(event.target===this)closeStrategyModal()">
+    <div class="modal-card" style="width:min(720px, 96vw);">
+      <div class="modal-head">
+        <div class="mono" style="font-size:16px;font-weight:800;color:#f0a500;">Strategy Detail</div>
+        <button class="icon-btn hint" data-tip="Close this strategy explanation." onclick="closeStrategyModal()">Close</button>
+      </div>
+      <div style="padding:16px;">
+        <div id="strategyDetail" class="note">Loading strategy detail…</div>
+      </div>
+    </div>
+  </div>
 
   <div class="modal" id="tickerModal" onclick="if(event.target===this)closeTicker()">
     <div class="modal-card">
@@ -371,8 +384,15 @@ function statCard(label, value, sub, cls = '', help = '') {
   return `<div class="panel"><div class="stat-label">${esc(label)}</div><div class="stat-value ${cls}">${value}</div><div class="stat-sub">${esc(sub || '')}</div>${help ? `<div class="metric-help">${esc(help)}</div>` : ''}</div>`;
 }
 
+function currentStrategyName() {
+  return STRATEGY_LABELS[document.getElementById('strategy').value] || 'Strategy';
+}
+
 function renderStats(bt) {
   const m = bt.metrics || {}, b = bt.benchmark_metrics || {};
+  document.getElementById('statsWrap').hidden = false;
+  document.getElementById('statsStrategy').textContent = currentStrategyName();
+  document.getElementById('equityStrategy').textContent = `${currentStrategyName()} vs SPY benchmark`;
   document.getElementById('stats').innerHTML = [
     statCard('Strategy CAGR', fmtPct(m.cagr), `SPY ${b.cagr ?? '--'}%`, (m.cagr ?? 0) >= (b.cagr ?? 0) ? 'up' : 'down', 'Annualized growth rate. Prefer positive CAGR that beats SPY without requiring extreme drawdown.'),
     statCard('Total Return', fmtPct(m.total_return), `SPY ${b.total_return ?? '--'}%`, (m.total_return ?? 0) >= 0 ? 'up' : 'down', 'End-to-end return over cached history. Useful, but less important than consistency and drawdown.'),
@@ -405,8 +425,19 @@ function renderChart(bt) {
 }
 
 function renderTrades(bt) {
-  const trades = (bt.trades || []).slice(-10).reverse();
-  const help = '<div class="panel-desc">Date is the rebalance day and Regime shows whether the SPY trend filter allowed risk. <b>Return</b> is how the model\'s selected holdings did over that holding period (their own absolute return after costs — <i>not</i> measured against SPY). <b>SPY</b> is what the market did over the same dates, and <b>vs SPY</b> is the difference (green means the picks beat the market that week). Holdings are the tickers the model selected; repeated tickers are stronger watch candidates than one-off appearances.</div>';
+  const all = bt.trades || [];
+  // Keep the last ~6 months ending at the most recent rebalance date.
+  let trades = all;
+  if (all.length) {
+    const cutoff = new Date(all[all.length - 1].date);
+    cutoff.setMonth(cutoff.getMonth() - 6);
+    trades = all.filter(t => new Date(t.date) >= cutoff);
+  }
+  trades = trades.slice().reverse();
+  const sName = currentStrategyName();
+  const sub = document.getElementById('rebalSub');
+  if (sub) sub.textContent = `${sName} · last 6 months`;
+  const help = `<div class="panel-desc">Showing <strong>${esc(sName)}</strong> rebalances over the last 6 months. Date is the rebalance day and Regime shows whether the SPY trend filter allowed risk. <b>Return</b> is how this strategy's selected holdings did over that holding period (their own absolute return after costs — <i>not</i> measured against SPY). <b>SPY</b> is what the market did over the same dates, and <b>vs SPY</b> is the difference (green means the picks beat the market that week). Holdings are the tickers the strategy selected; repeated tickers are stronger watch candidates than one-off appearances.</div>`;
   document.getElementById('trades').innerHTML = trades.length ? `${help}<table><thead><tr><th>Date</th><th>Regime</th><th>Return</th><th>SPY</th><th>vs SPY</th><th>Holdings</th></tr></thead><tbody>${trades.map(t => `
     <tr>
       <td class="mono">${esc(t.date)}</td>
@@ -420,7 +451,7 @@ function renderTrades(bt) {
 
 function renderReplay(replay) {
   const rows = replay.snapshots || [];
-  const help = '<div class="panel-desc">Model Return is the average return of the tickers the rule selected from your saved snapshot. SPY Return is the market comparison for the same dates. Status is in progress when the current week has not finished yet.</div>';
+  const help = '<div class="panel-desc">Model Return is the average return of the tickers a <strong>fixed momentum ranking</strong> selected from your saved snapshot (this panel does not use the Strategy dropdown). SPY Return is the market comparison for the same dates. Status is in progress when the current week has not finished yet.</div>';
   if (!rows.length) {
     document.getElementById('weeklyReplay').innerHTML = `${help}<div class="note">No weekly snapshots yet. Click Snapshot Current Watchlist after you finish choosing this week&apos;s saved tickers.</div>`;
     return;
@@ -594,7 +625,7 @@ function renderStrategyDetail() {
   const params = (d.parameters || []).map(([k, v]) =>
     `<span class="pill"><span class="muted">${esc(k)}:</span>&nbsp;${esc(v)}</span>`).join('');
   el.innerHTML = `
-    <div class="panel-title">Strategy Detail <span class="panel-sub">${esc(s.name)}</span></div>
+    <div style="font-size:15px;font-weight:800;color:#f0a500;margin-bottom:6px;">${esc(s.name)}</div>
     <div class="panel-desc">${esc(s.description)}</div>
     ${d.how ? `<div style="margin-bottom:10px;"><strong style="color:#ccc;">How it works:</strong> ${esc(d.how)}</div>` : ''}
     ${d.horizon ? `<div style="margin-bottom:10px;color:#aaa;font-size:12px;"><strong style="color:#ccc;">Horizon:</strong> ${esc(d.horizon)}</div>` : ''}
@@ -605,7 +636,15 @@ function renderStrategyDetail() {
     ${params ? `<div style="margin-bottom:6px;"><strong style="color:#ccc;font-size:12px;">Parameters</strong></div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;">${params}</div>` : ''}`;
 }
+function openStrategyModal() {
+  renderStrategyDetail();
+  document.getElementById('strategyModal').style.display = 'flex';
+}
+function closeStrategyModal() {
+  document.getElementById('strategyModal').style.display = 'none';
+}
 document.getElementById('strategy').addEventListener('change', renderStrategyDetail);
+document.getElementById('strategyDetailBtn').addEventListener('click', openStrategyModal);
 
 document.getElementById('runBtn').addEventListener('click', load);
 document.getElementById('compareBtn').addEventListener('click', compareStrategies);

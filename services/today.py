@@ -13,6 +13,7 @@ invalidates it after each market refresh / daily report.
 from __future__ import annotations
 
 import json
+import math
 import time
 from datetime import datetime, timezone
 
@@ -28,6 +29,19 @@ from services import chart_service
 
 _TTL_SECONDS = 15 * 60
 _cache: dict[int, tuple[dict, float]] = {}
+
+
+def _json_safe(obj):
+    """Recursively replace NaN/Inf floats with None. Starlette serializes with
+    allow_nan=False, so a single non-finite float anywhere in the payload would
+    500 the response — cached quote fields (RSI, vs_ma*, etc.) can carry NaN."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(x) for x in obj]
+    return obj
 
 
 def invalidate_cache(user_id: int | None = None) -> None:
@@ -361,5 +375,6 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
         "disclaimer": "Decision-support only. Verify position sizing, taxes, liquidity, and "
                       "your own risk tolerance before placing any order.",
     }
+    payload = _json_safe(payload)
     _cache[user_id] = (payload, time.time())
     return payload

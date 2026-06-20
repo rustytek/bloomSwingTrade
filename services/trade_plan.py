@@ -12,6 +12,11 @@ import math
 from services.indicators import calc_atr
 
 
+def _finite(v) -> bool:
+    """True only for real, finite numbers (rejects None, NaN, ±inf)."""
+    return isinstance(v, (int, float)) and math.isfinite(v)
+
+
 def build_trade_plan(
     bars: list[dict],
     account_size: float,
@@ -33,21 +38,23 @@ def build_trade_plan(
     highs = [b.get("high") for b in bars]
     lows = [b.get("low") for b in bars]
     closes = [b.get("close") for b in bars]
-    if any(v is None for v in (highs[-1], lows[-1], closes[-1])):
+    # Cached bars can hold NaN floats, not just None — NaN slips past every
+    # comparison below (NaN <= 0 is False) and only blows up at math.floor().
+    if not all(_finite(v) for v in (highs[-1], lows[-1], closes[-1])):
         return None
 
     atr_series = calc_atr(highs, lows, closes, atr_period)
-    atr = next((v for v in reversed(atr_series) if v is not None), None)
+    atr = next((v for v in reversed(atr_series) if _finite(v)), None)
     if atr is None or atr <= 0:
         return None
 
     entry = float(entry) if entry else float(closes[-1])
-    if entry <= 0:
+    if not _finite(entry) or entry <= 0:
         return None
 
     stop = entry - atr_mult * atr
     risk_per_share = entry - stop
-    if stop <= 0 or risk_per_share <= 0:
+    if not _finite(stop) or not _finite(risk_per_share) or stop <= 0 or risk_per_share <= 0:
         return None
 
     target = entry + r_multiple * risk_per_share

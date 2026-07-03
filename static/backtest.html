@@ -614,6 +614,18 @@ async function loadStrategyDetails() {
     const d = await api('/api/backtest/strategies');
     STRATEGY_DETAILS = {};
     (d.strategies || []).forEach(s => { STRATEGY_DETAILS[s.id] = s; });
+    // Self-sync: any strategy the server knows but this page doesn't gets
+    // added to the labels map and the dropdown, so new strategies work
+    // without editing this file.
+    const sel = document.getElementById('strategy');
+    (d.strategies || []).forEach(s => {
+      if (!STRATEGY_LABELS[s.id]) STRATEGY_LABELS[s.id] = s.name;
+      if (![...sel.options].some(o => o.value === s.id)) {
+        const opt = document.createElement('option');
+        opt.value = s.id; opt.textContent = s.name;
+        sel.appendChild(opt);
+      }
+    });
     renderStrategyDetail();
   } catch (e) {
     document.getElementById('strategyDetail').innerHTML = `<span class="error">${esc(e.message)}</span>`;

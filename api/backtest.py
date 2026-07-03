@@ -12,10 +12,13 @@ from services.backtest import (
     create_watchlist_snapshot,
     run_walk_forward_backtest,
 )
-from services.strategies import strategy_catalog
+from services.strategies import STRATEGIES, strategy_catalog
 
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
+
+# Built from the registry so newly added strategies are accepted automatically.
+_STRATEGY_PATTERN = "^(" + "|".join(STRATEGIES) + ")$"
 
 
 @router.get("/strategies")
@@ -25,7 +28,7 @@ def strategies():
 
 @router.get("/walk-forward")
 def walk_forward(
-    strategy: str = Query("momentum_rotation", pattern="^(momentum_rotation|pullback_50ma|breakout_volume)$"),
+    strategy: str = Query("momentum_rotation", pattern=_STRATEGY_PATTERN),
     source: str = Query("watchlist", pattern="^(watchlist|portfolio|both|universe)$"),
     top_n: int = Query(5, ge=1, le=20),
     rebalance_days: int = Query(5, ge=5, le=21),

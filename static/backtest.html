@@ -126,11 +126,12 @@
     </section>
 
     <section class="controls">
-      <label class="hint" data-tip="The swing strategy to test. Momentum Rotation ranks by trend strength; Pullback buys dips to the 50-day MA in uptrends; Breakout buys new highs on volume.">Strategy
+      <label class="hint" data-tip="The swing strategy to test. Momentum Rotation ranks by trend strength; Pullback buys dips to the 50-day MA in uptrends; Breakout buys new highs on volume; Mean Reversion buys RSI(2) washouts above the 200-day MA.">Strategy
         <select id="strategy">
           <option value="momentum_rotation">Momentum Rotation</option>
           <option value="pullback_50ma">Pullback to 50MA</option>
           <option value="breakout_volume">Breakout + Volume</option>
+          <option value="mean_reversion">Mean Reversion (RSI-2)</option>
         </select>
       </label>
       <label class="hint" data-tip="Choose which tickers the strategy tests. Watchlist/Portfolio use your saved tickers; Full Universe tests the whole S&P 500 + ETF set (slower, needs the 2-year backfill complete).">Universe
@@ -174,7 +175,7 @@
         <input id="spyRegime" type="checkbox" checked> SPY regime filter
       </label>
       <button id="runBtn" class="btn btn-primary hint" data-tip="Run the walk-forward test with the selected settings and refresh the equity curve, metrics, trades, and notes.">Run Backtest</button>
-      <button id="compareBtn" class="btn hint" data-tip="Run all three strategies with the current settings and compare CAGR, drawdown, Sharpe, and equity curves side by side.">Compare Strategies</button>
+      <button id="compareBtn" class="btn hint" data-tip="Run all four strategies with the current settings and compare CAGR, drawdown, Sharpe, and equity curves side by side.">Compare Strategies</button>
       <span id="status" class="note" aria-live="polite"></span>
     </section>
 
@@ -185,7 +186,7 @@
     </section>
 
     <section class="panel" id="compareWrap" hidden>
-      <div class="panel-title">Strategy Comparison <span class="panel-sub">same settings, all three strategies</span></div>
+      <div class="panel-title">Strategy Comparison <span class="panel-sub">same settings, all four strategies</span></div>
       <div class="panel-desc">Overlaid equity curves and key metrics. Prefer the strategy that beats SPY with the smoother ride (lower max drawdown, higher Sharpe) — not just the highest total return.</div>
       <div class="chart-wrap"><canvas id="compareChart"></canvas></div>
       <div id="compareTable" style="margin-top:14px;"></div>
@@ -252,7 +253,7 @@
       <div class="modal-head">
         <div>
           <div class="mono" style="font-size:16px;font-weight:800;color:#f0a500;">Strategy Details</div>
-          <div class="muted" style="font-size:11px;">All three strategies — your current selection is marked "selected".</div>
+          <div class="muted" style="font-size:11px;">All four strategies — your current selection is marked "selected".</div>
         </div>
         <button class="icon-btn hint" data-tip="Close this strategy explanation." onclick="closeStrategyModal()">Close</button>
       </div>
@@ -545,8 +546,8 @@ async function load() {
   }
 }
 
-const STRATEGY_LABELS = { momentum_rotation: 'Momentum Rotation', pullback_50ma: 'Pullback to 50MA', breakout_volume: 'Breakout + Volume' };
-const COMPARE_COLORS = ['#f0a500', '#7eb8f5', '#9b8cff'];
+const STRATEGY_LABELS = { momentum_rotation: 'Momentum Rotation', pullback_50ma: 'Pullback to 50MA', breakout_volume: 'Breakout + Volume', mean_reversion: 'Mean Reversion (RSI-2)' };
+const COMPARE_COLORS = ['#f0a500', '#7eb8f5', '#9b8cff', '#4fd1a5'];
 let compareChart;
 
 async function compareStrategies() {

@@ -8,10 +8,14 @@ Each strategy implements two hooks sharing the same rules:
   - scan(ticker, bars, quote): live hook — evaluate the latest bar and return
     a Setup with explainable reasons, or None.
 
-All three strategies target 2-week to 2-month holds on daily bars:
+Strategies on daily bars:
   momentum_rotation — Clenow-style exponential regression momentum ranking
   pullback_50ma     — buy pullbacks to the 50-day MA inside an uptrend
   breakout_volume   — 60-day-high breakouts confirmed by volume expansion
+  mean_reversion    — Connors-style RSI(2) washouts above the 200-day MA
+
+The first three target 2-week to 2-month holds; mean_reversion is a shorter
+3–10 day snap-back toward the 20-day mean.
 """
 from __future__ import annotations
 
@@ -333,8 +337,91 @@ class BreakoutVolume(Strategy):
         }
 
 
+class MeanReversionRSI2(Strategy):
+    id = "mean_reversion"
+    name = "Mean Reversion (RSI-2)"
+    description = (
+        "Connors-style dip buying: when a stock in a long-term uptrend (above "
+        "its 200-day MA) gets washed out short-term — RSI(2) below 10 — buy "
+        "the snap-back toward the 20-day mean. A close at/below the lower "
+        "Bollinger Band (20, 2σ) confirms the stretch."
+    )
+    details = {
+        "horizon": "Short swing: 3–10 day snap-back toward the 20-day mean.",
+        "how": "Buys sharp short-term washouts inside long-term uptrends and sells the bounce back toward the mean.",
+        "rules": [
+            "Trend gate: price must be above its 200-day moving average (only buy dips in uptrends).",
+            "Washout trigger: RSI(2) below 10 → 'triggered'.",
+            "RSI(2) between 10 and 20 with a close at/below the lower Bollinger Band (20, 2σ) → 'forming'.",
+            "Exit is implicit: once price reverts to the mean the name stops qualifying and drops out at the next rebalance.",
+        ],
+        "scoring": "score = (20 − RSI2)/20 + max(0, z)/2   — deeper RSI(2) washouts and bigger stretches below the 20-day mean (z in σ) rank first.",
+        "parameters": [
+            ["Trend filter", "close > 200-day MA"],
+            ["RSI period", "2 bars"],
+            ["Trigger", "RSI(2) < 10"],
+            ["Bollinger confirm", "20-day, 2σ lower band"],
+            ["Min history", "220 bars"],
+        ],
+    }
+    min_bars = 220
+    RSI_TRIGGER = 10.0
+    RSI_FORMING = 20.0
+
+    def candidate(self, bars: list[dict], idx: int) -> dict | None:
+        closes = _tail_closes(bars, idx, 260)
+        if len(closes) < self.min_bars or closes[-1] <= 0:
+            return None
+        close = closes[-1]
+
+        # Trend gate: only fade dips while the long-term uptrend is intact
+        ma200 = _sma_at(closes, 200)
+        if ma200 is None or close <= ma200:
+            return None
+
+        rsi2 = calc_rsi(closes[-30:], 2)[-1]
+        if rsi2 is None:
+            return None
+
+        window20 = np.array(closes[-20:], dtype=float)
+        mid = float(np.mean(window20))
+        sd = float(np.std(window20))
+        lower_band = mid - 2 * sd
+        band_touch = sd > 0 and close <= lower_band
+        z = (mid - close) / sd if sd > 0 else 0.0
+
+        if rsi2 < self.RSI_TRIGGER:
+            state = "triggered"
+        elif rsi2 < self.RSI_FORMING and band_touch:
+            state = "forming"
+        else:
+            return None
+
+        score = (self.RSI_FORMING - rsi2) / self.RSI_FORMING + max(0.0, z) / 2
+
+        ret_21 = (close / closes[-22] - 1) * 100 if len(closes) >= 22 else None
+        ret_63 = (close / closes[-64] - 1) * 100 if len(closes) >= 64 else None
+        reasons = [
+            f"RSI(2) at {rsi2:.0f} — short-term washout",
+            "above 200-day MA (long-term uptrend intact)",
+        ]
+        if band_touch:
+            reasons.append("closed at/below the lower Bollinger Band (20, 2σ)")
+        return {
+            "score": score,
+            "state": state,
+            "reasons": reasons,
+            "rsi": round(rsi2, 1),
+            "zscore": round(z, 2),
+            "dist_ma200": round((close / ma200 - 1) * 100, 2),
+            "ret_21": round(ret_21, 2) if ret_21 is not None else None,
+            "ret_63": round(ret_63, 2) if ret_63 is not None else None,
+        }
+
+
 STRATEGIES: dict[str, Strategy] = {
-    s.id: s for s in (MomentumRotation(), Pullback50MA(), BreakoutVolume())
+    s.id: s
+    for s in (MomentumRotation(), Pullback50MA(), BreakoutVolume(), MeanReversionRSI2())
 }
 
 

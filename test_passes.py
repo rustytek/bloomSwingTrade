@@ -333,9 +333,45 @@ def test_breakout_volume_triggers():
     _assert_setup_like(setup, "breakout_volume")
 
 
+# ---- mean_reversion: uptrend (close>MA200), sharp washout driving RSI(2) < 10 ----
+def make_mean_reversion_series(seed=77):
+    """Long uptrend keeping close>MA200, then a sharp multi-day selloff that
+    crushes RSI(2) and stretches price below the lower Bollinger Band."""
+    rng = random.Random(seed)
+    bars = []
+    price = 50.0
+    # 255 bars of steady uptrend so MA200 sits well below price
+    for _ in range(255):
+        price *= (1 + 0.0035 + rng.uniform(-0.002, 0.002))
+        close = price
+        bars.append(_bar(close * 0.999, close * 1.004, close * 0.996, close, v=1_500_000))
+    # Washout: five straight down days (~-1.5%/day) — RSI(2) pins near 0,
+    # but price stays comfortably above the 200-day MA
+    for _ in range(5):
+        price *= (1 - 0.015)
+        close = price
+        bars.append(_bar(close * 1.006, close * 1.008, close * 0.995, close, v=1_800_000))
+    return bars
+
+
+@test
+def test_mean_reversion_triggers():
+    bars = make_mean_reversion_series()
+    strat = STRATEGIES["mean_reversion"]
+    res = strat.candidate(bars, len(bars) - 1)
+    _assert_candidate(res, "mean_reversion")
+    assert res["state"] == "triggered", f"expected triggered, got {res['state']}"
+    assert res["rsi"] < 10, f"expected RSI(2) < 10, got {res['rsi']}"
+    assert res["score"] > 0
+    setup = strat.scan("TEST", bars, {})
+    _assert_setup_like(setup, "mean_reversion")
+
+
 @test
 def test_strategies_registry_keys():
-    assert set(STRATEGIES) == {"momentum_rotation", "pullback_50ma", "breakout_volume"}
+    assert set(STRATEGIES) == {
+        "momentum_rotation", "pullback_50ma", "breakout_volume", "mean_reversion",
+    }
 
 
 # ---- negative: flat / declining series should NOT trigger ----
@@ -371,6 +407,8 @@ def test_strategies_do_not_trigger_on_non_setups():
     # Pullback / breakout need close>MA200 & MA50>MA200 -> a decline fails both
     assert STRATEGIES["pullback_50ma"].candidate(decline, idx_dec) is None
     assert STRATEGIES["breakout_volume"].candidate(decline, idx_dec) is None
+    # Mean reversion needs close>MA200 -> a decline fails the trend gate
+    assert STRATEGIES["mean_reversion"].candidate(decline, idx_dec) is None
 
 
 # ──────────────────────────────────────────────────────────────────────────

@@ -354,6 +354,7 @@ class MeanReversionRSI2(Strategy):
             "Washout trigger: RSI(2) below 10 → 'triggered'.",
             "RSI(2) between 10 and 20 with a close at/below the lower Bollinger Band (20, 2σ) → 'forming'.",
             "Exit is implicit: once price reverts to the mean the name stops qualifying and drops out at the next rebalance.",
+            "Backtest tip: use the Weekly (5-day) rebalance cadence — exits only register at rebalance, so longer cadences blur the short snap-back edge.",
         ],
         "scoring": "score = (20 − RSI2)/20 + max(0, z)/2   — deeper RSI(2) washouts and bigger stretches below the 20-day mean (z in σ) rank first.",
         "parameters": [

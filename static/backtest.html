@@ -126,11 +126,12 @@
     </section>
 
     <section class="controls">
-      <label class="hint" data-tip="The swing strategy to test. Momentum Rotation ranks by trend strength; Pullback buys dips to the 50-day MA in uptrends; Breakout buys new highs on volume.">Strategy
+      <label class="hint" data-tip="The swing strategy to test. Momentum Rotation ranks by trend strength; Pullback buys dips to the 50-day MA in uptrends; Breakout buys new highs on volume; Mean Reversion buys RSI(2) washouts above the 200-day MA.">Strategy
         <select id="strategy">
           <option value="momentum_rotation">Momentum Rotation</option>
           <option value="pullback_50ma">Pullback to 50MA</option>
           <option value="breakout_volume">Breakout + Volume</option>
+          <option value="mean_reversion">Mean Reversion (RSI-2)</option>
         </select>
       </label>
       <label class="hint" data-tip="Choose which tickers the strategy tests. Watchlist/Portfolio use your saved tickers; Full Universe tests the whole S&P 500 + ETF set (slower, needs the 2-year backfill complete).">Universe
@@ -167,6 +168,13 @@
       <label class="hint" data-tip="Optional end of the test window. Mainly used with 'Fetch any era' to bound an arbitrary historical range (Start date → End date).">End date
         <input id="endDate" type="date">
       </label>
+      <label class="hint" data-tip="Moving-average length for the SPY regime filter. The strategy only buys while SPY is above this MA. 200-day is the classic trend gate; shorter MAs exit and re-enter faster.">Regime MA
+        <select id="regimeMa">
+          <option value="200">200-day</option>
+          <option value="100">100-day</option>
+          <option value="50">50-day</option>
+        </select>
+      </label>
       <label class="hint" data-tip="Test any historical era (e.g. 2 years a decade ago). Fetches the Start→End range from Yahoo on demand and caches it. Requires both dates; slower on first run, and best with Watchlist/Portfolio rather than Full Universe." style="flex-direction:row;align-items:center;text-transform:none;letter-spacing:0;font-size:12px;margin-bottom:7px;">
         <input id="archiveMode" type="checkbox"> Fetch any era
       </label>
@@ -174,18 +182,19 @@
         <input id="spyRegime" type="checkbox" checked> SPY regime filter
       </label>
       <button id="runBtn" class="btn btn-primary hint" data-tip="Run the walk-forward test with the selected settings and refresh the equity curve, metrics, trades, and notes.">Run Backtest</button>
-      <button id="compareBtn" class="btn hint" data-tip="Run all three strategies with the current settings and compare CAGR, drawdown, Sharpe, and equity curves side by side.">Compare Strategies</button>
+      <button id="compareBtn" class="btn hint" data-tip="Run all four strategies with the current settings and compare CAGR, drawdown, Sharpe, Sortino, exposure, and equity curves side by side.">Compare Strategies</button>
       <span id="status" class="note" aria-live="polite"></span>
+      <span id="cadenceHint" class="note" style="color:#f0a500;" hidden>Mean Reversion exits only register at rebalance — the Weekly (5-day) cadence is recommended for realistic results.</span>
     </section>
 
     <section id="statsWrap" hidden>
       <div class="panel-title" style="margin-bottom:10px;">Backtest Results <span id="statsStrategy" class="panel-sub"></span></div>
-      <div class="panel-desc" style="margin:0 0 12px;">These four numbers summarize the strategy named above over the selected window — they update each time you click Run Backtest. Compare each to the SPY benchmark shown beneath it.</div>
+      <div class="panel-desc" style="margin:0 0 12px;">These numbers summarize the strategy named above over the selected window — they update each time you click Run Backtest. Compare each to the SPY benchmark shown beneath it.</div>
       <section class="grid4" id="stats"></section>
     </section>
 
     <section class="panel" id="compareWrap" hidden>
-      <div class="panel-title">Strategy Comparison <span class="panel-sub">same settings, all three strategies</span></div>
+      <div class="panel-title">Strategy Comparison <span class="panel-sub">same settings, all four strategies</span></div>
       <div class="panel-desc">Overlaid equity curves and key metrics. Prefer the strategy that beats SPY with the smoother ride (lower max drawdown, higher Sharpe) — not just the highest total return.</div>
       <div class="chart-wrap"><canvas id="compareChart"></canvas></div>
       <div id="compareTable" style="margin-top:14px;"></div>
@@ -206,6 +215,8 @@
         <div class="panel-title">Equity Curve <span id="equityStrategy" class="panel-sub">strategy vs SPY benchmark</span></div>
         <div class="panel-desc">Look for whether the strategy line beats SPY while taking smaller drawdowns. A good setup is not just the highest ending value; it should recover quickly after dips and avoid long flat periods.</div>
         <div class="chart-wrap"><canvas id="equityChart"></canvas></div>
+        <div class="panel-desc" style="margin:12px 0 4px;"><strong style="color:#ccc;">Underwater curve</strong> — % below the prior equity peak. Deep or long-lasting dips are the pain that shakes traders out of a strategy; prefer shallow, quickly recovered ones.</div>
+        <div class="chart-wrap" style="height:130px;"><canvas id="drawdownChart"></canvas></div>
       </div>
       <div class="panel">
         <div class="panel-title">Decision Risk <span class="panel-sub">live portfolio context</span></div>
@@ -252,7 +263,7 @@
       <div class="modal-head">
         <div>
           <div class="mono" style="font-size:16px;font-weight:800;color:#f0a500;">Strategy Details</div>
-          <div class="muted" style="font-size:11px;">All three strategies — your current selection is marked "selected".</div>
+          <div class="muted" style="font-size:11px;">All four strategies — your current selection is marked "selected".</div>
         </div>
         <button class="icon-btn hint" data-tip="Close this strategy explanation." onclick="closeStrategyModal()">Close</button>
       </div>
@@ -401,7 +412,41 @@ function renderStats(bt) {
     statCard('Total Return', fmtPct(m.total_return), `SPY ${b.total_return ?? '--'}%`, (m.total_return ?? 0) >= 0 ? 'up' : 'down', 'End-to-end return over cached history. Useful, but less important than consistency and drawdown.'),
     statCard('Max Drawdown', `${fmtNum(m.max_drawdown, 1)}%`, `SPY ${b.max_drawdown ?? '--'}%`, (m.max_drawdown ?? 0) <= (b.max_drawdown ?? 999) ? 'up' : 'warn', 'Largest peak-to-trough decline. Lower is better because it shows how painful the strategy could feel.'),
     statCard('Sharpe', fmtNum(m.sharpe), `Win rate ${m.win_rate ?? '--'}%`, (m.sharpe ?? 0) > 1 ? 'up' : 'warn', 'Risk-adjusted return. Above 1 is decent, above 2 is strong, negative means returns did not justify volatility.'),
+    statCard('Sortino', fmtNum(m.sortino), `SPY ${b.sortino ?? '--'}`, (m.sortino ?? 0) > 1 ? 'up' : 'warn', 'Like Sharpe, but only downside volatility counts as risk. Better for asymmetric strategies (e.g. mean reversion) whose many small wins inflate plain volatility.'),
+    statCard('Exposure', `${fmtNum(m.exposure, 1)}%`, m.avg_invested_return != null ? `avg ${fmtPct(m.avg_invested_return)} per invested period` : 'time in the market', '', 'Share of rebalance periods the strategy actually held positions. Low exposure with a solid average per-period return means the strategy earned its results while mostly sitting safely in cash.'),
   ].join('');
+}
+
+function drawdownSeries(points) {
+  let peak = -Infinity;
+  return (points || []).map(p => {
+    peak = Math.max(peak, p.value);
+    return peak > 0 ? +((p.value / peak - 1) * 100).toFixed(2) : 0;
+  });
+}
+
+let ddChart;
+function renderDrawdownChart(bt) {
+  const ctx = document.getElementById('drawdownChart');
+  ddChart?.destroy();
+  ddChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: (bt.equity || []).map(p => p.date),
+      datasets: [
+        { label: 'Strategy', data: drawdownSeries(bt.equity), borderColor: '#ff4d4d', backgroundColor: 'rgba(255,77,77,.12)', fill: true, tension: .2, pointRadius: 0 },
+        { label: 'SPY', data: drawdownSeries(bt.benchmark), borderColor: '#555', borderDash: [5, 4], tension: .2, pointRadius: 0 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#aaa' } } },
+      scales: {
+        x: { ticks: { color: '#777', maxTicksLimit: 8 }, grid: { color: '#1a1a1a' } },
+        y: { max: 0, ticks: { color: '#777', callback: v => v + '%' }, grid: { color: '#1a1a1a' } },
+      },
+    },
+  });
 }
 
 function renderChart(bt) {
@@ -520,6 +565,7 @@ async function load() {
     rebalance_days: document.getElementById('rebalance').value,
     cost_bps: document.getElementById('costBps').value,
     spy_regime: document.getElementById('spyRegime').checked ? 'true' : 'false',
+    regime_ma: document.getElementById('regimeMa').value,
     period: document.getElementById('period').value,
   });
   const sd = document.getElementById('startDate').value;
@@ -535,6 +581,7 @@ async function load() {
     const replay = await api('/api/backtest/watchlist-replay?top_n=' + encodeURIComponent(document.getElementById('topN').value) + '&spy_regime=' + (document.getElementById('spyRegime').checked ? 'true' : 'false'));
     renderStats(bt);
     renderChart(bt);
+    renderDrawdownChart(bt);
     renderTrades(bt);
     renderCockpit(cockpit);
     renderReplay(replay);
@@ -545,8 +592,8 @@ async function load() {
   }
 }
 
-const STRATEGY_LABELS = { momentum_rotation: 'Momentum Rotation', pullback_50ma: 'Pullback to 50MA', breakout_volume: 'Breakout + Volume' };
-const COMPARE_COLORS = ['#f0a500', '#7eb8f5', '#9b8cff'];
+const STRATEGY_LABELS = { momentum_rotation: 'Momentum Rotation', pullback_50ma: 'Pullback to 50MA', breakout_volume: 'Breakout + Volume', mean_reversion: 'Mean Reversion (RSI-2)' };
+const COMPARE_COLORS = ['#f0a500', '#7eb8f5', '#9b8cff', '#4fd1a5'];
 let compareChart;
 
 async function compareStrategies() {
@@ -558,6 +605,7 @@ async function compareStrategies() {
     rebalance_days: document.getElementById('rebalance').value,
     cost_bps: document.getElementById('costBps').value,
     spy_regime: document.getElementById('spyRegime').checked ? 'true' : 'false',
+    regime_ma: document.getElementById('regimeMa').value,
     period: document.getElementById('period').value,
   };
   const sd = document.getElementById('startDate').value;
@@ -595,10 +643,10 @@ async function compareStrategies() {
     const rows = results.map((bt, i) => { const m = bt.metrics || {}; return `<tr>
       <td><span class="pill" style="border-color:${COMPARE_COLORS[i]};color:${COMPARE_COLORS[i]};">${esc(STRATEGY_LABELS[ids[i]])}</span></td>
       <td>${fmtPct(m.cagr)}</td><td>${fmtPct(m.total_return)}</td>
-      <td>${fmtNum(m.max_drawdown, 1)}%</td><td>${fmtNum(m.sharpe, 2)}</td>
-      <td>${m.win_rate ?? '--'}%</td><td class="mono">${bt.available_tickers?.length || 0}</td></tr>`; }).join('');
-    document.getElementById('compareTable').innerHTML = `<table><thead><tr><th>Strategy</th><th>CAGR</th><th>Total</th><th>Max DD</th><th>Sharpe</th><th>Win Rate</th><th>Tested</th></tr></thead>
-      <tbody>${rows}<tr><td><span class="pill" style="border-color:#555;color:#888;">SPY benchmark</span></td><td>${fmtPct(spy.cagr)}</td><td>${fmtPct(spy.total_return)}</td><td>${fmtNum(spy.max_drawdown, 1)}%</td><td>${fmtNum(spy.sharpe, 2)}</td><td>--</td><td>--</td></tr></tbody></table>`;
+      <td>${fmtNum(m.max_drawdown, 1)}%</td><td>${fmtNum(m.sharpe, 2)}</td><td>${fmtNum(m.sortino, 2)}</td>
+      <td>${m.win_rate ?? '--'}%</td><td>${m.exposure != null ? fmtNum(m.exposure, 1) + '%' : '--'}</td><td class="mono">${bt.available_tickers?.length || 0}</td></tr>`; }).join('');
+    document.getElementById('compareTable').innerHTML = `<table><thead><tr><th>Strategy</th><th>CAGR</th><th>Total</th><th>Max DD</th><th>Sharpe</th><th>Sortino</th><th>Win Rate</th><th>Exposure</th><th>Tested</th></tr></thead>
+      <tbody>${rows}<tr><td><span class="pill" style="border-color:#555;color:#888;">SPY benchmark</span></td><td>${fmtPct(spy.cagr)}</td><td>${fmtPct(spy.total_return)}</td><td>${fmtNum(spy.max_drawdown, 1)}%</td><td>${fmtNum(spy.sharpe, 2)}</td><td>${fmtNum(spy.sortino, 2)}</td><td>--</td><td>${spy.exposure != null ? fmtNum(spy.exposure, 1) + '%' : '--'}</td><td>--</td></tr></tbody></table>`;
     wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
     status.textContent = 'Comparison complete';
   } catch (e) {
@@ -613,6 +661,18 @@ async function loadStrategyDetails() {
     const d = await api('/api/backtest/strategies');
     STRATEGY_DETAILS = {};
     (d.strategies || []).forEach(s => { STRATEGY_DETAILS[s.id] = s; });
+    // Self-sync: any strategy the server knows but this page doesn't gets
+    // added to the labels map and the dropdown, so new strategies work
+    // without editing this file.
+    const sel = document.getElementById('strategy');
+    (d.strategies || []).forEach(s => {
+      if (!STRATEGY_LABELS[s.id]) STRATEGY_LABELS[s.id] = s.name;
+      if (![...sel.options].some(o => o.value === s.id)) {
+        const opt = document.createElement('option');
+        opt.value = s.id; opt.textContent = s.name;
+        sel.appendChild(opt);
+      }
+    });
     renderStrategyDetail();
   } catch (e) {
     document.getElementById('strategyDetail').innerHTML = `<span class="error">${esc(e.message)}</span>`;
@@ -653,7 +713,14 @@ function openStrategyModal() {
 function closeStrategyModal() {
   document.getElementById('strategyModal').style.display = 'none';
 }
+function updateCadenceHint() {
+  const isMeanReversion = document.getElementById('strategy').value === 'mean_reversion';
+  const cadence = document.getElementById('rebalance').value;
+  document.getElementById('cadenceHint').hidden = !(isMeanReversion && cadence !== '5');
+}
 document.getElementById('strategy').addEventListener('change', renderStrategyDetail);
+document.getElementById('strategy').addEventListener('change', updateCadenceHint);
+document.getElementById('rebalance').addEventListener('change', updateCadenceHint);
 document.getElementById('strategyDetailBtn').addEventListener('click', openStrategyModal);
 
 document.getElementById('runBtn').addEventListener('click', load);
@@ -675,6 +742,7 @@ document.getElementById('weeklyPresetBtn').addEventListener('click', () => {
   document.getElementById('rebalance').value = '5';
   document.getElementById('costBps').value = '10';
   document.getElementById('spyRegime').checked = true;
+  updateCadenceHint();
   load();
 });
 initHeader();

@@ -83,9 +83,9 @@ def _max_drawdown(equity: list[dict]) -> float:
     return max_dd * 100
 
 
-def _metrics(equity: list[dict]) -> dict:
+def _metrics(equity: list[dict], periods_per_year: float = 252 / 5) -> dict:
     if len(equity) < 2:
-        return {"total_return": 0, "cagr": 0, "max_drawdown": 0, "sharpe": None, "win_rate": None}
+        return {"total_return": 0, "cagr": 0, "max_drawdown": 0, "sharpe": None, "sortino": None, "win_rate": None}
     returns = []
     for prev, curr in zip(equity, equity[1:]):
         if prev["value"] > 0:
@@ -96,13 +96,17 @@ def _metrics(equity: list[dict]) -> dict:
     years = max((end - start).days / 365.25, 1 / 252)
     cagr = (equity[-1]["value"] / equity[0]["value"]) ** (1 / years) - 1
     vol = pstdev(returns) if len(returns) > 1 else 0
-    sharpe = (mean(returns) / vol * math.sqrt(252 / 5)) if vol > 0 else None
+    sharpe = (mean(returns) / vol * math.sqrt(periods_per_year)) if vol > 0 else None
+    # Downside deviation relative to 0 — only losing periods count as risk
+    downside = math.sqrt(mean([min(r, 0.0) ** 2 for r in returns])) if returns else 0
+    sortino = (mean(returns) / downside * math.sqrt(periods_per_year)) if downside > 0 else None
     wins = [r for r in returns if r > 0]
     return {
         "total_return": round(total_return * 100, 2),
         "cagr": round(cagr * 100, 2),
         "max_drawdown": round(_max_drawdown(equity), 2),
         "sharpe": round(sharpe, 2) if sharpe is not None else None,
+        "sortino": round(sortino, 2) if sortino is not None else None,
         "win_rate": round(len(wins) / len(returns) * 100, 1) if returns else None,
     }
 
@@ -462,6 +466,17 @@ def run_walk_forward_backtest(
         })
         prev_holdings = holdings
 
+    ppy = 252 / max(1, rebalance_days)
+    metrics = _metrics(equity, ppy)
+    benchmark_metrics = _metrics(benchmark, ppy)
+    # Exposure: share of rebalance periods actually holding positions, and the
+    # average return earned in just those periods (fair view for strategies
+    # that sit in cash a lot, e.g. mean reversion).
+    invested = [t for t in trades if t["holdings"]]
+    metrics["exposure"] = round(len(invested) / len(trades) * 100, 1) if trades else None
+    metrics["avg_invested_return"] = round(mean(t["period_return"] for t in invested), 2) if invested else None
+    benchmark_metrics["exposure"] = 100.0 if trades else None
+
     return {
         "strategy": strategy_meta,
         "source": source,
@@ -470,8 +485,8 @@ def run_walk_forward_backtest(
         "equity": equity,
         "benchmark": benchmark,
         "trades": trades,
-        "metrics": _metrics(equity),
-        "benchmark_metrics": _metrics(benchmark),
+        "metrics": metrics,
+        "benchmark_metrics": benchmark_metrics,
         "notes": [
             "Hypothetical backtest using cached adjusted daily closes only.",
             f"Strategy: {strategy.name}. {strategy.description}",

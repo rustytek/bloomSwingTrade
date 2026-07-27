@@ -58,7 +58,7 @@ React SPA (static/*.html) → FastAPI (main.py)
 | `services/universe.py` | ~450 tickers: S&P 500 constituents + ETF lists |
 | `services/ai_service.py` | Abstract `AIService` base + Mock/LiteLLM implementations (Anthropic/OpenAI stubbed, not yet implemented) |
 | `services/indicators.py` | Technical indicators; includes `calc_atr(highs, lows, closes, period=14)` (Wilder-smoothed) |
-| `services/strategies.py` | 3-strategy framework; registry `STRATEGIES` (see below) |
+| `services/strategies.py` | 4-strategy framework; registry `STRATEGIES` (see below) |
 | `services/trade_plan.py` | `build_trade_plan(...)`: ATR entry zone, stop, fixed-fractional sizing, R-multiple target (see below) |
 | `services/today.py` | Builds the `/api/today` payload; exposes `position_flags()` helper (see below) |
 | `api/today.py` | `GET /api/today` — daily dashboard |
@@ -76,6 +76,7 @@ Registry `STRATEGIES` maps ids to `Strategy` instances:
 - `momentum_rotation` — Clenow-style 90-bar exponential regression slope × R².
 - `pullback_50ma` — buy dips to the 50MA in an uptrend.
 - `breakout_volume` — 60-day-high breakout on >=1.5x volume.
+- `mean_reversion` — Connors-style RSI(2) < 10 washout above the 200MA (lower Bollinger touch confirms); short 3–10 day snap-back holds.
 
 Each `Strategy` exposes `candidate(bars, idx)` (backtest hook, uses `bars[:idx+1]`) and `scan(ticker, bars, quote)` (live hook returning a `Setup`).
 
@@ -86,7 +87,7 @@ Each `Strategy` exposes `candidate(bars, idx)` (backtest hook, uses `bars[:idx+1
 Builds the `/api/today` payload (regime light, position health, top setups with trade plans, checklist, capacity). Exposes the shared `position_flags()` helper, also reused by `build_decision_cockpit`. Per-user in-memory cache (15-min TTL), invalidated by the scheduler.
 
 ### Backtesting (`api/backtest.py`)
-Walk-forward backtest now takes a `strategy` param (one of the 3 ids); `source` can be `universe` (the whole cached universe). `GET /api/backtest/strategies` lists available strategies. The backtest also accepts `period` (1Y/2Y/all), `start_date`, `end_date`, and `archive` params to bound the test window.
+Walk-forward backtest now takes a `strategy` param (one of the 4 ids); `source` can be `universe` (the whole cached universe). `GET /api/backtest/strategies` lists available strategies. The backtest also accepts `period` (1Y/2Y/all), `start_date`, `end_date`, and `archive` params to bound the test window.
 
 **Arbitrary-era backtests (`archive=true`)** route through `services/history_archive.py` / the `history_archive` table instead of the rolling StockCache: it fetches the requested `start_date`→`end_date` span (plus a ~480-day warmup buffer) from yfinance once, stores the widest range per ticker, and reuses it. Best with Watchlist/Portfolio sources (Full Universe = many on-demand fetches). Requires both dates.
 

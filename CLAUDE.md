@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SwingTrader is a self-hosted swing trading screener — a FastAPI backend + vanilla JS frontend deployed via Docker or as a Home Assistant OS (HAOS) native add-on. It screens S&P 500 and ETF tickers with technical indicators (RSI, MACD, Bollinger Bands, MA50/200, Golden/Death Cross), per-user watchlists/portfolios, and optional AI analysis via Anthropic Claude, OpenAI, or local Ollama.
+SwingTrader is a self-hosted swing trading screener — a FastAPI backend + vanilla JS frontend deployed via Docker or as a Home Assistant OS (HAOS) native add-on. It screens S&P 500 and ETF tickers with technical indicators (RSI, MACD, Bollinger Bands, MA50/200, Golden/Death Cross), per-user watchlists/portfolios, and optional AI analysis via Anthropic Claude, OpenAI, or LiteLLM (the local/self-hosted path — see aiProxy's `CLAUDE.md`). This app never calls Ollama or any other model runtime directly; `AI_MODEL`/`REPORT_MODEL` should always be a LiteLLM tier alias (e.g. `tooling_high`), not a raw provider model name — the physical model behind an alias can change without a config edit here.
 
 ## Common Commands
 
@@ -56,7 +56,7 @@ React SPA (static/*.html) → FastAPI (main.py)
 | `auth/deps.py` | `get_current_user` / `get_current_admin` JWT dependencies |
 | `services/market_data.py` | yfinance wrapper, dual-layer cache (in-memory dict + SQLite), indicator calculation |
 | `services/universe.py` | ~450 tickers: S&P 500 constituents + ETF lists |
-| `services/ai_service.py` | Abstract `AIService` base + Mock/Anthropic/OpenAI/Ollama implementations |
+| `services/ai_service.py` | Abstract `AIService` base + Mock/LiteLLM implementations (Anthropic/OpenAI stubbed, not yet implemented) |
 | `services/indicators.py` | Technical indicators; includes `calc_atr(highs, lows, closes, period=14)` (Wilder-smoothed) |
 | `services/strategies.py` | 3-strategy framework; registry `STRATEGIES` (see below) |
 | `services/trade_plan.py` | `build_trade_plan(...)`: ATR entry zone, stop, fixed-fractional sizing, R-multiple target (see below) |
@@ -93,7 +93,7 @@ Walk-forward backtest now takes a `strategy` param (one of the 3 ids); `source` 
 ### Database / Migrations
 - New `ClosedTrade` model (`closed_trades` table) backs the trade journal — records realized `pnl`, `pnl_pct`, and `r_multiple` (when a stop was set).
 - `User` gained trading-settings columns: `account_size`, `risk_pct`, `max_positions`, `atr_stop_mult`, `r_multiple`.
-- `User.litellm_api_key` (nullable) gives each user their own LiteLLM virtual key so AI token usage is separate. The AI path (`api/ai.py` `llm_headers`/`call_chat_model`, `services/ai_service.py` `LiteLLMAIService`/`ai_service` dependency, `services/report_service.py` `_call_ollama`/`generate_daily_report`) takes an optional `api_key` and falls back to the global config key when a user has none. The auth API never returns the raw key — only a `has_litellm_key` boolean. The 05:30 scheduler now generates a report for every user with their own key.
+- `User.litellm_api_key` (nullable) gives each user their own LiteLLM virtual key so AI token usage is separate. The AI path (`api/ai.py` `llm_headers`/`call_chat_model`, `services/ai_service.py` `LiteLLMAIService`/`ai_service` dependency, `services/report_service.py` `_call_llm`/`generate_daily_report`) takes an optional `api_key` and falls back to the global config key when a user has none. The auth API never returns the raw key — only a `has_litellm_key` boolean. The 05:30 scheduler now generates a report for every user with their own key.
 - `PortfolioPosition` gained `stop_loss`, `target`, `entry_date`, `strategy`.
 - Closing a position (`POST /api/portfolio/{ticker}/close`) archives it to the journal and deletes it; `DELETE /api/portfolio/{ticker}` remains a non-journaled hard delete for correcting mistaken entries.
 - Lightweight SQLite `ALTER` migrations are handled by `ensure_schema_migrations()` in `main.py` (renamed from `ensure_cache_columns`, now with a generic `_ensure_columns` helper).
@@ -122,11 +122,12 @@ Copy `.env.example` to `.env`. Key variables:
 |---|---|---|
 | `SECRET_KEY` | weak default | Change this — used for JWT signing |
 | `ADMIN_USER` / `ADMIN_PASS` | `admin` / `changeme` | Synced to the configured admin account on startup |
-| `AI_PROVIDER` | `litellm` | `none` \| `anthropic` \| `openai` \| `ollama` \| `litellm` |
+| `AI_PROVIDER` | `litellm` | `none` \| `anthropic` \| `openai` \| `litellm` |
 | `AI_API_KEY` | — | Required when provider is `anthropic` or `openai` |
+| `AI_MODEL` | `tooling_high` | LiteLLM tier alias — see aiProxy's `CLAUDE.md` Tier Aliases |
 | `FRED_API_KEY` | — | Optional; enables macro chart data |
-| `OLLAMA_URL` | `http://192.168.10.21:11434` | Local Ollama server |
-| `REPORT_MODEL` | `deepseek-r1:8b` | Model for daily report generation |
+| `LITELLM_URL` | `http://192.168.0.21:4000` | LiteLLM proxy base URL |
+| `REPORT_MODEL` | `tooling_high` | LiteLLM tier alias for daily report generation |
 
 For HAOS, config goes through the add-on UI (mapped to `/data/options.json`).
 

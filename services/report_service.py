@@ -5,7 +5,7 @@ Workflow:
   1. Load portfolio positions + watchlist for a user from the DB
   2. Fetch enriched quotes (price, technicals, performance metrics) for all tickers
   3. Compute "Same Shape" correlation groups from 30-day price history
-  4. Build a structured context payload and send to Ollama (report_model)
+  4. Build a structured context payload and send to LiteLLM (report_model)
   5. Store the resulting markdown in ReportCache (last 10 per user)
   6. Return the markdown string
 """
@@ -338,17 +338,17 @@ async def _gather_context(user_id: int, db: Session) -> dict:
     }
 
 
-# ── Ollama call ───────────────────────────────────────────────────────────────
+# ── LLM call ──────────────────────────────────────────────────────────────────
 
-async def _call_ollama(system: str, user_msg: str, model: str | None = None,
-                       api_key: str | None = None) -> str:
+async def _call_llm(system: str, user_msg: str, model: str | None = None,
+                    api_key: str | None = None) -> str:
     s = current_settings()
     provider = s.ai_provider.lower()
     timeout_seconds = 900.0
     if provider == "none":
         raise RuntimeError("AI provider is disabled")
 
-    model = model or s.report_model or s.ai_model or s.ollama_model
+    model = model or s.report_model or s.ai_model
     logger.info(
         "Report LLM request provider=%s model=%s system_chars=%s user_chars=%s",
         provider,
@@ -365,7 +365,7 @@ async def _call_ollama(system: str, user_msg: str, model: str | None = None,
         ],
     }
     if provider in ("litellm", "openai"):
-        base_url = "https://api.openai.com" if provider == "openai" else (s.litellm_url or s.ollama_url).rstrip("/")
+        base_url = "https://api.openai.com" if provider == "openai" else s.litellm_url.rstrip("/")
         url = base_url + "/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
         if provider == "litellm":
@@ -434,52 +434,7 @@ async def _call_ollama(system: str, user_msg: str, model: str | None = None,
                 )
                 raise RuntimeError(f"{provider} returned an unexpected response shape: {e}") from e
 
-    if provider != "ollama":
-        raise RuntimeError(f"AI provider '{provider}' is not supported for report generation")
-
-    url = s.ollama_url.rstrip("/") + "/api/chat"
-    client_timeout = httpx.Timeout(timeout_seconds, connect=15.0, read=timeout_seconds, write=60.0, pool=15.0)
-    logger.info("Report Ollama HTTP POST url=%s model=%s timeout=%s", url, model, timeout_seconds)
-    try:
-        async with httpx.AsyncClient(timeout=client_timeout) as client:
-            resp = await client.post(url, json=payload)
-    except httpx.TimeoutException as e:
-        logger.error(
-            "Report Ollama timeout url=%s model=%s timeout=%s error_type=%s error_repr=%r",
-            url,
-            model,
-            timeout_seconds,
-            type(e).__name__,
-            e,
-        )
-        raise RuntimeError(f"ollama request timed out after {timeout_seconds:.0f}s ({type(e).__name__})") from e
-    except httpx.RequestError as e:
-        logger.error(
-            "Report Ollama request error url=%s model=%s error_type=%s error_repr=%r",
-            url,
-            model,
-            type(e).__name__,
-            e,
-        )
-        raise RuntimeError(f"ollama request failed before a response: {type(e).__name__}: {e!r}") from e
-    else:
-        logger.info("Report Ollama response model=%s status=%s response_chars=%s", model, resp.status_code, len(resp.text or ""))
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "Report Ollama HTTP error url=%s model=%s status=%s body=%s",
-                url,
-                model,
-                resp.status_code,
-                resp.text[:1000],
-            )
-            raise RuntimeError(f"ollama returned HTTP {resp.status_code}: {resp.text[:500]}") from e
-        try:
-            return resp.json()["message"]["content"]
-        except Exception as e:
-            logger.error("Report Ollama parse error model=%s body=%s", model, resp.text[:1000])
-            raise RuntimeError(f"ollama returned an unexpected response shape: {e}") from e
+    raise RuntimeError(f"AI provider '{provider}' is not supported for report generation")
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -644,12 +599,12 @@ Do not add new sections. Return only the completed markdown — no preamble."""
 
     # Resolve the concrete model name (after fallbacks) so we can record it.
     s_now = current_settings()
-    resolved_model = model or s_now.report_model or s_now.ai_model or s_now.ollama_model
+    resolved_model = model or s_now.report_model or s_now.ai_model
     provider = s_now.ai_provider
 
     try:
-        markdown = await _call_ollama(system_prompt or _SYSTEM_PROMPT, user_msg,
-                                      model=resolved_model, api_key=api_key)
+        markdown = await _call_llm(system_prompt or _SYSTEM_PROMPT, user_msg,
+                                   model=resolved_model, api_key=api_key)
     except Exception as e:
         logger.error(
             "Report generation LLM call failed provider=%s model=%s error_type=%s error_repr=%r",

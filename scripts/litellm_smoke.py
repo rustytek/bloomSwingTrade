@@ -3,8 +3,8 @@ Smoke-test SwingTrader's LiteLLM/OpenAI-compatible chat path.
 
 Examples:
   python scripts/litellm_smoke.py --list-models
-  python scripts/litellm_smoke.py --model qwen3.5-mlx --mode short
-  python scripts/litellm_smoke.py --model qwen3.5-mlx --mode market
+  python scripts/litellm_smoke.py --model tooling_high --mode short
+  python scripts/litellm_smoke.py --model tooling_high --mode market
   python scripts/litellm_smoke.py --model nvda/deepseek-ai/deepseek-v4-pro --mode report --timeout 900
 """
 
@@ -30,12 +30,10 @@ except ModuleNotFoundError:
 
 class Defaults:
     litellm_url = "http://192.168.0.21:4000"
-    ollama_url = "http://192.168.0.21:11434"
     litellm_api_key = ""
     ai_api_key = ""
-    ai_model = "ollama/qwen3.5:9-mlx"
-    report_model = "ollama/qwen3.5:9-mlx"
-    ollama_model = "qwen3.5:9-mlx"
+    ai_model = "tooling_high"
+    report_model = "tooling_high"
 
 
 def load_defaults() -> Defaults:
@@ -45,12 +43,10 @@ def load_defaults() -> Defaults:
 
     defaults = Defaults()
     defaults.litellm_url = os.getenv("LITELLM_URL", defaults.litellm_url)
-    defaults.ollama_url = os.getenv("OLLAMA_URL", defaults.ollama_url)
     defaults.litellm_api_key = os.getenv("LITELLM_API_KEY", defaults.litellm_api_key)
     defaults.ai_api_key = os.getenv("AI_API_KEY", defaults.ai_api_key)
     defaults.ai_model = os.getenv("AI_MODEL", defaults.ai_model)
     defaults.report_model = os.getenv("REPORT_MODEL", defaults.report_model)
-    defaults.ollama_model = os.getenv("OLLAMA_MODEL", defaults.ollama_model)
     return defaults
 
 
@@ -232,9 +228,9 @@ async def chat(base_url: str, api_key: str, model: str, mode: str, timeout: floa
 def parse_args() -> argparse.Namespace:
     settings = load_defaults()
     parser = argparse.ArgumentParser(description="Smoke-test LiteLLM chat completions from SwingTrader config.")
-    parser.add_argument("--base-url", default=(settings.litellm_url or settings.ollama_url).rstrip("/"))
+    parser.add_argument("--base-url", default=settings.litellm_url.rstrip("/"))
     parser.add_argument("--api-key", default=settings.litellm_api_key)
-    parser.add_argument("--model", default=settings.ai_model or settings.report_model or settings.ollama_model)
+    parser.add_argument("--model", default=settings.ai_model or settings.report_model)
     parser.add_argument("--mode", choices=["short", "market", "report"], default="short")
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument(

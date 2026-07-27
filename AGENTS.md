@@ -4,7 +4,7 @@ This file provides guidance to agents when working with code in this repository.
 
 ## Project Overview
 
-SwingTrader is a self-hosted swing trading screener â€” a FastAPI backend + vanilla JS frontend deployed via Docker or as a Home Assistant OS (HAOS) native add-on. It screens S&P 500 and ETF tickers with technical indicators (RSI, MACD, Bollinger Bands, MA50/200, Golden/Death Cross), per-user watchlists/portfolios, and optional AI analysis via Anthropic Claude, OpenAI, or local Ollama.
+SwingTrader is a self-hosted swing trading screener â€” a FastAPI backend + vanilla JS frontend deployed via Docker or as a Home Assistant OS (HAOS) native add-on. It screens S&P 500 and ETF tickers with technical indicators (RSI, MACD, Bollinger Bands, MA50/200, Golden/Death Cross), per-user watchlists/portfolios, and optional AI analysis via Anthropic Claude, OpenAI, or LiteLLM (the local/self-hosted path â€” see aiProxy's `CLAUDE.md`). This app never calls Ollama or any other model runtime directly; `AI_MODEL`/`REPORT_MODEL` should always be a LiteLLM tier alias (e.g. `tooling_high`), not a raw provider model name.
 
 ## Common Commands
 
@@ -47,7 +47,7 @@ React SPA (static/*.html) â†’ FastAPI (main.py)
 | `auth/deps.py` | `get_current_user` / `get_current_admin` JWT dependencies |
 | `services/market_data.py` | yfinance wrapper, dual-layer cache (in-memory dict + SQLite), indicator calculation |
 | `services/universe.py` | ~450 tickers: S&P 500 constituents + ETF lists |
-| `services/ai_service.py` | Abstract `AIService` base + Mock/Anthropic/OpenAI/Ollama implementations |
+| `services/ai_service.py` | Abstract `AIService` base + Mock/LiteLLM implementations (Anthropic/OpenAI stubbed, not yet implemented) |
 
 ### Caching Strategy
 Two-layer cache: in-memory Python dict (`_mem_cache`) â†’ SQLite `StockCache` table. Data is considered "fresh" if cached **after the most recent NYSE market close (4pm ET)** â€” not a rolling TTL. Quote and history TTLs are configurable via env vars but default to daily refresh.
@@ -76,11 +76,12 @@ Copy `.env.example` to `.env`. Key variables:
 |---|---|---|
 | `SECRET_KEY` | weak default | Change this â€” used for JWT signing |
 | `ADMIN_USER` / `ADMIN_PASS` | `admin` / `changeme` | Synced to the configured admin account on startup |
-| `AI_PROVIDER` | `litellm` | `none` \| `anthropic` \| `openai` \| `ollama` \| `litellm` |
+| `AI_PROVIDER` | `litellm` | `none` \| `anthropic` \| `openai` \| `litellm` |
 | `AI_API_KEY` | â€” | Required when provider is `anthropic` or `openai` |
+| `AI_MODEL` | `tooling_high` | LiteLLM tier alias â€” see aiProxy's `CLAUDE.md` Tier Aliases |
 | `FRED_API_KEY` | â€” | Optional; enables macro chart data |
-| `OLLAMA_URL` | `http://192.168.10.21:11434` | Local Ollama server |
-| `REPORT_MODEL` | `deepseek-r1:8b` | Model for daily report generation |
+| `LITELLM_URL` | `http://192.168.0.21:4000` | LiteLLM proxy base URL |
+| `REPORT_MODEL` | `tooling_high` | LiteLLM tier alias for daily report generation |
 
 For HAOS, config goes through the add-on UI (mapped to `/data/options.json`).
 

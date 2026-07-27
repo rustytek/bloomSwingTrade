@@ -32,17 +32,13 @@ def llm_base_url() -> str:
     s = current_settings()
     provider = s.ai_provider.lower()
     if provider == "litellm":
-        return (s.litellm_url or s.ollama_url).rstrip("/")
-    if provider == "openai":
-        return "https://api.openai.com"
-    return s.ollama_url.rstrip("/")
+        return s.litellm_url.rstrip("/")
+    return "https://api.openai.com"
 
 
 def llm_headers(api_key: str | None = None) -> dict:
     s = current_settings()
     provider = s.ai_provider.lower()
-    if provider == "ollama":
-        return {"Content-Type": "application/json"}
     headers = {"Content-Type": "application/json"}
     if provider == "litellm":
         key = api_key or s.litellm_api_key
@@ -65,7 +61,7 @@ async def call_chat_model(system: str, user_msg: str, model: str | None = None, 
     if provider == "none":
         raise RuntimeError("AI provider is disabled")
 
-    model_name = model or s.ai_model or s.ollama_model
+    model_name = model or s.ai_model
     if provider in ("litellm", "openai"):
         url = f"{llm_base_url()}/v1/chat/completions"
         payload = {
@@ -140,71 +136,7 @@ async def call_chat_model(system: str, user_msg: str, model: str | None = None, 
                 )
                 raise RuntimeError(f"{provider} returned an unexpected response shape: {e}") from e
 
-    if provider not in ("ollama", "litellm", "openai"):
-        raise RuntimeError(f"AI provider '{provider}' is not supported by this endpoint")
-
-    payload = {
-        "model": model or s.ollama_model,
-        "stream": False,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_msg},
-        ],
-    }
-    logger.info(
-        "Market chat Ollama request base_url=%s model=%s user_chars=%s timeout=%s",
-        s.ollama_url.rstrip("/"),
-        payload["model"],
-        len(user_msg),
-        timeout,
-    )
-    url = f"{s.ollama_url.rstrip('/')}/api/chat"
-    client_timeout = httpx.Timeout(timeout, connect=15.0, read=timeout, write=60.0, pool=15.0)
-    try:
-        async with httpx.AsyncClient(timeout=client_timeout) as client:
-            resp = await client.post(url, json=payload)
-    except httpx.TimeoutException as e:
-        logger.error(
-            "Market chat Ollama timeout url=%s model=%s timeout=%s error_type=%s error_repr=%r",
-            url,
-            payload["model"],
-            timeout,
-            type(e).__name__,
-            e,
-        )
-        raise RuntimeError(f"ollama request timed out after {timeout:.0f}s ({type(e).__name__})") from e
-    except httpx.RequestError as e:
-        logger.error(
-            "Market chat Ollama request error url=%s model=%s error_type=%s error_repr=%r",
-            url,
-            payload["model"],
-            type(e).__name__,
-            e,
-        )
-        raise RuntimeError(f"ollama request failed before a response: {type(e).__name__}: {e!r}") from e
-    else:
-        logger.info(
-            "Market chat Ollama response model=%s status=%s response_chars=%s",
-            payload["model"],
-            resp.status_code,
-            len(resp.text or ""),
-        )
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "Market chat Ollama HTTP error url=%s model=%s status=%s body=%s",
-                f"{s.ollama_url.rstrip('/')}/api/chat",
-                payload["model"],
-                resp.status_code,
-                resp.text[:1000],
-            )
-            raise RuntimeError(f"ollama returned HTTP {resp.status_code}: {resp.text[:500]}") from e
-        try:
-            return resp.json()["message"]["content"]
-        except Exception as e:
-            logger.error("Market chat Ollama parse error model=%s body=%s", payload["model"], resp.text[:1000])
-            raise RuntimeError(f"ollama returned an unexpected response shape: {e}") from e
+    raise RuntimeError(f"AI provider '{provider}' is not supported by this endpoint")
 
 
 class ChatRequest(BaseModel):
@@ -333,8 +265,8 @@ def ai_status(user: User = Depends(get_current_user)):
     return {
         "configured": provider != "none",
         "provider": provider,
-        "model": s.ai_model or s.ollama_model or "default",
-        "base_url": llm_base_url() if provider in ("litellm", "ollama") else None,
+        "model": s.ai_model or "default",
+        "base_url": llm_base_url() if provider == "litellm" else None,
     }
 
 
@@ -450,37 +382,27 @@ async def sector_summary(
 # ── Daily Report Endpoints ────────────────────────────────────────────────────
 
 @router.get("/models")
-@router.get("/ollama/models")
-async def ollama_models(user: User = Depends(get_current_user)):
-    """Return available local models from Ollama or LiteLLM."""
+async def list_models(user: User = Depends(get_current_user)):
+    """Return available models from the configured LiteLLM/OpenAI backend."""
     import httpx
     s = current_settings()
     provider = s.ai_provider.lower()
-    if provider == "none":
+    if provider not in ("litellm", "openai"):
         return {"models": [], "provider": provider, "base_url": None}
-    url = f"{llm_base_url()}/v1/models" if provider in ("litellm", "openai") else s.ollama_url.rstrip("/") + "/api/tags"
+    url = f"{llm_base_url()}/v1/models"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(url, headers=llm_headers(getattr(user, "litellm_api_key", None)))
             resp.raise_for_status()
             data = resp.json()
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Cannot reach local LLM server: {e}")
+        raise HTTPException(status_code=503, detail=f"Cannot reach LLM server: {e}")
 
     models = []
-    if provider in ("litellm", "openai"):
-        for m in data.get("data", []):
-            name = m.get("id") or m.get("name")
-            if name:
-                models.append({"name": name, "size_gb": None, "modified_at": None})
-    else:
-        for m in data.get("models", []):
-            size_bytes = m.get("size", 0)
-            models.append({
-                "name": m["name"],
-                "size_gb": round(size_bytes / 1e9, 1) if size_bytes else None,
-                "modified_at": m.get("modified_at"),
-            })
+    for m in data.get("data", []):
+        name = m.get("id") or m.get("name")
+        if name:
+            models.append({"name": name, "size_gb": None, "modified_at": None})
     # Sort: put embedding models last, everything else alphabetical
     models.sort(key=lambda m: (1 if "embed" in m["name"] else 0, m["name"]))
     return {"models": models, "provider": provider, "base_url": llm_base_url()}
@@ -494,7 +416,7 @@ async def debug_litellm(
     """Run a direct OpenAI-compatible chat-completions smoke test from this app process."""
     s = current_settings()
     provider = s.ai_provider.lower()
-    model_name = req.model or s.ai_model or s.report_model or s.ollama_model
+    model_name = req.model or s.ai_model or s.report_model
     try:
         user_msg = _debug_llm_user_message(req.mode, req.target_chars)
     except ValueError as e:
@@ -521,7 +443,7 @@ async def debug_litellm(
             status_code=503,
             detail={
                 "provider": provider,
-                "base_url": llm_base_url() if provider in ("litellm", "ollama") else None,
+                "base_url": llm_base_url() if provider == "litellm" else None,
                 "model": model_name,
                 "mode": req.mode,
                 "elapsed_seconds": round(elapsed, 2),
@@ -536,7 +458,7 @@ async def debug_litellm(
     return {
         "ok": True,
         "provider": provider,
-        "base_url": llm_base_url() if provider in ("litellm", "ollama") else None,
+        "base_url": llm_base_url() if provider == "litellm" else None,
         "model": model_name,
         "mode": req.mode,
         "elapsed_seconds": round(elapsed, 2),
@@ -630,7 +552,7 @@ async def market_chat(
 ):
     """
     General market/report chat. Loads the user's live portfolio + watchlist
-    as context, then calls Ollama with the question (and optional report markdown).
+    as context, then calls the configured LLM with the question (and optional report markdown).
     """
     import json
     from database.models import PortfolioPosition, WatchlistItem

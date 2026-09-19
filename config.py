@@ -28,20 +28,17 @@ class Settings(BaseSettings):
     ai_cache_ttl: int = 3600         # 1 hour
     cache_max_age_days: int = 180    # purge entries older than 180 days
 
-    # AI Provider ("none", "anthropic", "openai", "ollama", "litellm")
+    # AI Provider ("none", "anthropic", "openai", "litellm")
     ai_provider: str = "litellm"
     ai_api_key: str = ""
-    ai_model: str = "ollama/qwen3.5:9-mlx"
+    ai_model: str = "tooling_high"                 # LiteLLM tier alias, not a raw model name
 
     # FRED API (Federal Reserve Economic Data)
     fred_api_key: str = ""
 
-    # Ollama (local LLM server)
-    ollama_url: str = "http://192.168.0.21:11434"
-    ollama_model: str = "qwen3.5:9-mlx"            # general chat/analysis fallback
-    report_model: str = "ollama/qwen3.5:9-mlx"     # report generation
+    report_model: str = "tooling_high"     # report generation — LiteLLM tier alias
 
-    # LiteLLM (OpenAI-compatible proxy; can point at Ollama-backed models)
+    # LiteLLM (OpenAI-compatible proxy — the only AI backend this app talks to)
     litellm_url: str = "http://192.168.0.21:4000"  # e.g. http://192.168.0.21:4000
     litellm_api_key: str = ""                      # LiteLLM virtual key for this user/app
 

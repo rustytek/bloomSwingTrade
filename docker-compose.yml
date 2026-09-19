@@ -27,20 +27,16 @@ services:
       - HOST=0.0.0.0
       - PORT=8443
 
-      # ── AI Provider (none | anthropic | openai | ollama | litellm) ───────
+      # ── AI Provider (none | anthropic | openai | litellm) ────────────────
       - AI_PROVIDER=${AI_PROVIDER:-litellm}
       - AI_API_KEY=${AI_API_KEY:-}
-      - AI_MODEL=${AI_MODEL:-ollama/qwen3.5:9-mlx}
+      - AI_MODEL=${AI_MODEL:-tooling_high}
       - LITELLM_URL=${LITELLM_URL:-http://192.168.0.21:4000}
       - LITELLM_API_KEY=${LITELLM_API_KEY:-}
+      - REPORT_MODEL=${REPORT_MODEL:-tooling_high}
 
       # ── FRED API ─────────────────────────────────────────────────────────
       - FRED_API_KEY=${FRED_API_KEY:-}
-
-      # ── Ollama (local LLM) ────────────────────────────────────────────────
-      - OLLAMA_URL=${OLLAMA_URL:-http://192.168.0.21:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3.5:9-mlx}
-      - REPORT_MODEL=${REPORT_MODEL:-ollama/qwen3.5:9-mlx}
 
       # ── Cache TTLs (seconds) ──────────────────────────────────────────────
       - QUOTE_CACHE_TTL=${QUOTE_CACHE_TTL:-900}

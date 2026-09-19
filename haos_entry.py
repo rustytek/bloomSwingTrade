@@ -25,11 +25,9 @@ if os.path.exists(OPTS):
     os.environ["ADMIN_PASS"]  = str(opts.get("admin_pass",  "changeme"))
     os.environ["AI_PROVIDER"]  = str(opts.get("ai_provider",  "litellm"))
     os.environ["AI_API_KEY"]   = str(opts.get("ai_api_key",   ""))
-    os.environ["AI_MODEL"]     = str(opts.get("ai_model",     "ollama/qwen3.5:9-mlx"))
+    os.environ["AI_MODEL"]     = str(opts.get("ai_model",     "tooling_high"))
     os.environ["FRED_API_KEY"] = str(opts.get("fred_api_key", ""))
-    os.environ["OLLAMA_URL"]   = str(opts.get("ollama_url",   "http://192.168.0.21:11434"))
-    os.environ["OLLAMA_MODEL"] = str(opts.get("ollama_model", "qwen3.5:9-mlx"))
-    os.environ["REPORT_MODEL"] = str(opts.get("report_model", "ollama/qwen3.5:9-mlx"))
+    os.environ["REPORT_MODEL"] = str(opts.get("report_model", "tooling_high"))
     os.environ["LITELLM_URL"]  = str(opts.get("litellm_url",  "http://192.168.0.21:4000"))
     os.environ["LITELLM_API_KEY"] = str(opts.get("litellm_api_key", ""))
     os.environ["HOST"]         = "0.0.0.0"

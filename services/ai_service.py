@@ -123,7 +123,7 @@ class MockAIService(AIService):
         return {
             "summary": (
                 f"Swing trading analysis for {ticker} requires a configured AI provider. "
-                "Set AI_PROVIDER=litellm (local proxy), ollama, anthropic, or openai and the corresponding "
+                "Set AI_PROVIDER=litellm, anthropic, or openai and the corresponding "
                 "API key in your .env to enable real AI-powered swing trading strategy analysis."
             ),
             "sentiment": "neutral",
@@ -133,11 +133,11 @@ class MockAIService(AIService):
                 f"vs MA200: {'+' if vs_ma200 and vs_ma200 > 0 else ''}{round(vs_ma200, 1) if vs_ma200 else '—'}% — {'Above 200MA (uptrend)' if vs_ma200 and vs_ma200 > 0 else 'Below 200MA (downtrend)' if vs_ma200 else 'N/A'}",
                 f"Overall score: {score}/5 — configure an AI provider for a full swing trade plan",
             ],
-            "entry_strategy": "Configure an AI provider (Ollama/Anthropic/OpenAI) to see specific entry signals, price levels, and setup conditions.",
+            "entry_strategy": "Configure an AI provider (LiteLLM/Anthropic/OpenAI) to see specific entry signals, price levels, and setup conditions.",
             "exit_strategy": "Configure an AI provider to see profit targets, stop-loss levels, and trailing stop recommendations.",
             "ai_score": None,
             "risks": ["AI provider not configured — set AI_PROVIDER in .env"],
-            "opportunities": ["Enable Ollama for local/free analysis, or add Anthropic/OpenAI key"],
+            "opportunities": ["Enable LiteLLM for local/free analysis, or add Anthropic/OpenAI key"],
         }
 
     async def generate_signals(self, ticker: str, technicals: dict) -> list[dict]:
@@ -160,124 +160,22 @@ class MockAIService(AIService):
         return f"AI sector analysis for {sector} is not configured."
 
 
-# ── Ollama Implementation ─────────────────────────────────────────────────
-
-class OllamaAIService(AIService):
-    """
-    Ollama local LLM service.
-    Calls the Ollama /api/chat endpoint on your local network.
-    Set AI_PROVIDER=ollama in .env to activate.
-    """
-
-    def __init__(self):
-        settings = get_settings()
-        self.base_url = settings.ollama_url.rstrip("/")
-        self.model = settings.ollama_model
-        self._timeout = 120.0
-
-    async def _chat(self, system: str, user: str) -> str:
-        payload = {
-            "model": self.model,
-            "stream": False,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        }
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(f"{self.base_url}/api/chat", json=payload)
-            try:
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                raise RuntimeError(f"ollama returned HTTP {resp.status_code}: {resp.text[:500]}") from e
-            return resp.json()["message"]["content"]
-
-    async def analyze_stock(self, ticker: str, data: dict) -> dict:
-        system = (
-            "You are an expert swing trader. Analyze the given stock/ETF technical and fundamental data "
-            "and respond with a JSON object ONLY — no markdown, no extra text. "
-            "Required keys: "
-            "summary (string: 2-4 sentence swing trading outlook covering trend, momentum, and setup quality), "
-            "sentiment (bullish|bearish|neutral), "
-            "confidence (0.0-1.0), "
-            "key_factors (array of strings: specific observations about RSI level, MACD crossover, MA position, volume, 52W range, drawdown), "
-            "entry_strategy (string: ideal entry conditions — specific price level or signal trigger, e.g. 'Buy on pullback to MA50 if RSI drops below 50'), "
-            "exit_strategy (string: profit target and stop-loss levels, e.g. 'Target +8-12% near 52W high, stop at -4% below entry'), "
-            "ai_score (integer 1-10: swing trade quality score), "
-            "risks (array of 2-3 strings: key risks to this swing trade), "
-            "opportunities (array of 2-3 strings: specific catalysts or chart patterns supporting the trade)."
-        )
-        user = f"Analyze {ticker} for swing trading:\n{json.dumps(data, default=str)}"
-        try:
-            raw = await self._chat(system, user)
-            # Strip any markdown code fences the model may add
-            raw = _strip_json_fences(raw)
-            return json.loads(raw)
-        except Exception as e:
-            logger.error(f"Ollama analyze_stock failed for {ticker}: {e}")
-            return {
-                "summary": f"Ollama analysis failed: {e}",
-                "sentiment": "neutral", "confidence": 0.0,
-                "key_factors": [], "ai_score": None,
-                "risks": ["LLM unavailable"], "opportunities": [],
-            }
-
-    async def generate_signals(self, ticker: str, technicals: dict) -> list[dict]:
-        system = (
-            "You are a swing-trading signal generator. Based on the technical data provided, "
-            "return a JSON array of signal objects only — no markdown, no extra text. "
-            "Each object: type (entry|exit|warning|info), signal (short label), "
-            "message (explanation), strength (strong|moderate|weak)."
-        )
-        user = f"Generate signals for {ticker}:\n{json.dumps(technicals, default=str)}"
-        try:
-            raw = await self._chat(system, user)
-            raw = _strip_json_fences(raw)
-            return json.loads(raw)
-        except Exception as e:
-            logger.error(f"Ollama generate_signals failed for {ticker}: {e}")
-            return [{"type": "info", "signal": "LLM Error", "message": str(e), "strength": "weak"}]
-
-    async def chat(self, ticker: str, question: str, context: dict) -> str:
-        system = (
-            "You are a swing-trading assistant. Answer concisely using the stock data provided. "
-            "Use markdown formatting. Keep answers under 300 words."
-        )
-        user = (
-            f"Stock: {ticker}\nData: {json.dumps(context, default=str)}\n\nQuestion: {question}"
-        )
-        try:
-            return await self._chat(system, user)
-        except Exception as e:
-            logger.error(f"Ollama chat failed for {ticker}: {e}")
-            return f"Ollama error: {e}"
-
-    async def summarize_sector(self, sector: str, stocks: list[dict]) -> str:
-        system = (
-            "You are a market analyst. Write a 2-4 sentence markdown sector summary "
-            "based on the stock data provided."
-        )
-        user = f"Sector: {sector}\nStocks: {json.dumps(stocks[:10], default=str)}"
-        try:
-            return await self._chat(system, user)
-        except Exception as e:
-            logger.error(f"Ollama summarize_sector failed for {sector}: {e}")
-            return f"Ollama sector summary unavailable: {e}"
-
-
-# â”€â”€ LiteLLM Implementation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── LiteLLM Implementation ─────────────────────────────────────────────────
 
 class LiteLLMAIService(AIService):
     """
-    LiteLLM OpenAI-compatible proxy service.
-    Use this when LiteLLM routes requests to Ollama or other local models.
+    LiteLLM OpenAI-compatible proxy service. This app never calls Ollama (or
+    any other model runtime) directly — LiteLLM is the sole AI backend, and
+    `model` should always be a stable tier alias (e.g. `tooling_high`), never
+    a raw provider model name, so the physical model behind it can change
+    without a config edit here.
     Set AI_PROVIDER=litellm, LITELLM_URL, and model names in config.
     """
 
     def __init__(self, api_key: str | None = None):
         settings = get_settings()
-        self.base_url = (settings.litellm_url or settings.ollama_url).rstrip("/")
-        self.model = settings.ai_model or settings.ollama_model
+        self.base_url = settings.litellm_url.rstrip("/")
+        self.model = settings.ai_model
         # Per-user virtual key takes precedence; fall back to the global key.
         self.api_key = api_key or settings.litellm_api_key
         self._timeout = 120.0
@@ -453,9 +351,6 @@ def get_ai_service(api_key: str | None = None) -> AIService:
     (used to give each user their own virtual key)."""
     settings = get_settings()
     provider = settings.ai_provider.lower()
-
-    if provider == "ollama":
-        return OllamaAIService()
 
     if provider == "litellm":
         return LiteLLMAIService(api_key=api_key)

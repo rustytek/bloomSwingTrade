@@ -7,8 +7,9 @@ import numpy as np
 from sqlalchemy.orm import Session
 
 from database.models import PortfolioPosition, StockCache, WatchlistItem, WatchlistSnapshot
-from services.indicators import calc_ma
+from services.indicators import calc_ma, calc_adx
 from services.strategies import STRATEGIES
+from services.regime import QUADRANTS, QUADRANT_INFO, trend_strength_label, classify_quadrant
 
 
 def _safe_float(value):
@@ -414,6 +415,18 @@ def run_walk_forward_backtest(
 
     spy_closes = [b["close"] for b in spy]
     spy_ma = calc_ma(spy_closes, regime_ma)
+    spy_ma200 = calc_ma(spy_closes, 200)
+    adx_full = calc_adx(
+        [b["high"] for b in spy], [b["low"] for b in spy], spy_closes, 14
+    )["series"]
+    # Rolling 20-day realized volatility — the same VIX-proxy classify_regime()
+    # falls back to, precomputed once so per-period regime tagging is O(1).
+    vol20 = [None] * len(spy_closes)
+    for i in range(20, len(spy_closes)):
+        window = spy_closes[i - 20: i + 1]
+        rets = [(window[j] / window[j - 1] - 1) for j in range(1, len(window))]
+        if rets:
+            vol20[i] = (sum(r * r for r in rets) / len(rets)) ** 0.5 * (252 ** 0.5) * 100
 
     for start, end in zip(dates, dates[1:]):
         spy_start = _value_on_or_before(spy, start)
@@ -424,9 +437,16 @@ def run_walk_forward_backtest(
         _, spy_end_px = spy_end
         regime_ok = not spy_regime or (spy_ma[spy_idx] is not None and spy_start_px > spy_ma[spy_idx])
 
+        adx_val = adx_full[spy_idx]["adx"] if adx_full[spy_idx] else None
+        above_200_here = spy_ma200[spy_idx] is not None and spy_start_px > spy_ma200[spy_idx]
+        crisis_vol_here = vol20[spy_idx] is not None and vol20[spy_idx] >= 22.0
+        quadrant = classify_quadrant(trend_strength_label(adx_val), above_200_here, crisis_vol_here)
+
         ranked = []
         if regime_ok:
             for ticker, bars in histories.items():
+                if not strategy.applies_to(ticker):
+                    continue
                 start_point = _value_on_or_before(bars, start)
                 end_point = _value_on_or_before(bars, end)
                 if not start_point or not end_point or end_point[0] <= start_point[0]:
@@ -460,6 +480,9 @@ def run_walk_forward_backtest(
                 for ticker, rank, _, _ in selected
             ],
             "regime": "risk_on" if regime_ok else "cash",
+            "quadrant": quadrant,
+            "quadrant_label": QUADRANT_INFO[quadrant]["label"],
+            "adx": round(adx_val, 1) if adx_val is not None else None,
             "period_return": round(period_ret * 100, 2),
             "spy_return": round(spy_ret * 100, 2),
             "excess_return": round((period_ret - spy_ret) * 100, 2),
@@ -477,6 +500,29 @@ def run_walk_forward_backtest(
     metrics["avg_invested_return"] = round(mean(t["period_return"] for t in invested), 2) if invested else None
     benchmark_metrics["exposure"] = 100.0 if trades else None
 
+    # Per-regime breakdown — this is the "does the strategy actually earn its
+    # keep in the regime it's tagged for" check. A strategy tagged for
+    # trending_bull that loses money in trending_bull periods here is a red
+    # flag no aggregate Sharpe number would show.
+    regime_breakdown = []
+    for q in QUADRANTS:
+        rets = [t["period_return"] for t in trades if t["quadrant"] == q]
+        if not rets:
+            continue
+        wins = [r for r in rets if r > 0]
+        cum = 1.0
+        for r in rets:
+            cum *= (1 + r / 100)
+        regime_breakdown.append({
+            "quadrant": q,
+            "label": QUADRANT_INFO[q]["label"],
+            "periods": len(rets),
+            "pct_of_periods": round(len(rets) / len(trades) * 100, 1) if trades else 0,
+            "avg_period_return": round(mean(rets), 2),
+            "win_rate": round(len(wins) / len(rets) * 100, 1),
+            "cum_return": round((cum - 1) * 100, 2),
+        })
+
     return {
         "strategy": strategy_meta,
         "source": source,
@@ -487,12 +533,18 @@ def run_walk_forward_backtest(
         "trades": trades,
         "metrics": metrics,
         "benchmark_metrics": benchmark_metrics,
+        "regime_breakdown": regime_breakdown,
+        "strategy_regimes": strategy.regimes,
         "notes": [
             "Hypothetical backtest using cached adjusted daily closes only.",
             f"Strategy: {strategy.name}. {strategy.description}",
             "Modeled as an equal-weight top-N rotation rebalanced on the chosen cadence "
             "with turnover cost and an optional SPY regime filter. ATR stops/targets are "
             "NOT simulated intrabar — live trade plans add those on top.",
+            "regime_breakdown classifies each rebalance period by ADX(14) trend strength + "
+            "200-day MA direction (+ realized volatility as a VIX proxy) — compare it "
+            "against this strategy's tagged regimes to see if the edge actually shows up "
+            "where it's supposed to.",
         ],
     }
 

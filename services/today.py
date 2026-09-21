@@ -26,6 +26,7 @@ from services.strategies import STRATEGIES
 from services.trade_plan import build_trade_plan
 from services.universe import UNIVERSE
 from services import chart_service
+from services.regime import classify_regime, strategies_for_regime, QUADRANT_INFO
 
 _TTL_SECONDS = 15 * 60
 _cache: dict[int, tuple[dict, float]] = {}
@@ -157,6 +158,15 @@ def _load_all_cache(db: Session) -> dict[str, dict]:
 
 # ── Regime ───────────────────────────────────────────────────────────────────
 
+_QUADRANT_TO_LIGHT = {
+    "trending_bull": "green",
+    "choppy_calm": "yellow",
+    "trending_bear": "red",
+    "choppy_volatile": "red",
+    None: "yellow",
+}
+
+
 async def _build_regime(cache: dict[str, dict]) -> dict:
     spy = cache.get("SPY", {}).get("bars") or []
     closes = [b["close"] for b in spy] if spy else []
@@ -187,29 +197,21 @@ async def _build_regime(cache: dict[str, dict]) -> dict:
                 above += 1
     breadth_pct = round(above / total * 100, 1) if total else None
 
-    reasons: list[str] = []
-    above_200 = vs_ma200 is not None and vs_ma200 > 0
-    above_50 = vs_ma50 is not None and vs_ma50 > 0
-    if above_200:
-        reasons.append("SPY above 200-day MA")
-    else:
-        reasons.append("SPY below 200-day MA")
-    if above_50:
-        reasons.append("SPY above 50-day MA")
-    if vix_last is not None:
-        reasons.append(f"VIX {vix_last:.1f}")
-    if breadth_pct is not None:
-        reasons.append(f"{breadth_pct:.0f}% of names above 200-day MA")
+    classified = classify_regime(spy, vix_last=vix_last, breadth_pct=breadth_pct)
+    light = _QUADRANT_TO_LIGHT.get(classified["quadrant"], "yellow")
 
-    if not above_200 or (vix_last is not None and vix_last > 30):
-        light = "red"
-    elif (vix_last is not None and 25 <= vix_last <= 30) or not above_50:
-        light = "yellow"
-    else:
-        light = "green"
+    reasons = list(classified["reasons"])
+    if vix_last is not None and "VIX" not in " ".join(reasons):
+        reasons.append(f"VIX {vix_last:.1f}")
 
     return {
         "light": light,
+        "quadrant": classified["quadrant"],
+        "quadrant_label": classified["quadrant_label"],
+        "quadrant_description": classified.get("quadrant_description"),
+        "adx": classified["adx"],
+        "adx_trend": classified["adx_trend"],
+        "transition": classified["transition"],
         "spy": {
             "price": round(spy_price, 2) if spy_price else None,
             "vs_ma50": round(vs_ma50, 2) if vs_ma50 is not None else None,
@@ -260,8 +262,10 @@ def _build_positions(positions: list[PortfolioPosition], cache: dict[str, dict],
 
 def _build_setups(cache: dict[str, dict], held: set[str], account_size: float,
                   risk_pct: float, atr_mult: float, r_multiple: float,
+                  active_ids: set[str] | None = None,
                   per_strategy: int = 3, overall: int = 8) -> list[dict]:
-    by_strategy: dict[str, list] = {sid: [] for sid in STRATEGIES}
+    strategies = {sid: s for sid, s in STRATEGIES.items() if active_ids is None or sid in active_ids}
+    by_strategy: dict[str, list] = {sid: [] for sid in strategies}
     for ticker in UNIVERSE:
         if ticker in held:
             continue
@@ -270,7 +274,7 @@ def _build_setups(cache: dict[str, dict], held: set[str], account_size: float,
         quote = entry.get("quote") or {}
         if not bars:
             continue
-        for sid, strat in STRATEGIES.items():
+        for sid, strat in strategies.items():
             setup = strat.scan(ticker, bars, quote)
             if setup:
                 by_strategy[sid].append((setup, bars, quote))
@@ -285,13 +289,14 @@ def _build_setups(cache: dict[str, dict], held: set[str], account_size: float,
 
     out = []
     for setup, bars, quote in selected:
+        strat = STRATEGIES[setup.strategy]
         plan = build_trade_plan(
             bars,
             account_size=account_size,
             risk_pct=risk_pct,
             atr_mult=atr_mult,
             r_multiple=r_multiple,
-        )
+        ) if strat.actionable else None
         swing = compute_swing_score(quote) if quote else None
         out.append({
             "ticker": setup.ticker,
@@ -304,6 +309,7 @@ def _build_setups(cache: dict[str, dict], held: set[str], account_size: float,
             "reasons": setup.reasons,
             "swing_score": {"score": swing["score"], "grade": swing["grade"]} if swing else None,
             "plan": plan,
+            "actionable": strat.actionable,
         })
     return out
 
@@ -329,9 +335,27 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
     cache = _load_all_cache(db)
 
     regime = await _build_regime(cache)
+    active_ids = strategies_for_regime(regime["quadrant"])
     pos_rows = _build_positions(positions, cache, atr_stop_mult)
     held = {p.ticker for p in positions}
-    setups = _build_setups(cache, held, account_size, risk_pct, atr_stop_mult, r_multiple)
+    setups = _build_setups(cache, held, account_size, risk_pct, atr_stop_mult, r_multiple,
+                           active_ids=active_ids)
+
+    strategy_regime_status = [
+        {
+            "id": s.id,
+            "name": s.name,
+            "active": s.id in active_ids,
+            "regimes": s.regimes,
+            "actionable": s.actionable,
+            "reason": (
+                f"Matches current regime ({regime['quadrant_label']})" if s.id in active_ids
+                else f"Built for {', '.join(QUADRANT_INFO[q]['label'] for q in s.regimes) or 'no tagged regime'} — "
+                     f"current regime is {regime['quadrant_label']}, so this strategy sits out."
+            ),
+        }
+        for s in STRATEGIES.values()
+    ]
 
     # Data freshness from SPY cache row
     spy_row = db.query(StockCache).filter(StockCache.ticker == "SPY").first()
@@ -341,14 +365,18 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
     alerts = sum(1 for p in pos_rows if p["status"] != "ok")
     open_journal = db.query(ClosedTrade).filter(ClosedTrade.user_id == user_id).count()
 
+    # "Suppressed" no longer hides the setups list outright — bear/crisis
+    # regimes have their own tagged strategies (dual momentum's defensive
+    # rotation, the bear-reversal watchlist) that should still surface. It
+    # now just flags that fresh, un-tagged risk should not be added.
     suppressed = regime["light"] == "red"
     checklist = [
         {"id": "data", "label": "Market data fresh", "done": data_fresh,
          "detail": "refreshed after last close" if data_fresh else "stale — refresh on the Screener page"},
-        {"id": "regime", "label": f"Check regime ({regime['light'].upper()})", "done": True},
+        {"id": "regime", "label": f"Check regime ({regime['quadrant_label']}, ADX {regime['adx']})", "done": True},
         {"id": "positions", "label": f"Review {alerts} position alert(s)" if alerts else "No position alerts",
          "done": alerts == 0, "count": alerts},
-        {"id": "setups", "label": "Review today's top setups" if not suppressed else "Regime risk-off — hold cash",
+        {"id": "setups", "label": "Review today's top setups" if not suppressed else "Regime risk-off — favor defensive/watchlist-only setups",
          "done": False, "count": len(setups)},
         {"id": "journal", "label": "Journal any closed trades", "done": False, "count": open_journal},
     ]
@@ -358,6 +386,7 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
         "regime": regime,
         "positions": pos_rows,
         "setups": setups,
+        "strategy_regime_status": strategy_regime_status,
         "suppressed_by_regime": suppressed,
         "checklist": checklist,
         "capacity": {

@@ -191,11 +191,17 @@
       <div class="panel-title" style="margin-bottom:10px;">Backtest Results <span id="statsStrategy" class="panel-sub"></span></div>
       <div class="panel-desc" style="margin:0 0 12px;">These numbers summarize the strategy named above over the selected window — they update each time you click Run Backtest. Compare each to the SPY benchmark shown beneath it.</div>
       <section class="grid4" id="stats"></section>
+      <div class="panel" style="margin-top:14px;">
+        <div class="panel-title">Regime Performance Breakdown <span class="panel-sub">how this strategy did in each market regime</span></div>
+        <div class="panel-desc">Markets rotate between trending and choppy, calm and volatile conditions. This strategy is tagged for the regime(s) highlighted below — use this table to check whether its actual results back up that tag, or whether its overall numbers are mostly carried by a regime it wasn't built for.</div>
+        <div id="regimeBreakdown"></div>
+      </div>
     </section>
 
     <section class="panel" id="compareWrap" hidden>
-      <div class="panel-title">Strategy Comparison <span class="panel-sub">same settings, all four strategies</span></div>
-      <div class="panel-desc">Overlaid equity curves and key metrics. Prefer the strategy that beats SPY with the smoother ride (lower max drawdown, higher Sharpe) — not just the highest total return.</div>
+      <div class="panel-title">Strategy Comparison <span class="panel-sub">same settings, pick which strategies to overlay</span></div>
+      <div class="panel-desc">All strategies are fetched once so toggling below is instant. Prefer the strategy that beats SPY with the smoother ride (lower max drawdown, higher Sharpe) — not just the highest total return. Checkboxes default to strategies tagged for the current market regime (or the four core strategies if that can't be determined) to keep the chart readable — check more to compare further.</div>
+      <div id="compareChecks" style="margin-bottom:12px;"></div>
       <div class="chart-wrap"><canvas id="compareChart"></canvas></div>
       <div id="compareTable" style="margin-top:14px;"></div>
     </section>
@@ -417,6 +423,25 @@ function renderStats(bt) {
   ].join('');
 }
 
+function renderRegimeBreakdown(bt) {
+  const el = document.getElementById('regimeBreakdown');
+  if (!el) return;
+  const rows = bt.regime_breakdown || [];
+  if (!rows.length) { el.innerHTML = '<div class="note">No regime breakdown available for this window.</div>'; return; }
+  const tagged = new Set(bt.strategy_regimes || []);
+  el.innerHTML = `<table><thead><tr><th>Regime</th><th>% of Periods</th><th>Avg Period Return</th><th>Win Rate</th><th>Cumulative Return</th></tr></thead><tbody>${rows.map(r => {
+    const isTagged = tagged.has(r.quadrant);
+    const rowStyle = isTagged ? 'border-left:3px solid #f0a500;background:#1c1810;' : '';
+    return `<tr style="${rowStyle}">
+      <td>${isTagged ? `<strong style="color:#f0a500;">${esc(r.label)}</strong>` : esc(r.label)}</td>
+      <td>${fmtNum(r.pct_of_periods, 1)}%</td>
+      <td>${fmtPct(r.avg_period_return)}</td>
+      <td>${r.win_rate != null ? fmtNum(r.win_rate, 1) + '%' : '--'}</td>
+      <td>${fmtPct(r.cum_return)}</td>
+    </tr>`;
+  }).join('')}</tbody></table>`;
+}
+
 function drawdownSeries(points) {
   let peak = -Infinity;
   return (points || []).map(p => {
@@ -580,6 +605,7 @@ async function load() {
     ]);
     const replay = await api('/api/backtest/watchlist-replay?top_n=' + encodeURIComponent(document.getElementById('topN').value) + '&spy_regime=' + (document.getElementById('spyRegime').checked ? 'true' : 'false'));
     renderStats(bt);
+    renderRegimeBreakdown(bt);
     renderChart(bt);
     renderDrawdownChart(bt);
     renderTrades(bt);
@@ -593,8 +619,17 @@ async function load() {
 }
 
 const STRATEGY_LABELS = { momentum_rotation: 'Momentum Rotation', pullback_50ma: 'Pullback to 50MA', breakout_volume: 'Breakout + Volume', mean_reversion: 'Mean Reversion (RSI-2)' };
-const COMPARE_COLORS = ['#f0a500', '#7eb8f5', '#9b8cff', '#4fd1a5'];
+const CORE_STRATEGY_IDS = ['momentum_rotation', 'pullback_50ma', 'breakout_volume', 'mean_reversion'];
+const COMPARE_COLORS = ['#f0a500', '#7eb8f5', '#9b8cff', '#4fd1a5', '#ff6b9d', '#ffd166', '#06d6a0', '#ef476f', '#118ab2'];
+function colorForIndex(i) {
+  if (COMPARE_COLORS[i]) return COMPARE_COLORS[i];
+  // Beyond the hand-picked palette, generate additional distinct hues.
+  return `hsl(${(i * 47) % 360}, 70%, 60%)`;
+}
 let compareChart;
+let compareResults = [];
+let compareIds = [];
+let compareChecked = {};
 
 async function compareStrategies() {
   const status = document.getElementById('status');
@@ -621,37 +656,110 @@ async function compareStrategies() {
       if (arch) p.set('archive', 'true');
       results.push(await api('/api/backtest/walk-forward?' + p.toString()));
     }
+    compareResults = results;
+    compareIds = ids;
+
+    // Try to default-check the strategies tagged for the current market regime.
+    let currentRegime = null;
+    try {
+      const today = await api('/api/today');
+      currentRegime = today?.regime?.quadrant || null;
+    } catch (e) { /* fall back below */ }
+
+    compareChecked = {};
+    ids.forEach(id => {
+      const detail = STRATEGY_DETAILS[id];
+      if (currentRegime && detail && Array.isArray(detail.regimes)) {
+        compareChecked[id] = detail.regimes.includes(currentRegime);
+      } else {
+        compareChecked[id] = CORE_STRATEGY_IDS.includes(id);
+      }
+    });
+    if (!Object.values(compareChecked).some(Boolean)) {
+      ids.forEach(id => { if (CORE_STRATEGY_IDS.includes(id)) compareChecked[id] = true; });
+    }
+
     const wrap = document.getElementById('compareWrap');
     wrap.hidden = false;
-
-    // Overlaid equity curves (use the longest label set as the x-axis)
-    const longest = results.reduce((a, b) => (b.equity || []).length > (a.equity || []).length ? b : a, results[0]);
-    const labels = (longest.equity || []).map(p => p.date);
-    const datasets = results.map((bt, i) => ({
-      label: STRATEGY_LABELS[ids[i]], data: (bt.equity || []).map(p => p.value),
-      borderColor: COMPARE_COLORS[i], tension: .2, pointRadius: 0,
-    }));
-    datasets.push({ label: 'SPY', data: (longest.benchmark || []).map(p => p.value), borderColor: '#555', borderDash: [5, 4], tension: .2, pointRadius: 0 });
-    compareChart?.destroy();
-    compareChart = new Chart(document.getElementById('compareChart'), {
-      type: 'line', data: { labels, datasets },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#aaa' } } },
-        scales: { x: { ticks: { color: '#777', maxTicksLimit: 8 }, grid: { color: '#1a1a1a' } }, y: { ticks: { color: '#777' }, grid: { color: '#1a1a1a' } } } },
-    });
-
-    const spy = results[0].benchmark_metrics || {};
-    const rows = results.map((bt, i) => { const m = bt.metrics || {}; return `<tr>
-      <td><span class="pill" style="border-color:${COMPARE_COLORS[i]};color:${COMPARE_COLORS[i]};">${esc(STRATEGY_LABELS[ids[i]])}</span></td>
-      <td>${fmtPct(m.cagr)}</td><td>${fmtPct(m.total_return)}</td>
-      <td>${fmtNum(m.max_drawdown, 1)}%</td><td>${fmtNum(m.sharpe, 2)}</td><td>${fmtNum(m.sortino, 2)}</td>
-      <td>${m.win_rate ?? '--'}%</td><td>${m.exposure != null ? fmtNum(m.exposure, 1) + '%' : '--'}</td><td class="mono">${bt.available_tickers?.length || 0}</td></tr>`; }).join('');
-    document.getElementById('compareTable').innerHTML = `<table><thead><tr><th>Strategy</th><th>CAGR</th><th>Total</th><th>Max DD</th><th>Sharpe</th><th>Sortino</th><th>Win Rate</th><th>Exposure</th><th>Tested</th></tr></thead>
-      <tbody>${rows}<tr><td><span class="pill" style="border-color:#555;color:#888;">SPY benchmark</span></td><td>${fmtPct(spy.cagr)}</td><td>${fmtPct(spy.total_return)}</td><td>${fmtNum(spy.max_drawdown, 1)}%</td><td>${fmtNum(spy.sharpe, 2)}</td><td>${fmtNum(spy.sortino, 2)}</td><td>--</td><td>${spy.exposure != null ? fmtNum(spy.exposure, 1) + '%' : '--'}</td><td>--</td></tr></tbody></table>`;
+    renderCompareChecks();
+    renderCompareChart();
+    renderCompareTable();
     wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
     status.textContent = 'Comparison complete';
   } catch (e) {
     status.innerHTML = `<span class="error">${esc(e.message)}</span>`;
   }
+}
+
+function renderCompareChecks() {
+  const el = document.getElementById('compareChecks');
+  if (!el) return;
+  const boxes = compareIds.map((id, i) => `
+    <label class="hint" data-tip="Toggle ${esc(STRATEGY_LABELS[id])} on the chart and table below (already fetched, no re-run needed)." style="flex-direction:row;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-size:12px;background:#151515;border:1px solid #222;border-radius:4px;padding:5px 9px;">
+      <input type="checkbox" data-sid="${esc(id)}" ${compareChecked[id] ? 'checked' : ''} onchange="toggleCompareStrategy('${esc(id)}', this.checked)">
+      <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${colorForIndex(i)};flex-shrink:0;"></span>
+      ${esc(STRATEGY_LABELS[id])}
+    </label>`).join('');
+  el.innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;">
+      <button type="button" class="btn" onclick="setAllCompareChecked(true)">Select all</button>
+      <button type="button" class="btn" onclick="setAllCompareChecked(false)">Select none</button>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;">${boxes}</div>`;
+}
+
+function toggleCompareStrategy(id, checked) {
+  compareChecked[id] = checked;
+  renderCompareChart();
+  renderCompareTable();
+}
+
+function setAllCompareChecked(val) {
+  compareIds.forEach(id => { compareChecked[id] = val; });
+  renderCompareChecks();
+  renderCompareChart();
+  renderCompareTable();
+}
+
+function renderCompareChart() {
+  const selectedIdx = compareIds.map((id, i) => i).filter(i => compareChecked[compareIds[i]]);
+  const selectedResults = selectedIdx.map(i => compareResults[i]);
+  const longest = selectedResults.length
+    ? selectedResults.reduce((a, b) => (b.equity || []).length > (a.equity || []).length ? b : a, selectedResults[0])
+    : (compareResults[0] || {});
+  const labels = (longest.equity || []).map(p => p.date);
+  const datasets = selectedIdx.map(i => ({
+    label: STRATEGY_LABELS[compareIds[i]], data: (compareResults[i].equity || []).map(p => p.value),
+    borderColor: colorForIndex(i), tension: .2, pointRadius: 0,
+  }));
+  datasets.push({ label: 'SPY', data: (longest.benchmark || []).map(p => p.value), borderColor: '#555', borderDash: [5, 4], tension: .2, pointRadius: 0 });
+  compareChart?.destroy();
+  compareChart = new Chart(document.getElementById('compareChart'), {
+    type: 'line', data: { labels, datasets },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#aaa' } } },
+      scales: { x: { ticks: { color: '#777', maxTicksLimit: 8 }, grid: { color: '#1a1a1a' } }, y: { ticks: { color: '#777' }, grid: { color: '#1a1a1a' } } } },
+  });
+}
+
+function renderCompareTable() {
+  const spy = (compareResults[0] && compareResults[0].benchmark_metrics) || {};
+  const selectedIdx = compareIds.map((id, i) => i).filter(i => compareChecked[compareIds[i]]);
+  const rows = selectedIdx.map(i => {
+    const bt = compareResults[i];
+    const m = bt.metrics || {};
+    const detail = STRATEGY_DETAILS[compareIds[i]];
+    const regimePills = (detail?.regime_labels || []).map(l => `<span class="pill">${esc(l)}</span>`).join('') || '<span class="muted">--</span>';
+    return `<tr>
+      <td><span class="pill" style="border-color:${colorForIndex(i)};color:${colorForIndex(i)};">${esc(STRATEGY_LABELS[compareIds[i]])}</span></td>
+      <td>${fmtPct(m.cagr)}</td><td>${fmtPct(m.total_return)}</td>
+      <td>${fmtNum(m.max_drawdown, 1)}%</td><td>${fmtNum(m.sharpe, 2)}</td><td>${fmtNum(m.sortino, 2)}</td>
+      <td>${m.win_rate ?? '--'}%</td><td>${m.exposure != null ? fmtNum(m.exposure, 1) + '%' : '--'}</td><td class="mono">${bt.available_tickers?.length || 0}</td>
+      <td>${regimePills}</td></tr>`;
+  }).join('');
+  const el = document.getElementById('compareTable');
+  if (!rows) { el.innerHTML = '<div class="note">No strategies selected — check at least one above to see the comparison.</div>'; return; }
+  el.innerHTML = `<table><thead><tr><th>Strategy</th><th>CAGR</th><th>Total</th><th>Max DD</th><th>Sharpe</th><th>Sortino</th><th>Win Rate</th><th>Exposure</th><th>Tested</th><th>Regime fit</th></tr></thead>
+    <tbody>${rows}<tr><td><span class="pill" style="border-color:#555;color:#888;">SPY benchmark</span></td><td>${fmtPct(spy.cagr)}</td><td>${fmtPct(spy.total_return)}</td><td>${fmtNum(spy.max_drawdown, 1)}%</td><td>${fmtNum(spy.sharpe, 2)}</td><td>${fmtNum(spy.sortino, 2)}</td><td>--</td><td>${spy.exposure != null ? fmtNum(spy.exposure, 1) + '%' : '--'}</td><td>--</td><td>--</td></tr></tbody></table>`;
 }
 
 // ── Strategy detail ───────────────────────────────────────────────────────
@@ -684,9 +792,15 @@ function strategyDetailBlock(s, isSelected) {
   const params = (d.parameters || []).map(([k, v]) =>
     `<span class="pill"><span class="muted">${esc(k)}:</span>&nbsp;${esc(v)}</span>`).join('');
   const badge = isSelected ? ` <span class="pill" style="border-color:#3a2f10;color:#f0a500;background:#1c1810;">selected</span>` : '';
+  const regimePills = (s.regime_labels || []).map(l => `<span class="pill">${esc(l)}</span>`).join('') || '<span class="muted">Any regime</span>';
+  const watchlistNote = s.actionable === false
+    ? `<div class="warn" style="font-size:12px;font-weight:700;margin-bottom:10px;">Watchlist only — no trade plan</div>`
+    : '';
   return `
     <div style="font-size:15px;font-weight:800;color:#f0a500;margin-bottom:6px;">${esc(s.name)}${badge}</div>
     <div class="panel-desc">${esc(s.description)}</div>
+    <div style="margin-bottom:10px;"><strong style="color:#ccc;font-size:12px;">Best regime:</strong> ${regimePills}</div>
+    ${watchlistNote}
     ${d.how ? `<div style="margin-bottom:10px;"><strong style="color:#ccc;">How it works:</strong> ${esc(d.how)}</div>` : ''}
     ${d.horizon ? `<div style="margin-bottom:10px;color:#aaa;font-size:12px;"><strong style="color:#ccc;">Horizon:</strong> ${esc(d.horizon)}</div>` : ''}
     ${rules ? `<div style="margin-bottom:6px;"><strong style="color:#ccc;font-size:12px;">Rules &amp; calculation</strong></div>

@@ -35,7 +35,7 @@ React SPA (static/*.html) → FastAPI (main.py)
   → auth/ (JWT login/register)
   → api/ (stocks, screener, watchlist, portfolio, ai, charts, today, settings, journal, backtest)
   → services/ (market_data, indicators, ai_service, chart_service, report_service,
-               strategies, trade_plan, today)
+               strategies, regime, trade_plan, today)
   → SQLite via SQLAlchemy (database/)
 ```
 
@@ -57,7 +57,8 @@ React SPA (static/*.html) → FastAPI (main.py)
 | `services/market_data.py` | yfinance wrapper, dual-layer cache (in-memory dict + SQLite), indicator calculation |
 | `services/universe.py` | ~450 tickers: S&P 500 constituents + ETF lists |
 | `services/ai_service.py` | Abstract `AIService` base + Mock/LiteLLM implementations (Anthropic/OpenAI stubbed, not yet implemented) |
-| `services/indicators.py` | Technical indicators; includes `calc_atr(highs, lows, closes, period=14)` (Wilder-smoothed) |
+| `services/indicators.py` | Technical indicators; includes `calc_atr(highs, lows, closes, period=14)` (Wilder-smoothed) and `calc_adx(highs, lows, closes, period=14)` (Wilder ADX/+DI/-DI — trend-strength gauge behind `services/regime.py`) |
+| `services/regime.py` | ADX + 200MA + VIX/realized-vol market regime classifier — see "Market Regime" below |
 | `services/strategies.py` | 4-strategy framework; registry `STRATEGIES` (see below) |
 | `services/trade_plan.py` | `build_trade_plan(...)`: ATR entry zone, stop, fixed-fractional sizing, R-multiple target (see below) |
 | `services/today.py` | Builds the `/api/today` payload; exposes `position_flags()` helper (see below) |
@@ -77,8 +78,20 @@ Registry `STRATEGIES` maps ids to `Strategy` instances:
 - `pullback_50ma` — buy dips to the 50MA in an uptrend.
 - `breakout_volume` — 60-day-high breakout on >=1.5x volume.
 - `mean_reversion` — Connors-style RSI(2) < 10 washout above the 200MA (lower Bollinger touch confirms); short 3–10 day snap-back holds.
+- `dual_momentum` — Antonacci-style: 12-1 month absolute momentum gate (must beat cash) ranked by risk-adjusted (return/volatility) score.
+- `volatility_breakout` — Donchian 20-day-high breakout confirmed by ATR expansion (vs. `breakout_volume`'s share-volume confirmation).
+- `sector_rotation` — same regression-slope×R² approach as `momentum_rotation`, restricted to the 11 SPDR sector ETFs via `applies_to()`.
+- `bear_reversal_watch` — RSI(2) > 90 inside a confirmed downtrend; `actionable = False` (watchlist-only, never gets a trade plan — this is a long-only app).
+- `low_vol_trend` — uptrend names ranked by lowest realized volatility; defensive tilt for choppy/volatile regimes.
 
-Each `Strategy` exposes `candidate(bars, idx)` (backtest hook, uses `bars[:idx+1]`) and `scan(ticker, bars, quote)` (live hook returning a `Setup`).
+Each `Strategy` exposes `candidate(bars, idx)` (backtest hook, uses `bars[:idx+1]`) and `scan(ticker, bars, quote)` (live hook returning a `Setup`). Two additional class attributes drive regime awareness and safety: `regimes: list[str]` (which `services/regime.py` quadrants a strategy is built for) and `actionable: bool` (whether it should ever get a live trade plan). `applies_to(ticker)` restricts a strategy to a ticker sub-universe (used by `sector_rotation`); it's checked by both `scan()` and the walk-forward backtest.
+
+### Market Regime (`services/regime.py`)
+Two independent axes classify the market into one of four quadrants (`QUADRANTS`): **direction** (SPY above/below its 200-day MA) and **trend strength**, measured by `calc_adx` (ADX(14) on SPY — the "when to change strategies" indicator: ADX >= 25 is trending, < 20 is choppy, 20–25 is a transition band), plus a VIX-based (or, for historical backtests without a per-date VIX, SPY's own realized-volatility proxy) crisis overlay:
+- `trending_bull` / `trending_bear` — ADX >= ~20 and above/below the 200MA.
+- `choppy_calm` / `choppy_volatile` — ADX < 25 with normal/elevated volatility.
+
+`classify_regime()` also returns a `transition` event (e.g. "ADX fell below 20 — trend exhausted, favor mean-reversion") whenever a threshold was crossed in the last few sessions — this is what `today.html`'s regime banner surfaces as the "time to change strategy" signal. `strategies_for_regime(quadrant)` returns the strategy ids tagged for a quadrant; `services/today.py::build_today` uses it to mark each strategy active/inactive for the live setups list, and `services/backtest.py::run_walk_forward_backtest` uses the same `classify_quadrant`/`trend_strength_label` helpers to tag every historical rebalance period, producing a `regime_breakdown` (per-quadrant CAGR/win-rate) in the walk-forward response — the Backtest page's Strategy Comparison and single-strategy results both surface this.
 
 ### Trade Plans (`services/trade_plan.py`)
 `build_trade_plan(...)` produces an ATR-based entry zone, a stop (`entry − atr_mult×ATR`), a fixed-fractional position size from account size + risk %, and an R-multiple target.

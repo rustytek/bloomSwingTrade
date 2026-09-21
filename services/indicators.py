@@ -87,6 +87,92 @@ def calc_atr(
     return result
 
 
+def calc_adx(
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    period: int = 14,
+) -> dict:
+    """Wilder's ADX/+DI/-DI — measures trend STRENGTH (not direction).
+
+    ADX >= 25 is conventionally "trending" (trend-following/breakout edges
+    hold up); ADX < 20 is "choppy/range" (mean-reversion/rotation edges hold
+    up instead, trend-followers whipsaw). 20-25 is a transition band.
+    Returns list-aligned dicts {adx, plus_di, minus_di} with None padding.
+    """
+    n = min(len(highs), len(lows), len(closes))
+    result: list[Optional[dict]] = [None] * n
+    if n < period * 2 + 1:
+        return {"series": result, "adx": None, "plus_di": None, "minus_di": None}
+
+    trs, plus_dms, minus_dms = [], [], []
+    for i in range(1, n):
+        up_move = highs[i] - highs[i - 1]
+        down_move = lows[i - 1] - lows[i]
+        plus_dms.append(up_move if (up_move > down_move and up_move > 0) else 0.0)
+        minus_dms.append(down_move if (down_move > up_move and down_move > 0) else 0.0)
+        trs.append(max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        ))
+
+    def _wilder_smooth(values: list[float]) -> list[float]:
+        smoothed = [float(np.sum(values[:period]))]
+        for v in values[period:]:
+            smoothed.append(smoothed[-1] - smoothed[-1] / period + v)
+        return smoothed
+
+    tr_s = _wilder_smooth(trs)
+    plus_s = _wilder_smooth(plus_dms)
+    minus_s = _wilder_smooth(minus_dms)
+
+    dx_series: list[Optional[float]] = []
+    plus_di_series: list[Optional[float]] = []
+    minus_di_series: list[Optional[float]] = []
+    for tr_v, p_v, m_v in zip(tr_s, plus_s, minus_s):
+        if tr_v <= 0:
+            plus_di_series.append(None)
+            minus_di_series.append(None)
+            dx_series.append(None)
+            continue
+        plus_di = 100 * p_v / tr_v
+        minus_di = 100 * m_v / tr_v
+        plus_di_series.append(plus_di)
+        minus_di_series.append(minus_di)
+        denom = plus_di + minus_di
+        dx_series.append(100 * abs(plus_di - minus_di) / denom if denom > 0 else 0.0)
+
+    valid_dx = [d for d in dx_series if d is not None]
+    if len(valid_dx) < period:
+        return {"series": result, "adx": None, "plus_di": None, "minus_di": None}
+
+    adx_vals = [float(np.mean(valid_dx[:period]))]
+    for d in valid_dx[period:]:
+        adx_vals.append((adx_vals[-1] * (period - 1) + d) / period)
+
+    # Align back onto the original n-length series. First `period` (TR/DM
+    # smoothing) + `period` (ADX smoothing) bars have no value.
+    offset = n - len(adx_vals)
+    for i, adx_v in enumerate(adx_vals):
+        idx = offset + i
+        if 0 <= idx < n:
+            di_idx = idx - 1  # dx/DI series is offset by the initial diff()
+            result[idx] = {
+                "adx": _safe(adx_v),
+                "plus_di": _safe(plus_di_series[di_idx]) if 0 <= di_idx < len(plus_di_series) else None,
+                "minus_di": _safe(minus_di_series[di_idx]) if 0 <= di_idx < len(minus_di_series) else None,
+            }
+
+    last = next((v for v in reversed(result) if v is not None), None)
+    return {
+        "series": result,
+        "adx": last["adx"] if last else None,
+        "plus_di": last["plus_di"] if last else None,
+        "minus_di": last["minus_di"] if last else None,
+    }
+
+
 def calc_macd(closes: list[float]) -> dict:
     ema12 = calc_ema(closes, 12)
     ema26 = calc_ema(closes, 26)

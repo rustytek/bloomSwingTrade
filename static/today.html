@@ -166,14 +166,23 @@
   function renderRegime(r) {
     const when = DATA.as_of ? new Date(DATA.as_of).toLocaleString() : '';
     const cap = DATA.capacity || {};
+    const transition = r.transition && r.transition.changed
+      ? `<div class="chip" style="background:#3a3110;border-color:#f0a500;color:#f0a500;font-weight:700;">⚡ TIME TO CHANGE: ${esc(r.transition.reason)}</div>`
+      : '';
+    const statuses = DATA.strategy_regime_status || [];
+    const activeChips = statuses.filter(s => s.active).map(s => `<span class="chip" title="${esc(s.reason)}" style="border-color:#1d3a1d;color:#8f8;">${esc(s.name)}</span>`).join('');
+    const inactiveChips = statuses.filter(s => !s.active).map(s => `<span class="chip" title="${esc(s.reason)}" style="opacity:.5;text-decoration:line-through;">${esc(s.name)}</span>`).join('');
     document.getElementById('regimeWrap').innerHTML = `
       <div class="regime ${r.light}">
         <div class="regime-light ${r.light}"></div>
         <div style="flex:1;min-width:0;">
-          <div class="regime-head">${r.light === 'green' ? 'RISK-ON' : r.light === 'yellow' ? 'CAUTION' : 'RISK-OFF'}
-            <span class="regime-sub" style="font-weight:400;">· as of ${esc(when)}</span></div>
+          <div class="regime-head">${esc(r.quadrant_label || (r.light === 'green' ? 'RISK-ON' : r.light === 'yellow' ? 'CAUTION' : 'RISK-OFF'))}
+            <span class="regime-sub" style="font-weight:400;">· ADX ${r.adx ?? '--'} (${esc(r.adx_trend || '--')}) · as of ${esc(when)}</span></div>
+          <div class="regime-sub">${esc(r.quadrant_description || '')}</div>
           <div class="regime-sub">SPY ${r.spy.price != null ? '$' + r.spy.price : '--'} · vs50 ${r.spy.vs_ma50 ?? '--'}% · vs200 ${r.spy.vs_ma200 ?? '--'}% · ${cap.open_positions}/${cap.max_positions} positions (${cap.slots_free} slots free)</div>
-          <div class="chips">${(r.reasons || []).map(x => `<span class="chip">${esc(x)}</span>`).join('')}</div>
+          <div class="chips">${(r.reasons || []).map(x => `<span class="chip">${esc(x)}</span>`).join('')}${transition}</div>
+          <div class="chips" style="margin-top:6px;"><span class="muted" style="font-size:10px;margin-right:4px;">ACTIVE:</span>${activeChips}</div>
+          ${inactiveChips ? `<div class="chips" style="margin-top:4px;"><span class="muted" style="font-size:10px;margin-right:4px;">SITTING OUT:</span>${inactiveChips}</div>` : ''}
         </div>
       </div>`;
   }
@@ -205,11 +214,9 @@
   function renderSetups(d) {
     const wrap = document.getElementById('setupsWrap');
     wrap.hidden = false;
-    if (d.suppressed_by_regime) {
-      wrap.innerHTML = `<div class="panel-title">Today's Top Setups</div>
-        <div class="empty warn">Market regime is risk-off — new long setups are suppressed. Protect capital and let the regime turn back green before adding risk.</div>`;
-      return;
-    }
+    const suppressWarning = d.suppressed_by_regime
+      ? `<div class="empty warn" style="margin-bottom:10px;">Market regime is risk-off — only setups tagged for this regime (defensive rotation, watchlist-only warnings) are shown below. Protect capital and let the regime turn back green before adding fresh risk.</div>`
+      : '';
     const setups = d.setups || [];
     const body = setups.length === 0
       ? `<div class="empty">No qualifying setups in the universe right now. Data may still be backfilling, or no charts meet the strategy filters today.</div>`
@@ -238,7 +245,7 @@
           </div>`;
         }).join('')}</div>`;
     wrap.innerHTML = `<div class="panel-title">Today's Top Setups</div>
-      <div class="panel-desc">Best candidates across all four strategies, skipping names you already hold. Each plan sizes from your account & risk settings.</div>${body}`;
+      <div class="panel-desc">Best candidates across the strategies currently active for this market regime (see chips above), skipping names you already hold. Each plan sizes from your account & risk settings; watchlist-only strategies show no plan by design.</div>${suppressWarning}${body}`;
   }
 
   function renderChecklist(items) {

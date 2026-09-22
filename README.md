@@ -1,16 +1,45 @@
 # SwingTrader
 
-A self-hosted swing trading screener with:
+A self-hosted swing trading screener and **strategy planning system** with:
 - Live data via **Yahoo Finance** (yfinance)
 - **HTTPS** with auto-generated self-signed certificate
 - **Multi-user login** (JWT auth, bcrypt passwords)
 - Per-user **watchlist** and **portfolio** tracking (SQLite)
-- Technical indicators: RSI, MACD, Bollinger Bands, MA50/200, Golden/Death Cross
-- F / T / M scoring system (Fundamental / Technical / Momentum)
-- Decision cockpit: risk flags, opportunity queue, exit pressure, and signal changes
-- Walk-forward backtest lab for a regime-aware relative-strength strategy
-- **AI analysis hooks** — ready for Anthropic Claude or OpenAI (mock by default)
-- Dark terminal aesthetic React UI
+- Technical indicators: RSI, MACD, Bollinger Bands, MA50/200 trend state, Golden/Death Cross events, ADX
+- F / T / M scoring plus an explainable 0–100 swing score
+- **9 strategies** across 4 market-regime quadrants (ADX + 200MA + volatility)
+- **AI analysis hooks** — LiteLLM, Anthropic Claude or OpenAI (mock by default)
+- Dark terminal aesthetic UI
+
+### The planning loop
+
+The app is built around one idea: **every recommendation should be traceable to a tested
+number, and anything it cannot measure should say so rather than guess.**
+
+| Page | What it answers |
+|---|---|
+| **Playbook** (`/`) | What do I do today? Setups grouped by strategy, each carrying that strategy's tested edge *in the current regime*, with a Plan-a-Trade modal that checks correlation, sector drift and open risk **before** the position exists — and blocks the commit when a hard limit would be breached. |
+| **Strategy Lab** (`/backtest`) | Does this strategy actually work? A strategy × regime **edge matrix** with Wilson confidence intervals and `confirmed` / `unproven` / `mis-tagged` verdicts, plus walk-forward backtests in two modes. |
+| **Scorecard** (`/scorecard`) | Am I executing it? Realized results vs what the backtest expected, and execution leaks ranked by what they cost in R. |
+| **Screener / Charts / Journal** | The underlying universe, market context, and closed-trade log. |
+
+### Two backtest modes — the distinction matters
+
+- `rotation` — equal-weight top-N rotation with a turnover cost. **Does not simulate stops or
+  targets**, so it measures a different system than the one you actually trade.
+- `trade_plan` — sizes every entry with fixed-fractional risk, caps the book at your
+  `max_positions` (and counts the signals you therefore *couldn't* take), tracks cash that
+  earns nothing, and resolves exits bar-by-bar with a real exit framework (ATR trailing stop,
+  time stop, partial profit-taking, regime exit).
+
+Every backtest response carries structured **caveats** — survivorship bias, sample size, and
+which mode produced the result — and every regime cell carries a confidence label, so a
+40-observation cell never looks like a 300-observation one.
+
+> **Survivorship bias is disclosed, not corrected.** The universe is *today's* S&P 500
+> constituents, so any backtest only includes companies that survived and stayed in the index.
+> This inflates every historical result. Point-in-time index membership is not available via
+> yfinance and is not reconstructed.
 
 ---
 
@@ -175,10 +204,25 @@ Full interactive docs available at: `https://localhost:8443/api/docs`
 ### Portfolio
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/portfolio` | Positions with live P&L |
-| POST | `/api/portfolio` | Add/update position |
-| DELETE | `/api/portfolio/{ticker}` | Remove position |
+| GET | `/api/portfolio` | Positions with live P&L, open R and portfolio heat |
+| POST | `/api/portfolio` | Add/update position (carries the trade plan's intent) |
+| DELETE | `/api/portfolio/{ticker}` | Remove position (no journal entry) |
+| POST | `/api/portfolio/{ticker}/close` | Close and archive to the journal |
+| GET | `/api/portfolio/risk` | Heat, open risk, sector concentration, correlation matrix |
+| POST | `/api/portfolio/assess` | Pre-trade check — block/warn before opening a position |
 | POST | `/api/portfolio/import` | Import Fidelity CSV |
+
+### Strategy & evidence
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/today` | Playbook payload: regime, positions, setups with plans |
+| GET | `/api/backtest/strategies` | Strategy catalog with rules, scoring and `backtestable` |
+| GET | `/api/backtest/walk-forward` | Walk-forward; `mode=rotation\|trade_plan` |
+| GET | `/api/edge-matrix` | Strategy × regime evidence. A cold call returns `not_computed` rather than blocking — pass `?refresh=true` to build (slow) |
+| POST | `/api/edge-matrix/invalidate` | Bust the cached matrix |
+| GET | `/api/scorecard` | Realized vs expected per strategy + execution quality |
+| GET/PUT | `/api/settings` | account_size, risk_pct, max_positions, atr_stop_mult, r_multiple, max_open_r |
+| GET | `/api/journal` | Closed trades, stats, per-strategy breakdown, equity curve |
 
 ### AI (hooks)
 | Method | Endpoint | Description |

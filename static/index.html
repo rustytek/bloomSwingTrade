@@ -2038,7 +2038,7 @@
       const pct = total > 0 ? Math.round(loaded / total * 100) : 0;
       const isLoading = loaded < total;
       return <div style={{
-        height: 44, background: '#111', borderBottom: '1px solid #1a1a1a',
+        height: 44, background: '#121215', borderBottom: '1px solid #232327',
         display: 'flex', alignItems: 'center', padding: '0 16px', gap: 12, flexShrink: 0
       }}>
         <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 14, fontWeight: 700, color: '#ffffff', letterSpacing: 1 }}>▲ SWING TRADER</span>
@@ -2058,15 +2058,19 @@
           )}
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {/* Keep in sync with NAV_LINKS in static/js/common.js. This page cannot
+              load common.js (it defines its own `api`/`token`, which would
+              redeclare and break the bundle), so the list is mirrored here. */}
           {[
-            ['/', 'Today'], ['/screener', 'Screener'], ['/charts', 'Charts'],
-            ['/backtest', 'Backtest'], ['/report', 'Report'], ['/journal', 'Journal'],
+            ['/', 'Playbook'], ['/screener', 'Screener'], ['/charts', 'Charts'],
+            ['/backtest', 'Strategy Lab'], ['/scorecard', 'Scorecard'],
+            ['/report', 'Report'], ['/journal', 'Journal'],
           ].map(([href, label]) => {
             const active = href === '/screener';
             return <a key={href} href={href} style={{
               display: 'inline-flex', alignItems: 'center', padding: '5px 10px', borderRadius: 3,
-              border: '1px solid ' + (active ? '#3a2f10' : '#2a2a2a'),
-              background: active ? '#1c1810' : '#1a1a1a',
+              border: '1px solid ' + (active ? '#3a2f10' : '#2a2a2f'),
+              background: active ? '#1c1810' : '#1a1a1e',
               color: active ? '#f0a500' : '#999', fontSize: 11, fontWeight: 600,
               textDecoration: 'none', fontFamily: "'Inter',sans-serif", whiteSpace: 'nowrap'
             }}>{label}</a>;

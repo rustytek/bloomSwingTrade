@@ -850,6 +850,87 @@ def test_r_multiple_known_cases():
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Top-bar navigation consistency
+#
+# `static/js/common.js` owns NAV_LINKS, but charts.html, report.html and
+# index.html CANNOT load common.js — each defines its own `api`/`token`/`esc`,
+# and a duplicate `const token` is a SyntaxError that kills the whole script.
+# So those three mirror the nav by hand, and a hand mirror drifts silently:
+# they kept saying "Today" and "Backtest" with no Scorecard link long after
+# the rest of the app was renamed, so clicking Charts visibly jumped back to
+# the old header. These tests are the tripwire for that.
+# ──────────────────────────────────────────────────────────────────────────
+
+import os as _os
+import re as _re
+
+_STATIC = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "static")
+
+
+def _read_static(*parts):
+    with open(_os.path.join(_STATIC, *parts), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _canonical_nav():
+    """[(href, label), ...] from NAV_LINKS in common.js — the single source."""
+    js = _read_static("js", "common.js")
+    body = js.split("const NAV_LINKS = [", 1)[1].split("];", 1)[0]
+    return _re.findall(r"\['(/[a-z]*)',\s*'([^']+)'", body)
+
+
+@test
+def test_hand_mirrored_navs_match_common_js():
+    canonical = _canonical_nav()
+    assert len(canonical) >= 6, canonical
+    for page in ("charts.html", "report.html"):
+        html = _read_static(page)
+        mirrored = _re.findall(
+            r'href="(/[a-z]*)"\s+class="navlink[^"]*"\s*>([^<]+)<', html
+        )
+        assert mirrored == canonical, (
+            page + " nav drifted from common.js NAV_LINKS. "
+            "common.js=" + repr(canonical) + " page=" + repr(mirrored)
+        )
+
+
+@test
+def test_index_html_nav_matches_common_js():
+    """index.html is React/JSX, so its mirror is a JS array, not markup."""
+    canonical = _canonical_nav()
+    html = _read_static("index.html")
+    body = html.split("Keep in sync with NAV_LINKS", 1)[1].split(".map(", 1)[0]
+    mirrored = _re.findall(r"\['(/[a-z]*)',\s*'([^']+)'\]", body)
+    assert mirrored == canonical, (
+        "index.html nav drifted from common.js NAV_LINKS. "
+        "common.js=" + repr(canonical) + " index.html=" + repr(mirrored)
+    )
+
+
+@test
+def test_every_nav_target_has_a_route():
+    """A nav entry pointing at a route main.py does not serve is a dead link."""
+    main_src = open(
+        _os.path.join(_os.path.dirname(_STATIC), "main.py"), encoding="utf-8"
+    ).read()
+    for href, label in _canonical_nav():
+        assert ('@app.get("' + href + '")') in main_src, (
+            "no route in main.py for " + href + " (" + label + ")"
+        )
+
+
+@test
+def test_all_topbars_share_one_palette():
+    """Clicking between pages must not change the header's look."""
+    bg, border = "#121215", "#232327"
+    for page in ("today.html", "backtest.html", "scorecard.html", "journal.html",
+                 "admin.html", "charts.html", "report.html", "index.html"):
+        html = _read_static(page)
+        assert bg in html, page + " topbar background is not " + bg
+        assert border in html, page + " topbar border is not " + border
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Runner
 # ──────────────────────────────────────────────────────────────────────────
 def main() -> int:

@@ -6,8 +6,10 @@ from pydantic import BaseModel
 from database.db import get_db
 from database.models import User, PortfolioPosition, ClosedTrade
 from auth.deps import get_current_user
-from services import market_data
+from services import market_data, portfolio_risk
 from services.tickers import normalize_ticker
+from services.trade_plan import build_trade_plan
+from api.settings import resolve_max_open_r
 import csv
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
@@ -22,6 +24,29 @@ class PositionRequest(BaseModel):
     target: float | None = None
     entry_date: date | None = None
     strategy: str | None = None
+    # The trade plan's intent. `planned_entry` / `planned_entry_high` are
+    # WRITE-ONCE (like initial_stop) — they are the denominator of the
+    # entry-chasing execution metric, so an edit must not rewrite them.
+    planned_entry: float | None = None
+    planned_entry_high: float | None = None
+    thesis: str | None = None
+    invalidation: str | None = None
+    time_stop_days: int | None = None
+
+
+class AssessRequest(BaseModel):
+    """Pre-trade assessment request for the 'Plan a Trade' screen.
+
+    Everything but `ticker` is optional: with no overrides the plan is built from
+    cached bars and the user's saved risk settings.
+    """
+    ticker: str
+    entry: float | None = None
+    shares: float | None = None
+    stop: float | None = None
+    atr_mult: float | None = None
+    r_multiple: float | None = None
+    edge_multiplier: float | None = None
 
 
 class CloseRequest(BaseModel):
@@ -30,14 +55,186 @@ class CloseRequest(BaseModel):
     notes: str | None = None
 
 
+def compute_r_multiple(avg_cost: float, exit_price: float,
+                       initial_stop: float | None, stop_loss: float | None):
+    """Realized R for a closed long, measured against the INITIAL stop.
+
+    R must reflect the risk actually taken when the trade was opened. Using the
+    current (possibly trailed-up) stop as the denominator shrinks the
+    denominator over the life of the trade and inflates every recorded R.
+    `initial_stop` is null on legacy rows written before the column existed —
+    those fall back to stop_loss. Returns None when no valid stop below cost
+    exists (a stop at or above cost has no meaningful R).
+    """
+    r_stop = initial_stop if initial_stop is not None else stop_loss
+    if r_stop is None or avg_cost - r_stop <= 0:
+        return None, r_stop
+    return round((exit_price - avg_cost) / (avg_cost - r_stop), 2), r_stop
+
+
+def _risk_settings(user: User) -> dict:
+    """User risk settings for services.portfolio_risk.
+
+    `max_open_r` is the user's CHOSEN ceiling when `User.max_open_r` is set, and
+    otherwise falls back to the derived `max_positions x risk_pct` (the exposure
+    of a fully loaded book at full per-trade risk). `max_open_r_basis` records
+    which of the two is in play — see api/settings.py::resolve_max_open_r.
+    """
+    budget, basis = resolve_max_open_r(user)
+    return {
+        "account_size": user.account_size,
+        "risk_pct": user.risk_pct,
+        "max_positions": user.max_positions,
+        "atr_stop_mult": user.atr_stop_mult,
+        "r_multiple": user.r_multiple,
+        "max_open_r": budget,
+        "max_open_r_basis": basis,
+        "max_open_r_chosen": getattr(user, "max_open_r", None),
+    }
+
+
+def _with_basis(heat: dict, basis: str) -> dict:
+    """Overwrite portfolio_risk's derived-budget note with the real basis.
+
+    services/portfolio_risk.py is a pure module with no access to the User row,
+    so it always stamps the DERIVED note. When the user has chosen a ceiling
+    that note is wrong — correct it here rather than editing that module.
+    """
+    if isinstance(heat, dict):
+        heat["budget_basis"] = basis
+    return heat
+
+
+def _risk_unit(user: User) -> float | None:
+    """Dollar value of 1R for this user, or None if settings are unusable."""
+    try:
+        unit = float(user.account_size) * float(user.risk_pct) / 100.0
+    except (TypeError, ValueError):
+        return None
+    return unit if unit > 0 else None
+
+
+@router.get("/risk")
+async def get_portfolio_risk(
+    window: int = Query(portfolio_risk.DEFAULT_WINDOW, ge=20, le=500,
+                        description="Trailing daily returns used for correlation"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Portfolio-level risk: heat, open risk, concentration, correlation matrix.
+
+    Correlations are Pearson on DAILY RETURNS (never price levels), aligned by
+    date, and reported as null for pairs with fewer than
+    `portfolio_risk.MIN_OVERLAP` shared observations.
+    """
+    positions = db.query(PortfolioPosition).filter(PortfolioPosition.user_id == user.id).all()
+    settings = _risk_settings(user)
+    unit = _risk_unit(user)
+
+    if not positions:
+        empty_heat = _with_basis(portfolio_risk.portfolio_heat(
+            [], {}, settings["max_open_r"], risk_unit=unit,
+            max_positions=user.max_positions,
+        ), settings["max_open_r_basis"])
+        return {
+            "settings": settings,
+            "open_risk": portfolio_risk.open_risk([], {}, risk_unit=unit),
+            "concentration": portfolio_risk.concentration([], {}),
+            "portfolio_heat": empty_heat,
+            "correlation": portfolio_risk.correlation_matrix({}, window=window),
+        }
+
+    tickers = [p.ticker for p in positions]
+    quotes = await market_data.get_batch(tickers, db)
+    histories = {t: await market_data.get_history(t, db) for t in tickers}
+
+    return {
+        "settings": settings,
+        "open_risk": portfolio_risk.open_risk(positions, quotes, risk_unit=unit),
+        "concentration": portfolio_risk.concentration(positions, quotes),
+        "portfolio_heat": _with_basis(portfolio_risk.portfolio_heat(
+            positions, quotes, settings["max_open_r"], risk_unit=unit,
+            max_positions=user.max_positions,
+        ), settings["max_open_r_basis"]),
+        "correlation": portfolio_risk.correlation_matrix(histories, window=window),
+    }
+
+
+@router.post("/assess")
+async def assess_position(
+    req: AssessRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Pre-trade check for a candidate position — the 'Plan a Trade' backend.
+
+    Builds a trade plan from cached bars + the user's risk settings (any field
+    can be overridden on the request), then runs it through
+    `portfolio_risk.assess_new_position` for correlation / sector / open-R /
+    slot checks and a before -> after projection.
+    """
+    ticker = normalize_ticker(req.ticker)
+    bars = await market_data.get_history(ticker, db)
+    if not bars:
+        raise HTTPException(status_code=404, detail=f"No price history available for {ticker}")
+
+    plan = build_trade_plan(
+        bars,
+        account_size=user.account_size,
+        risk_pct=user.risk_pct,
+        entry=req.entry,
+        atr_mult=req.atr_mult if req.atr_mult is not None else user.atr_stop_mult,
+        r_multiple=req.r_multiple if req.r_multiple is not None else user.r_multiple,
+        edge_multiplier=req.edge_multiplier if req.edge_multiplier is not None else 1.0,
+    )
+    if not plan:
+        raise HTTPException(status_code=422,
+                            detail=f"Could not build a trade plan for {ticker} from cached data")
+
+    # Manual overrides win over the computed plan.
+    if req.stop is not None:
+        plan = dict(plan)
+        plan["stop"] = req.stop
+        plan["initial_stop"] = req.stop
+    if req.shares is not None:
+        plan = dict(plan)
+        plan["shares"] = req.shares
+
+    positions = db.query(PortfolioPosition).filter(PortfolioPosition.user_id == user.id).all()
+    held = [p.ticker for p in positions]
+    quote_tickers = sorted(set(held) | {ticker})
+    quotes = await market_data.get_batch(quote_tickers, db)
+    histories = {t: await market_data.get_history(t, db) for t in held}
+    histories[ticker] = bars
+
+    settings = _risk_settings(user)
+    assessment = portfolio_risk.assess_new_position(
+        ticker, plan, positions, quotes, histories, settings
+    )
+    if isinstance(assessment, dict):
+        assessment["budget_basis"] = settings["max_open_r_basis"]
+    return assessment
+
+
 @router.get("")
 async def get_portfolio(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     positions = db.query(PortfolioPosition).filter(PortfolioPosition.user_id == user.id).all()
+    budget, basis = resolve_max_open_r(user)
     if not positions:
-        return {"positions": [], "summary": {"total_cost": 0, "total_mv": 0, "total_pnl": 0, "total_pnl_pct": 0}}
+        return {
+            "positions": [],
+            "summary": {
+                "total_cost": 0, "total_mv": 0, "total_pnl": 0, "total_pnl_pct": 0,
+                "open_r": 0.0,
+                "portfolio_heat": _with_basis(portfolio_risk.portfolio_heat(
+                    [], {}, budget,
+                    risk_unit=_risk_unit(user), max_positions=user.max_positions,
+                ), basis),
+            },
+        }
 
     tickers = [p.ticker for p in positions]
     quotes = await market_data.get_batch(tickers, db)
@@ -69,12 +266,22 @@ async def get_portfolio(
             "added_at": pos.added_at.isoformat(),
             "notes": pos.notes,
             "stop_loss": pos.stop_loss,
+            "initial_stop": pos.initial_stop,
             "target": pos.target,
             "entry_date": pos.entry_date.isoformat() if pos.entry_date else None,
             "strategy": pos.strategy,
+            "planned_entry": pos.planned_entry,
+            "planned_entry_high": pos.planned_entry_high,
+            "thesis": pos.thesis,
+            "invalidation": pos.invalidation,
+            "time_stop_days": pos.time_stop_days,
         })
 
     total_pnl = total_mv - total_cost
+    heat = _with_basis(portfolio_risk.portfolio_heat(
+        positions, quotes, budget,
+        risk_unit=_risk_unit(user), max_positions=user.max_positions,
+    ), basis)
     return {
         "positions": result,
         "summary": {
@@ -82,6 +289,8 @@ async def get_portfolio(
             "total_mv": round(total_mv, 2),
             "total_pnl": round(total_pnl, 2),
             "total_pnl_pct": round(total_pnl / total_cost * 100 if total_cost > 0 else 0, 2),
+            "open_r": heat["open_r"],
+            "portfolio_heat": heat,
         },
     }
 
@@ -105,18 +314,39 @@ def upsert_position(
             pos.notes = req.notes
         if req.stop_loss is not None:
             pos.stop_loss = req.stop_loss
+            # Record the FIRST stop only — never overwrite it. Trailing a stop up
+            # must not change the risk the trade was originally taken with.
+            if pos.initial_stop is None:
+                pos.initial_stop = req.stop_loss
         if req.target is not None:
             pos.target = req.target
         if req.entry_date is not None:
             pos.entry_date = req.entry_date
         if req.strategy is not None:
             pos.strategy = req.strategy
+        # Plan intent: the thesis and its invalidation are living text and may
+        # be edited. The PLANNED ENTRY is not — it is write-once, for the same
+        # reason initial_stop is: it is the reference the fill is judged
+        # against, and rewriting it would erase the record of a chased entry.
+        if req.thesis is not None:
+            pos.thesis = req.thesis
+        if req.invalidation is not None:
+            pos.invalidation = req.invalidation
+        if req.time_stop_days is not None:
+            pos.time_stop_days = req.time_stop_days
+        if req.planned_entry is not None and pos.planned_entry is None:
+            pos.planned_entry = req.planned_entry
+        if req.planned_entry_high is not None and pos.planned_entry_high is None:
+            pos.planned_entry_high = req.planned_entry_high
     else:
         pos = PortfolioPosition(
             user_id=user.id, ticker=ticker,
             shares=req.shares, avg_cost=req.avg_cost, notes=req.notes,
-            stop_loss=req.stop_loss, target=req.target,
+            stop_loss=req.stop_loss, initial_stop=req.stop_loss, target=req.target,
             entry_date=req.entry_date, strategy=req.strategy,
+            planned_entry=req.planned_entry, planned_entry_high=req.planned_entry_high,
+            thesis=req.thesis, invalidation=req.invalidation,
+            time_stop_days=req.time_stop_days,
         )
         db.add(pos)
 
@@ -150,10 +380,10 @@ def close_position(
     pnl = pos.shares * req.exit_price - cost_basis
     pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0.0
 
-    # R-multiple only meaningful when a real stop below cost was set
-    r_multiple = None
-    if pos.stop_loss is not None and pos.avg_cost - pos.stop_loss > 0:
-        r_multiple = round((req.exit_price - pos.avg_cost) / (pos.avg_cost - pos.stop_loss), 2)
+    # R-multiple against the INITIAL stop (legacy rows fall back to stop_loss).
+    r_multiple, r_stop = compute_r_multiple(
+        pos.avg_cost, req.exit_price, pos.initial_stop, pos.stop_loss
+    )
 
     trade = ClosedTrade(
         user_id=user.id,
@@ -164,11 +394,19 @@ def close_position(
         entry_date=pos.entry_date,
         exit_date=req.exit_date or date.today(),
         stop_loss=pos.stop_loss,
+        initial_stop=r_stop,
         target=pos.target,
         strategy=pos.strategy,
         pnl=round(pnl, 2),
         pnl_pct=round(pnl_pct, 2),
         r_multiple=r_multiple,
+        # Carry the plan's intent into the journal — without planned_entry the
+        # entry-chasing execution metric has nothing to measure the fill against.
+        planned_entry=pos.planned_entry,
+        planned_entry_high=pos.planned_entry_high,
+        thesis=pos.thesis,
+        invalidation=pos.invalidation,
+        time_stop_days=pos.time_stop_days,
         notes=req.notes or pos.notes,
         opened_at=pos.added_at,
         closed_at=datetime.now(timezone.utc),

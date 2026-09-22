@@ -26,12 +26,48 @@ function fmtNum(v, d = 2) { return v == null ? '--' : Number(v).toFixed(d); }
 function fmtMoney(v, d = 2) { return v == null ? '--' : '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
 function safeTicker(t) { return String(t || '').toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 15); }
 
+/* Canonical clickable-ticker markup (CLAUDE.md "Ticker Symbols — Universal Rule").
+   Returns a `.ticker-link` span wired to openTickerDetail(). The ticker is
+   sanitized by safeTicker() before it reaches the inline handler, so it can
+   never carry a quote or angle bracket. An unusable ticker renders "--" rather
+   than a dead, unclickable string. `fontSize` is any CSS length (e.g. '15px').
+   Additive helper: existing pages that build the span by hand are unaffected. */
+function tickerLink(ticker, fontSize) {
+  const t = safeTicker(ticker);
+  if (!t) return '<span class="muted">--</span>';
+  const style = fontSize ? ` style="font-size:${esc(fontSize)};"` : '';
+  return `<span class="ticker-link"${style} onclick="openTickerDetail('${t}')">${esc(t)}</span>`;
+}
+
+/* ── MA trend helpers (quote schema_v 2) ─────────────────────────────────────
+   `ma_state` is the STATE ("bull" = MA50 above MA200 right now, "bear" = below).
+   `gc`/`dc` (aliased as `gc_event`/`dc_event`) are CROSSOVER EVENTS that fired
+   within the last 5 bars. Older cached rows predate these keys — fall back to
+   "--" rather than rendering undefined. */
+function maState(stock) {
+  return stock && (stock.ma_state === 'bull' || stock.ma_state === 'bear') ? stock.ma_state : null;
+}
+function gcEvent(stock) { return !!(stock && (stock.gc_event ?? stock.gc)); }
+function dcEvent(stock) { return !!(stock && (stock.dc_event ?? stock.dc)); }
+function _maStateLabel(stock) {
+  const s = maState(stock);
+  if (s === 'bull') return 'Bullish (MA50 &gt; MA200)';
+  if (s === 'bear') return 'Bearish (MA50 &lt; MA200)';
+  return '--';
+}
+function _maCrossLabel(stock) {
+  if (gcEvent(stock)) return 'Golden cross — last 5 days';
+  if (dcEvent(stock)) return 'Death cross — last 5 days';
+  return 'No cross';
+}
+
 /* ── Top navigation ──────────────────────────────────────────────────────── */
 const NAV_LINKS = [
-  ['/', 'Today', 'Your daily guided workflow: market regime, position alerts, and top setups with trade plans.'],
+  ['/', 'Playbook', 'Your daily workflow: market regime, position alerts, and setups grouped by strategy with their tested edge.'],
   ['/screener', 'Screener', 'Filter the full S&P 500 + ETF universe by fundamentals, technicals, and momentum.'],
   ['/charts', 'Charts', 'Market-wide dashboards: VIX, sectors, ETFs, breadth, and macro context.'],
-  ['/backtest', 'Backtest', 'Test the swing strategies over cached history and compare them to SPY.'],
+  ['/backtest', 'Strategy Lab', 'Edge matrix by regime, walk-forward backtests (rotation vs trade-plan mode), and robustness checks.'],
+  ['/scorecard', 'Scorecard', 'Realized results vs what the backtest expected, plus execution quality ranked by what it cost.'],
   ['/report', 'Report', 'AI-assisted daily market report and saved commentary.'],
   ['/journal', 'Journal', 'Closed-trade log with realized P&L, R-multiple, and win-rate stats.'],
 ];
@@ -128,10 +164,17 @@ async function openTickerDetail(ticker) {
     document.getElementById('tdPrice').innerHTML = stock.price != null ? `$${Number(stock.price).toFixed(2)} ${fmtPct(stock.chg_pct)}` : '--';
     const rows = [
       ['RSI', fmtNum(stock.rsi, 1)], ['MACD', esc(stock.macd_sig || '--')], ['vs MA50', fmtPct(stock.vs_ma50)],
-      ['vs MA200', fmtPct(stock.vs_ma200)], ['Vol Ratio', fmtNum(stock.vol_r, 2)], ['Sharpe', fmtNum(stock.sharpe, 2)],
-      ['Sortino', fmtNum(stock.sortino, 2)], ['Ann Ret', fmtPct(stock.ann_ret)],
+      ['vs MA200', fmtPct(stock.vs_ma200)],
+      ['Vol Ratio (today vs 20D avg)', fmtNum(stock.vol_r, 2)],
+      ['Vol Ratio (5D vs 20D avg)', stock.vol_r_5d == null ? '--' : fmtNum(stock.vol_r_5d, 2)],
+      ['Sharpe', fmtNum(stock.sharpe, 2)],
+      ['Sortino', fmtNum(stock.sortino, 2)],
+      ['Ann Ret (full)', fmtPct(stock.ann_ret)],
+      ['Ann Ret (1M)', stock.ann_ret_1m == null ? '--' : fmtPct(stock.ann_ret_1m)],
       ['Max DD 1M', stock.max_dd_1m == null ? '--' : `${fmtNum(stock.max_dd_1m, 1)}%`],
       ['P/E', fmtNum(stock.pe, 1)], ['Beta', fmtNum(stock.beta, 2)], ['52W Pos', stock.p52w == null ? '--' : `${fmtNum(stock.p52w, 0)}%`],
+      ['MA Trend', _maStateLabel(stock)],
+      ['MA Cross (last 5 bars)', _maCrossLabel(stock)],
       ['Swing Score', stock.swing_score == null ? '--' : fmtNum(stock.swing_score, 0)],
     ];
     document.getElementById('tdMetrics').innerHTML = `<table><tbody>${rows.map(([k, v]) => `<tr><td class="muted">${k}</td><td class="mono">${v}</td></tr>`).join('')}</tbody></table>`;

@@ -36,6 +36,7 @@ from api.backtest import router as backtest_router
 from api.settings import router as settings_router
 from api.journal import router as journal_router
 from api.today import router as today_router
+from api.scorecard import router as scorecard_router
 from generate_ssl import generate_ssl_cert
 from services.universe import UNIVERSE
 from services.market_data import (
@@ -46,6 +47,7 @@ from services.market_data import (
     invalidate_legacy_cache,
     invalidate_short_history_cache,
     invalidate_missing_swing_score_cache,
+    invalidate_legacy_schema_cache,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -174,12 +176,35 @@ def ensure_schema_migrations():
             "litellm_api_key": "VARCHAR(256)",
             "report_system_prompt": "TEXT",
             "chat_system_prompt": "TEXT",
+            # Chosen open-R ceiling. Deliberately NO DEFAULT: NULL means "not
+            # chosen", which is what makes the derived-vs-chosen distinction in
+            # `budget_basis` honest.
+            "max_open_r": "FLOAT",
+            "use_evidence_regimes": "BOOLEAN DEFAULT 0",
         })
         _ensure_columns(conn, "portfolio_positions", {
             "stop_loss": "FLOAT",
+            # Stop at entry — the R-multiple denominator. Stays NULL on legacy
+            # rows; close_position() falls back to stop_loss when it is NULL.
+            "initial_stop": "FLOAT",
             "target": "FLOAT",
             "entry_date": "DATE",
             "strategy": "VARCHAR(32)",
+            # Trade-plan intent, previously buried in `notes`. See
+            # services/trade_plan.py::parse_plan_notes and the backfill below.
+            "planned_entry": "FLOAT",
+            "planned_entry_high": "FLOAT",
+            "thesis": "TEXT",
+            "invalidation": "TEXT",
+            "time_stop_days": "INTEGER",
+        })
+        _ensure_columns(conn, "closed_trades", {
+            "initial_stop": "FLOAT",
+            "planned_entry": "FLOAT",
+            "planned_entry_high": "FLOAT",
+            "thesis": "TEXT",
+            "invalidation": "TEXT",
+            "time_stop_days": "INTEGER",
         })
         _ensure_columns(conn, "report_cache", {
             "model": "VARCHAR(128)",
@@ -199,6 +224,85 @@ def ensure_schema_migrations():
                 f"UPDATE users SET {col} = {default} WHERE {col} IS NULL"
             )
 
+        # `max_open_r` is deliberately NOT repaired to a value here: NULL is a
+        # meaningful state ("not chosen — use the derived budget").
+
+        backfill_plan_fields_from_notes(conn)
+
+
+# Tables that carry the trade-plan intent columns, and can therefore be
+# back-filled from their legacy prefixed `notes` text.
+_PLAN_BACKFILL_TABLES = ("portfolio_positions", "closed_trades")
+_PLAN_BACKFILL_COLUMNS = ("thesis", "invalidation", "time_stop_days", "planned_entry",
+                          "planned_entry_high")
+
+
+def backfill_plan_fields_from_notes(conn) -> dict[str, int]:
+    """One-time, idempotent migration of plan intent out of `notes`.
+
+    Before PortfolioPosition/ClosedTrade had real columns, the Plan-a-Trade
+    modal packed the thesis, the invalidation condition, the time stop and the
+    planned entry into `notes` as prefixed lines. This lifts those values into
+    the new columns.
+
+    Rules:
+      * Only fills a column that is currently NULL — a value written by the API
+        always wins over one re-parsed from prose.
+      * `notes` is LEFT COMPLETELY INTACT. It is the only free-form record of a
+        trade's reasoning and destroying it to "clean up" would be unrecoverable.
+      * Therefore idempotent: a second run finds the columns already populated
+        and moves nothing.
+
+    Returns {table: rows_updated} and logs what it moved.
+    """
+    from services.trade_plan import parse_plan_notes
+
+    moved: dict[str, int] = {}
+    for table in _PLAN_BACKFILL_TABLES:
+        try:
+            present = {
+                row[1]
+                for row in conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+            }
+        except Exception:  # noqa: BLE001 — table absent on a brand-new DB
+            continue
+        cols = [c for c in _PLAN_BACKFILL_COLUMNS if c in present]
+        if not cols or "notes" not in present:
+            continue
+
+        select = ", ".join(["id", "notes", *cols])
+        null_filter = " OR ".join(f"{c} IS NULL" for c in cols)
+        rows = conn.exec_driver_sql(
+            f"SELECT {select} FROM {table} "
+            f"WHERE notes IS NOT NULL AND notes != '' AND ({null_filter})"
+        ).fetchall()
+
+        updated = 0
+        for row in rows:
+            current = dict(zip(cols, row[2:]))
+            parsed = parse_plan_notes(row[1])
+            assigns = {
+                c: parsed.get(c)
+                for c in cols
+                if current.get(c) is None and parsed.get(c) is not None
+            }
+            if not assigns:
+                continue
+            set_sql = ", ".join(f"{c} = ?" for c in assigns)
+            conn.exec_driver_sql(
+                f"UPDATE {table} SET {set_sql} WHERE id = ?",
+                (*assigns.values(), row[0]),
+            )
+            updated += 1
+            logger.info(
+                "Plan backfill: %s id=%s <- %s",
+                table, row[0], ", ".join(sorted(assigns)),
+            )
+        moved[table] = updated
+        if updated:
+            logger.info("Plan backfill: moved plan fields for %d %s row(s)", updated, table)
+    return moved
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -210,6 +314,11 @@ async def lifespan(app: FastAPI):
         invalidate_legacy_cache(db)
         invalidate_short_history_cache(db)
         invalidate_missing_swing_score_cache(db)
+        # Back-date any StockCache row whose quote predates the current quote
+        # schema. get_quote already refuses to SERVE a stale-schema row, but
+        # refresh_universe picks stale tickers by timestamp alone — without this
+        # a pre-v2 row would only be rebuilt on an on-demand hit.
+        invalidate_legacy_schema_cache(db)
     finally:
         db.close()
     # Kick off background universe data refresh (non-blocking)
@@ -250,7 +359,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.17.0",
+    version="1.18.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -277,6 +386,7 @@ app.include_router(backtest_router)
 app.include_router(settings_router)
 app.include_router(journal_router)
 app.include_router(today_router)
+app.include_router(scorecard_router)
 
 
 # ── Static files (React SPA) ─────────────────────────────────────────────────
@@ -315,6 +425,11 @@ async def screener_page():
 @app.get("/journal")
 async def journal_page():
     return FileResponse(os.path.join(STATIC_DIR, "journal.html"))
+
+
+@app.get("/scorecard")
+async def scorecard_page():
+    return FileResponse(os.path.join(STATIC_DIR, "scorecard.html"))
 
 
 @app.get("/today")

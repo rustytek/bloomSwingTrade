@@ -65,7 +65,14 @@ class AIService(ABC):
 
         Args:
             ticker: Stock symbol
-            technicals: {rsi, macd_sig, vs_ma200, gc, dc, vol_r, p52w, ...}
+            technicals: {rsi, macd_sig, vs_ma50, vs_ma200, ma_state, gc, dc,
+                         vol_r, p52w, ann_ret_1m, chg_pct, score}
+                Quote schema v2 semantics: `gc`/`dc` are crossover EVENTS (MA50
+                crossed MA200 within the last 5 bars), while `ma_state`
+                ("bull"/"bear"/None) is the standing MA50-vs-MA200 condition.
+                `vol_r` is today's volume / prior 20-day average (single bar);
+                `ann_ret_1m` is the 21-bar annualized return, NOT the
+                full-history `ann_ret`. `p52w` is a true 252-bar range position.
 
         Returns:
             [

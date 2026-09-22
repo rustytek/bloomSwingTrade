@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SwingTrader is a self-hosted swing trading screener — a FastAPI backend + vanilla JS frontend deployed via Docker or as a Home Assistant OS (HAOS) native add-on. It screens S&P 500 and ETF tickers with technical indicators (RSI, MACD, Bollinger Bands, MA50/200, Golden/Death Cross), per-user watchlists/portfolios, and optional AI analysis via Anthropic Claude, OpenAI, or LiteLLM (the local/self-hosted path — see aiProxy's `CLAUDE.md`). This app never calls Ollama or any other model runtime directly; `AI_MODEL`/`REPORT_MODEL` should always be a LiteLLM tier alias (e.g. `tooling_high`), not a raw provider model name — the physical model behind an alias can change without a config edit here.
+SwingTrader is a self-hosted swing trading screener — a FastAPI backend + vanilla JS frontend deployed via Docker or as a Home Assistant OS (HAOS) native add-on. It screens S&P 500 and ETF tickers with technical indicators (RSI, MACD, Bollinger Bands, MA50/200 trend state, Golden/Death Cross events), per-user watchlists/portfolios, and optional AI analysis via Anthropic Claude, OpenAI, or LiteLLM (the local/self-hosted path — see aiProxy's `CLAUDE.md`). This app never calls Ollama or any other model runtime directly; `AI_MODEL`/`REPORT_MODEL` should always be a LiteLLM tier alias (e.g. `tooling_high`), not a raw provider model name — the physical model behind an alias can change without a config edit here.
 
 ## Common Commands
 
@@ -17,9 +17,23 @@ python main.py
 docker-compose up --build -d
 docker-compose logs -f swingtrader
 
-# Run test suite
-python test_passes.py
+# Run test suites
+python test_passes.py            # core logic: trade plans, strategies, backtest math, journal
+python test_indicators.py        # calculation regressions: indicators / market_data / strategies
+python test_portfolio_risk.py    # correlation, open risk, concentration, edge-weighted sizing
+python test_backtest.py          # backtest engine, exit rules, no-look-ahead, Wilson CI
+python test_edge.py              # edge matrix verdicts, evidence override safety, scorecard
+python test_plan_persistence.py  # plan-intent columns, notes backfill, entry_chasing honesty
 ```
+
+**170 tests across six suites**, all self-contained — no network, no DB. `test_passes.py`
+installs permissive import stubs for `fastapi`, `jose`, `passlib` and `bcrypt` (appended to the
+**end** of `sys.meta_path`, so a real install always wins) purely so the pure helper functions
+living in `api/*.py` can be imported without the full web stack.
+
+> **Counting routes:** this FastAPI version stores `_IncludedRouter` lazy references, so
+> `len(app.routes)` UNDERCOUNTS and filtering on `hasattr(r, "path")` silently omits every
+> router-mounted endpoint. Always verify through `app.openapi()["paths"]` (currently 63).
 
 The app runs on HTTPS at `https://localhost:8443`. Swagger docs at `/api/docs`.
 
@@ -40,8 +54,10 @@ React SPA (static/*.html) → FastAPI (main.py)
 ```
 
 ### Page Routes
-- `/` — Today dashboard (`static/today.html`): regime light, position health, top setups with trade plans, checklist, capacity. (Also the 404 catch-all fallback.)
+- `/` — the **Playbook** (`static/today.html`). Three-cell regime band (quadrant/ADX/SPY/VIX · the `transition.reason` "time to change strategy" signal · the risk budget from `GET /api/portfolio/risk`, with `unstopped_warning` shown loudly in red). Main column: setups **grouped by strategy**, each group header carrying that strategy's tested edge in the *current* quadrant from `GET /api/edge-matrix`, verdict-coloured (confirmed green / unproven amber / mis-tagged red). A collapsed "standing down" strip explains every off-regime strategy. Right rail: positions sorted by urgency with their `actions[]` verbatim, book exposure, and the morning checklist. The **Plan-a-Trade modal** wraps `POST /api/portfolio/assess` and commits through `POST /api/portfolio`; its commit button is disabled while any warning is `block` level. (Also the 404 catch-all fallback.)
 - `/screener` — the screener (`static/index.html`, formerly served at `/`).
+- `/backtest` — the **Strategy Lab** (`static/backtest.html`). Headlined by the strategy × regime edge matrix, then a single-strategy walk-forward with a rotation/trade_plan mode toggle, sortable trade log with exit-kind distribution, and a severity-sorted caveats panel.
+- `/scorecard` — the **Scorecard** (`static/scorecard.html`): realized expectancy vs the backtest's expected R, per-strategy drift with a sample-size guard, and execution-quality leaks ranked by realized R cost. Metrics the app cannot compute get their own "Not Measurable Yet" panel — never `0`, never `--` — each naming the field that must be persisted first.
 - `/journal` — trade journal (`static/journal.html`).
 - `/charts` — chart dashboard (`static/charts.html`).
 - `/admin` — user management (`static/admin.html`), admin-only. Create/edit/delete users, reset passwords, toggle admin, and set/clear each user's per-user LiteLLM key. The header "Users" link (in `common.js`) is shown only to admins.
@@ -54,23 +70,67 @@ React SPA (static/*.html) → FastAPI (main.py)
 | `database/models.py` | ORM models: User, WatchlistItem, PortfolioPosition, StockCache, AICache, ReportCache, ClosedTrade, HistoryArchive |
 | `database/db.py` | SQLAlchemy engine, `get_db()` FastAPI dependency |
 | `auth/deps.py` | `get_current_user` / `get_current_admin` JWT dependencies |
-| `services/market_data.py` | yfinance wrapper, dual-layer cache (in-memory dict + SQLite), indicator calculation |
+| `services/market_data.py` | yfinance wrapper, dual-layer cache (in-memory dict + SQLite), indicator calculation; emits the `schema_v: 2` quote contract (see "Quote Field Contract" below) |
 | `services/universe.py` | ~450 tickers: S&P 500 constituents + ETF lists |
 | `services/ai_service.py` | Abstract `AIService` base + Mock/LiteLLM implementations (Anthropic/OpenAI stubbed, not yet implemented) |
-| `services/indicators.py` | Technical indicators; includes `calc_atr(highs, lows, closes, period=14)` (Wilder-smoothed) and `calc_adx(highs, lows, closes, period=14)` (Wilder ADX/+DI/-DI — trend-strength gauge behind `services/regime.py`) |
+| `services/indicators.py` | Technical indicators; includes `calc_atr(highs, lows, closes, period=14)` (Wilder-smoothed) and `calc_adx(highs, lows, closes, period=14)` (Wilder ADX/+DI/-DI — trend-strength gauge behind `services/regime.py`; **the DI series is offset by `period`, not 1** — getting that wrong silently yields look-ahead values). `compute_performance_metrics` returns **both** `ann_ret` (full-history annualized %, the figure Sharpe/Sortino/Calmar/Info Ratio/Treynor are computed from) and `ann_ret_1m` (21-bar annualized %); both annualize over `n-1` return periods |
 | `services/regime.py` | ADX + 200MA + VIX/realized-vol market regime classifier — see "Market Regime" below |
-| `services/strategies.py` | 4-strategy framework; registry `STRATEGIES` (see below) |
+| `services/strategies.py` | 9-strategy framework; registry `STRATEGIES` (see below) |
 | `services/trade_plan.py` | `build_trade_plan(...)`: ATR entry zone, stop, fixed-fractional sizing, R-multiple target (see below) |
+| `services/portfolio_risk.py` | Portfolio-level risk: returns-based correlation matrix (date-aligned, 30-bar minimum overlap), open R / unstopped-position detection, sector + weighted-beta concentration, portfolio heat, and `assess_new_position()` pre-trade block/warn checks |
+| `services/exits.py` | Pluggable exit rules — `FixedStopTarget`, `AtrTrailingStop` (chandelier), `TimeStop`, `PartialProfitTaking`, `RegimeExit` — plus the priority-ordered `resolve_exit()` resolver. Stop fills are assumed to precede target fills within a bar. `build_exit_rules(..., strategy_id=…)` resolves the time stop's `max_bars` as: explicit caller value > the strategy's numeric `horizon_days` > `DEFAULT_TIME_STOP_BARS` (20). `strategy_horizon_days()` reads only the numeric attribute — `details["horizon"]` is prose and is never parsed |
+| `api/portfolio.py` | Positions CRUD/close/CSV-import, plus `GET /api/portfolio/risk` (heat, open risk, concentration, correlation matrix) and `POST /api/portfolio/assess` (pre-trade check). The `GET /api/portfolio` summary carries `open_r` and `portfolio_heat` |
 | `services/today.py` | Builds the `/api/today` payload; exposes `position_flags()` helper (see below) |
+| `services/edge_matrix.py` | Strategy × regime EVIDENCE matrix — one walk-forward per actionable strategy, bucketed by the `quadrant` already stamped on each rebalance period. Per-cell Wilson CI + `confidence`, and a `verdict` (`confirmed`/`unproven`/`mis-tagged`/`untagged-edge`) saying whether the hand-written `Strategy.regimes` tag is actually supported. 12h per-user cache |
+| `services/scorecard.py` | Realized (journal) vs expected (edge matrix) per strategy — `drift` plus a sample-size-guarded recommendation — and `execution_quality()` (entry chasing / stop loosening / overstayed horizon / off-regime entries), which returns any metric it cannot compute as explicitly UNAVAILABLE with the field it needs |
+| `api/scorecard.py` | `GET /api/scorecard`, `GET /api/edge-matrix` (cold call returns "not computed yet"; `?refresh=true` builds), `POST /api/edge-matrix/invalidate` |
 | `api/today.py` | `GET /api/today` — daily dashboard |
 | `api/settings.py` | `GET`/`PUT /api/settings` — account_size, risk_pct, max_positions, atr_stop_mult, r_multiple |
-| `api/journal.py` | `GET /api/journal` (stats + per-strategy breakdown + `equity_curve`: cumulative realized P&L over time from all closed trades), `DELETE /api/journal/{id}` |
-| `api/backtest.py` | Walk-forward backtest; `GET /api/backtest/strategies` returns each strategy's `details` (horizon/how/rules/scoring/parameters), rendered as a detail panel on the backtest page |
+| `api/journal.py` | `GET /api/journal` — `trades` is the LIMIT-ed display page, while `stats`, `by_strategy` and `equity_curve` are all computed from **every** closed trade. `_stats` splits `scratch` (pnl == 0) out of `losses`, so `win_rate = wins/(wins+losses)`, and reports `r_sample` (how many trades actually carry an `r_multiple`) because `avg_r`/`expectancy_r` use that subset while `win_rate` spans all decided trades. `DELETE /api/journal/{id}` |
+| `api/backtest.py` | Walk-forward backtest; `GET /api/backtest/strategies` returns each strategy's `details` (horizon/how/rules/scoring/parameters) plus a `backtestable` flag, rendered as a detail panel on the backtest page. Only **actionable** strategies are accepted by `/walk-forward` (`BACKTESTABLE_STRATEGIES`) — the engine is long-only, so watchlist-only signals like `bear_reversal_watch` are rejected there while staying visible in the catalog |
 
 ### Caching Strategy
 Two-layer cache: in-memory Python dict (`_mem_cache`) → SQLite `StockCache` table. Data is considered "fresh" if cached **after the most recent NYSE market close (4pm ET)** — not a rolling TTL. Quote and history TTLs are configurable via env vars but default to daily refresh.
 
 History cache window is **5 years** in `services/market_data.py` (`get_history`/`_fetch_history_sync` defaults, and the `api/stocks.py` `/history` endpoint default — keep these in sync so a detail-view refetch can't shrink the shared cache). Existing shorter caches upgrade to 5y on the next post-close refresh (or a manual screener refresh). For backtests over **arbitrary historical eras** beyond the rolling window, see `services/history_archive.py` (below).
+
+### Quote Field Contract (`schema_v: 2`)
+
+Enriched quotes carry `"schema_v": QUOTE_SCHEMA_VERSION` (currently `2`, defined in
+`services/market_data.py`). **Both** quote cache-read paths in `get_quote` — the in-memory
+`_mem_cache` and the SQLite `StockCache.quote_json` row — treat a cached quote whose `schema_v`
+is behind the current version as **stale regardless of its timestamp** and re-fetch/re-enrich
+it. `invalidate_legacy_schema_cache()` runs at startup so the background universe sweep picks
+old rows up too (it selects stale tickers by timestamp alone and would otherwise miss them).
+
+**Bump `QUOTE_SCHEMA_VERSION` whenever the *meaning* of an enriched field changes** — not
+merely when a field is added. The front end must also fall back to `--` on any new key rather
+than rendering `undefined`/`NaN`, since a stale row can still arrive mid-refresh.
+
+| Field | Meaning |
+|---|---|
+| `p52w` | Position within the true 252-bar (52-week) range. **Was** computed over the full 5-year cache, which made a stock at its 52-week low report ~60%. |
+| `gc` / `dc` | Golden/Death **crossover EVENT** within the last 5 bars — *not* a standing state. Previously one of the two was always true, so every uptrending stock was badged "Golden Cross". |
+| `gc_event` / `dc_event` | Explicit aliases of `gc`/`dc`. Prefer these in new code. |
+| `ma_state` | `"bull"` \| `"bear"` \| `None` — whether MA50 is currently above/below MA200. This is the state `gc`/`dc` used to carry; anything that wants trend state (scoring, ranking, filters) must read this. |
+| `ann_ret` | **Full-history** annualized %. Consistent with `sharpe`/`sortino`/`calmar`, which are computed from the same series. |
+| `ann_ret_1m` | 21-bar (1-month) annualized %. This is what the old `ann_ret` key actually held. |
+| `vol_r` | Today's volume ÷ the prior 20-day average (conventional single-bar volume confirmation). |
+| `vol_r_5d` | The former 5-day ÷ 20-day average ratio, preserved. |
+| `earn_beat` | **Removed** — it read a yfinance field (`earningsBeat`) that does not exist, so it was always false and its `compute_score` point could never be earned. |
+| `schema_v` | Internal marker, value `2`. Never displayed. |
+
+**Consumers of this contract.** Anything reading a quote must pick the right half of each pair:
+- `api/screener.py` — the `gc`/`dc` filters mean a **cross event in the last 5 bars** (the UI labels them "Golden/Death Cross (last 5d)"); the `ma_state` filter (`""`/`"bull"`/`"bear"`) is how to filter on the standing MA50-vs-MA200 trend. `vol_r_min` filters the single-bar ratio, `vol_r_5d_min` the smoothed one.
+- `api/watchlist.py::composite_rank` (module-level, so it is unit-testable) — the 0.5 trend bonus keys off `ma_state == "bull"`; a fresh `gc_event` adds a separate 0.25. Keying the state bonus off `gc` made it effectively never fire and silently reordered the watchlist.
+- `api/ai.py` — the technicals whitelist passed to the LLM sends `ma_state` **and** `gc`/`dc`, plus `ann_ret_1m` **and** `ann_ret`, so the model cannot conflate a fresh cross with an established trend, or a 1-month pace with a long-run rate. `services/ai_service.py::generate_signals`' docstring is the written-down version of the same contract.
+- `services/backtest.py::build_decision_cockpit` uses `gc_event`/`dc_event` and says "crossed"; `services/today.py::position_flags` uses `ann_ret_1m`.
+
+> **Gotcha:** `ScreenerFilters` is a plain `BaseModel`, so pydantic v2's default `extra="ignore"` applies — a filter key the front end sends but the model does not declare is **silently dropped, not rejected**. A new filter must be added to the model *and* to `_passes()`, or the control will appear to work and quietly do nothing.
+
+`div_yield` is unit-autodetected: yfinance changed `dividendYield` from a fraction to a
+percent across versions, so a raw value `<= 1.0` is multiplied by 100 and anything larger is
+taken as already-percent.
 
 ### Strategy Framework (`services/strategies.py`)
 Registry `STRATEGIES` maps ids to `Strategy` instances:
@@ -78,8 +138,8 @@ Registry `STRATEGIES` maps ids to `Strategy` instances:
 - `pullback_50ma` — buy dips to the 50MA in an uptrend.
 - `breakout_volume` — 60-day-high breakout on >=1.5x volume.
 - `mean_reversion` — Connors-style RSI(2) < 10 washout above the 200MA (lower Bollinger touch confirms); short 3–10 day snap-back holds.
-- `dual_momentum` — Antonacci-style: 12-1 month absolute momentum gate (must beat cash) ranked by risk-adjusted (return/volatility) score.
-- `volatility_breakout` — Donchian 20-day-high breakout confirmed by ATR expansion (vs. `breakout_volume`'s share-volume confirmation).
+- `dual_momentum` — Antonacci-style: 12-1 month absolute momentum gate (must beat cash) ranked by risk-adjusted score — the return divided by its volatility over that **same** 252→21 bar span (the skipped last month is excluded from the volatility too).
+- `volatility_breakout` — Donchian 20-day-high breakout confirmed by ATR expansion: current ATR(14) above the average of the **prior** 20 ATR readings, today excluded (vs. `breakout_volume`'s share-volume confirmation, which excludes today the same way).
 - `sector_rotation` — same regression-slope×R² approach as `momentum_rotation`, restricted to the 11 SPDR sector ETFs via `applies_to()`.
 - `bear_reversal_watch` — RSI(2) > 90 inside a confirmed downtrend; `actionable = False` (watchlist-only, never gets a trade plan — this is a long-only app).
 - `low_vol_trend` — uptrend names ranked by lowest realized volatility; defensive tilt for choppy/volatile regimes.
@@ -91,16 +151,54 @@ Two independent axes classify the market into one of four quadrants (`QUADRANTS`
 - `trending_bull` / `trending_bear` — ADX >= ~20 and above/below the 200MA.
 - `choppy_calm` / `choppy_volatile` — ADX < 25 with normal/elevated volatility.
 
-`classify_regime()` also returns a `transition` event (e.g. "ADX fell below 20 — trend exhausted, favor mean-reversion") whenever a threshold was crossed in the last few sessions — this is what `today.html`'s regime banner surfaces as the "time to change strategy" signal. `strategies_for_regime(quadrant)` returns the strategy ids tagged for a quadrant; `services/today.py::build_today` uses it to mark each strategy active/inactive for the live setups list, and `services/backtest.py::run_walk_forward_backtest` uses the same `classify_quadrant`/`trend_strength_label` helpers to tag every historical rebalance period, producing a `regime_breakdown` (per-quadrant CAGR/win-rate) in the walk-forward response — the Backtest page's Strategy Comparison and single-strategy results both surface this.
+`classify_regime()` also returns a `transition` event (e.g. "ADX fell below 20 — trend exhausted, favor mean-reversion") whenever a threshold was crossed in the last few sessions — this is what `today.html`'s regime banner surfaces as the "time to change strategy" signal. `services/today.py::build_today` routes through `_resolve_active_strategies()`, which uses `strategies_for_regime_with_evidence` + `services/edge_matrix.get_cached_matrix(user_id)` when the per-user `User.use_evidence_regimes` setting (or the module-level `set_evidence_override`) is on. Three invariants: it **never builds** the matrix (a cold build is minutes — a cache miss means "no evidence", not "wait"); a missing, stale or malformed matrix degrades to **exactly** the hand-written-tag behaviour; and it **ships OFF**. Each `strategy_regime_status[]` entry carries an `evidence` sub-object (`effect`: excluded/promoted/unchanged, `verdict`, `n`) and the payload a top-level `evidence_regimes` summary, so the UI can explain why a strategy was stood down or promoted.
+
+`strategies_for_regime(quadrant)` returns the strategy ids tagged for a quadrant; `services/today.py::build_today` uses it to mark each strategy active/inactive for the live setups list, and `services/backtest.py::run_walk_forward_backtest` uses the same `classify_quadrant`/`trend_strength_label` helpers to tag every historical rebalance period, producing a `regime_breakdown` (per-quadrant CAGR/win-rate) in the walk-forward response — the Backtest page's Strategy Comparison and single-strategy results both surface this.
+
+### Evidence Layer (`services/edge_matrix.py`, `services/scorecard.py`, `api/scorecard.py`)
+
+`Strategy.regimes` is a hand-written literal — an opinion. The edge matrix turns the backtest into evidence about whether that opinion holds, per quadrant, and the scorecard compares what a strategy was *supposed* to deliver against what the journal says it *did*.
+
+- `GET /api/edge-matrix` — **a cold call deliberately does NOT build**: it returns `{status:"not_computed", matrix:null, message, strategies[], quadrants[], thresholds{}}` so the page paints instantly. `?refresh=true` runs the build, which is SLOW (one walk-forward per actionable strategy). **The payload is NESTED under `matrix`** — `matrix.strategies[id].cells[quadrant]` carries `{n, avg_period_return, win_rate, win_rate_ci_low/high, cum_return, confidence, tagged, verdict, verdict_detail}`, plus `matrix.strategies[id].overall`, `matrix.evidence_regimes` and `matrix.caveats`. Assigning the whole envelope to a variable and reading `.strategies` off it silently returns nothing — that exact bug once made the Playbook's evidence chips invisible even with a fully built matrix.
+- Verdicts: `confirmed` / `unproven` / `mis-tagged` / `untagged-edge`. **A thin cell never produces a confident verdict** — a low-`n` losing cell is `unproven`, not `mis-tagged`. `evidence_regimes` carries only `confirmed` and `untagged-edge` cells forward: it answers "what has the data shown", not "what do we still believe".
+- `GET /api/scorecard` — `{scorecard, execution_quality}`. Only a **trade_plan-mode** matrix yields a per-trade expectancy; a rotation-mode matrix returns no `expected_r` rather than converting a period return into a pseudo-R.
+- `execution_quality` splits into `ranked[]` (computable, sorted by `r_cost` descending) and `unavailable[]` (each with `reason` + `needs`). **UI contract: an unavailable metric must never render as `0` or as a dash.** "Not measurable yet" and "measured, found nothing" have to be visually distinct — see `static/scorecard.html`. A missing field is not a clean bill of health.
+
+Safety invariant for the regime override: a stale, empty or malformed matrix falls back to the hand tags and **can never return an empty strategy set**. Pinned by `test_edge.py`.
 
 ### Trade Plans (`services/trade_plan.py`)
-`build_trade_plan(...)` produces an ATR-based entry zone, a stop (`entry − atr_mult×ATR`), a fixed-fractional position size from account size + risk %, and an R-multiple target.
+`build_trade_plan(...)` produces an ATR-based entry zone, a stop (`entry − atr_mult×ATR`), a fixed-fractional position size from account size + risk %, and an R-multiple target. The returned plan also carries `initial_stop` (same value as `stop`) — the value that must be persisted to `PortfolioPosition.initial_stop` at entry, since it is the R denominator and must never be rewritten when the live stop is trailed up.
+
+Optional `edge_multiplier` (default `1.0`) scales the risk budget (`risk_dollars = account_size × risk_pct/100 × edge_multiplier`) so a setup with a tested edge can be sized up and a marginal one down. It is clamped to **[0.5, 1.5]** (`clamp_edge_multiplier`, `EDGE_MULTIPLIER_MIN/MAX`) so a bad edge estimate cannot blow up sizing; non-numeric/NaN falls back to 1.0. The default reproduces the un-weighted sizing exactly (pinned by a test).
+
+### Portfolio Risk (`services/portfolio_risk.py`)
+Portfolio-level risk, all pure functions (no DB, no network — covered by `test_portfolio_risk.py`):
+- `correlation_matrix(histories, window=90)` — Pearson on **DAILY RETURNS, never price levels**. This matters: two *independent* rising random walks measure −0.07 on returns but **0.77 on levels**, so a levels-based matrix would call every uptrending pair the same trade. Series are aligned by **DATE, not list index** — tickers have different listing dates, and zipping raw lists silently misaligns them. A pair with fewer than `MIN_OVERLAP` (30) shared observations returns `None`, not a number.
+- `open_risk(positions, quotes)` — `shares × (price − stop)` floored at 0 (a stop above price is a free roll). A position with **no stop has unbounded risk**: it is never counted as zero, it is reported via `positions_without_stop` / `unstopped_warning`.
+- `concentration(...)` — sector weights of market value plus MV-weighted beta, threshold-flagged, with `beta_coverage_pct` so a book of beta-less quotes is not silently reported as beta 1.
+- `portfolio_heat(...)` — open R vs budget, slots vs `max_positions`.
+- `assess_new_position(...)` — the pre-trade check behind the Plan-a-Trade screen. Returns `{level: "block"|"warn"|"info", code, message}` warnings plus the projected before → after state. Thresholds: correlation 0.70 warn / 0.85 block, sector weight 30% warn / 40% block, open R ≥80% of budget warn / over budget block, book at `max_positions` blocks.
+- **Risk budget:** `max_open_r` is the user's CHOSEN ceiling when `User.max_open_r` is set, and otherwise falls back to the derived `max_positions × risk_pct` (`implied_max_open_r` — every slot at full risk). `api/settings.py::resolve_max_open_r(user) -> (budget, basis)` decides which, and `api/portfolio.py::_with_basis()` stamps the resulting `budget_basis` over the derived note this pure module emits, so **a derived number is never presented as a deliberate decision**. `services/portfolio_risk.py` stays pure and always emits the derived note; the real value is passed in.
 
 ### Today Dashboard (`services/today.py`)
 Builds the `/api/today` payload (regime light, position health, top setups with trade plans, checklist, capacity). Exposes the shared `position_flags()` helper, also reused by `build_decision_cockpit`. Per-user in-memory cache (15-min TTL), invalidated by the scheduler.
 
+`position_flags()` reads `quote["ann_ret_1m"]` (the 21-bar annualized return) for its "weak 1M annualized return" flag — **not** `ann_ret`, which is now the full-history annualized figure that Sharpe/Sortino/Calmar are built from.
+
 ### Backtesting (`api/backtest.py`)
-Walk-forward backtest now takes a `strategy` param (one of the 4 ids); `source` can be `universe` (the whole cached universe). `GET /api/backtest/strategies` lists available strategies. The backtest also accepts `period` (1Y/2Y/all), `start_date`, `end_date`, and `archive` params to bound the test window.
+Walk-forward backtest takes a `strategy` param — one of the **actionable** strategy ids (`BACKTESTABLE_STRATEGIES`); non-actionable, watchlist-only strategies such as `bear_reversal_watch` are rejected by the query pattern and again defensively inside `run_walk_forward_backtest`, which returns an explanatory `notes` payload rather than a 500. `source` can be `universe` (the whole cached universe). `GET /api/backtest/strategies` lists all strategies with a `backtestable` flag. The backtest also accepts `period` (1Y/2Y/all), `start_date`, `end_date`, and `archive` params to bound the test window.
+
+**Two simulation modes (`mode`, default `rotation`).**
+- `rotation` — the original equal-weight top-N rotation with a turnover cost, marked to market only on rebalance dates. It is a **frozen regression surface**: `test_backtest.py` pins its output to a recorded digest that was diffed against the pre-change engine. Do not change it without re-recording that digest deliberately.
+- `trade_plan` — simulates what the user actually does live: each entry is sized by `services/trade_plan.py::build_trade_plan` (fixed-fractional risk + max-position-value cap), the book is capped at `max_positions` slots (rejected signals counted in `signals_skipped_full_book`), cash is tracked explicitly and **earns nothing**, and **exits are evaluated bar-by-bar between rebalances** by `services/exits.py`. Accepts `account_size` / `risk_pct` / `max_positions` / `atr_stop_mult` / `r_multiple` / `exit_rules` overrides, each falling back to the user's saved settings then to the same defaults `services/today.py::build_today` uses (10000, 1%, 8, 2.5, 2.0). Adds a `trade_log` (per-trade entry/exit, R-multiple, exit reason, bars held) and the metrics `avg_r`, `expectancy_r`, `win_rate_trades`, `trades_taken`, `signals_skipped_full_book`, `avg_bars_held`.
+
+This distinction is the point: **`rotation` measures a different system than the one you trade**, so its CAGR never predicted live results. `trade_plan` is the mode to trust for sizing and strategy-selection decisions.
+
+**No look-ahead is the cardinal rule.** Entries evaluate `strategy.candidate(bars, idx)` (which reads only `bars[:idx+1]`) and fill at that bar's close; exit rules are handed one enriched bar at a time and never the series. `test_backtest.py` asserts that truncating the series immediately after a decision bar does not change the decision made at that bar. Never relax this.
+
+**Sample-size honesty.** Every `regime_breakdown` row carries a Wilson 95% interval (`win_rate_ci_low`/`win_rate_ci_high`) and a `confidence` label from the module constants `MIN_PERIODS_LOW_CONFIDENCE` (30) / `MIN_PERIODS_HIGH_CONFIDENCE` (100). Every response carries a structured top-level `caveats` list (`{id, severity, title, detail}`) covering survivorship bias (the universe is *today's* S&P 500 constituents, which inflates every result), which mode produced the result, and — in rotation mode — that stops/targets are not simulated. These are structured for the UI to render, not prose buried in `notes`.
+
+**Cost & risk-free conventions.** Turnover cost is charged via `services/backtest.py::turnover_cost()`: `symmetric_difference` counts both sells and buys, so the round-trip charge is `(len(sym_diff) / top_n) * cost`, **uncapped** — a full rotation costs `2 × cost`, twice a 50% rotation. (It was previously clipped at `1.0 × cost`, which charged a complete rotation the same as a half one.) Sharpe and Sortino in `_metrics` subtract the module constant `RISK_FREE_RATE = 0.05`, de-annualized to the rebalance period as `(1 + rf)**(1/ppy) - 1`. **This must stay in sync with the same 5% rate in `services/indicators.py::compute_performance_metrics`**, or cross-page Sharpe comparisons become meaningless.
 
 **Arbitrary-era backtests (`archive=true`)** route through `services/history_archive.py` / the `history_archive` table instead of the rolling StockCache: it fetches the requested `start_date`→`end_date` span (plus a ~480-day warmup buffer) from yfinance once, stores the widest range per ticker, and reuses it. Best with Watchlist/Portfolio sources (Full Universe = many on-demand fetches). Requires both dates.
 
@@ -109,6 +207,10 @@ Walk-forward backtest now takes a `strategy` param (one of the 4 ids); `source` 
 - `User` gained trading-settings columns: `account_size`, `risk_pct`, `max_positions`, `atr_stop_mult`, `r_multiple`.
 - `User.litellm_api_key` (nullable) gives each user their own LiteLLM virtual key so AI token usage is separate. The AI path (`api/ai.py` `llm_headers`/`call_chat_model`, `services/ai_service.py` `LiteLLMAIService`/`ai_service` dependency, `services/report_service.py` `_call_llm`/`generate_daily_report`) takes an optional `api_key` and falls back to the global config key when a user has none. The auth API never returns the raw key — only a `has_litellm_key` boolean. The 05:30 scheduler now generates a report for every user with their own key.
 - `PortfolioPosition` gained `stop_loss`, `target`, `entry_date`, `strategy`.
+- `PortfolioPosition` and `ClosedTrade` both gained the trade plan's INTENT, previously packed into `notes` as `THESIS:` / `INVALIDATION:` / `TIME STOP:` / `PLAN: entry <x>` prefixed lines: `planned_entry`, `planned_entry_high`, `thesis`, `invalidation`, `time_stop_days` (all nullable). `planned_entry`/`planned_entry_high` are **write-once** like `initial_stop` — they are the reference the fill is judged against by `services/scorecard.py`'s `entry_chasing` metric, so an edit must never rewrite them. `services/trade_plan.py::parse_plan_notes()` is the one decoder of the legacy prefixed-notes shape, and `main.py::backfill_plan_fields_from_notes()` runs it once inside `ensure_schema_migrations()`: it fills only NULL columns, **never touches `notes`** (the only free-form copy of a trade's reasoning), and is therefore idempotent.
+- `User.max_open_r` (Float, nullable) — the CHOSEN open-R ceiling. NULL is meaningful and is deliberately **not** repaired to a default: it means "not chosen", and consumers fall back to the derived `max_positions × risk_pct`.
+- `User.use_evidence_regimes` (Boolean, default False) — per-user opt-in for the edge-matrix regime override on the Playbook. See "Market Regime".
+- `PortfolioPosition` and `ClosedTrade` both gained `initial_stop` (nullable) — the stop the position was **opened** with. It is written once (on creation, or the first time a stop is supplied) and never overwritten, so trailing a stop up cannot inflate the recorded R. `api/portfolio.py::compute_r_multiple(avg_cost, exit_price, initial_stop, stop_loss)` is the single source of that math and falls back to `stop_loss` for legacy rows where `initial_stop` is NULL.
 - Closing a position (`POST /api/portfolio/{ticker}/close`) archives it to the journal and deletes it; `DELETE /api/portfolio/{ticker}` remains a non-journaled hard delete for correcting mistaken entries.
 - Lightweight SQLite `ALTER` migrations are handled by `ensure_schema_migrations()` in `main.py` (renamed from `ensure_cache_columns`, now with a generic `_ensure_columns` helper).
 
@@ -130,7 +232,7 @@ Sector ETF data (`get_sector_data`) uses individual `yf.Ticker().history()` call
 
 ## Configuration
 
-Copy `.env.example` to `.env`. Key variables:
+Copy `.env.example` to `.env`. `Settings` sets `extra = "ignore"`, so unknown keys left in a local `.env` (for example the pre-LiteLLM `OLLAMA_URL`/`OLLAMA_MODEL`) are skipped instead of raising a pydantic `ValidationError` at import time — which previously prevented the app from starting at all. Key variables:
 
 | Variable | Default | Notes |
 |---|---|---|

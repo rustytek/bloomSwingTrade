@@ -193,8 +193,115 @@ def classify_regime(
 
 
 def strategies_for_regime(quadrant: str | None) -> set[str]:
-    """Strategy ids tagged as a good fit for the given quadrant."""
+    """Strategy ids tagged as a good fit for the given quadrant.
+
+    PINNED CONTRACT — services/today.py and services/backtest.py both call this
+    with exactly one positional argument and expect a set back. The evidence
+    override lives in `strategies_for_regime_with_evidence` below precisely so
+    this signature and its behaviour never move.
+    """
     from services.strategies import STRATEGIES
     if not quadrant:
         return set(STRATEGIES)
     return {sid for sid, strat in STRATEGIES.items() if quadrant in getattr(strat, "regimes", [])}
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Evidence override (opt-in)
+# ──────────────────────────────────────────────────────────────────────────
+# `Strategy.regimes` is a hand-written opinion. services/edge_matrix.py turns
+# the backtest into evidence about whether that opinion holds per quadrant.
+# When a matrix is supplied AND the override is enabled, we:
+#   - EXCLUDE strategies the evidence marks "mis-tagged" here (tagged, but
+#     losing money on an adequate sample), and
+#   - INCLUDE strategies marked "untagged-edge" here (not tagged, but a solid
+#     positive edge) as candidates.
+# "unproven" changes nothing — the hand tag stands, because "we have no
+# evidence" must never be read as "the evidence is bad".
+#
+# SAFETY INVARIANT: this function can never return an empty set when the plain
+# tag-based lookup would have returned a non-empty one. A stale, empty or
+# corrupt matrix degrades to today's behaviour; it cannot blank the user's
+# playbook. `evidence_adjustment()` reports when that fallback fired.
+EVIDENCE_OVERRIDE_ENABLED = False
+
+
+def set_evidence_override(enabled: bool) -> None:
+    """Module-level opt-in for the evidence override. Off by default so the
+    live app behaves exactly as it does today until someone turns it on."""
+    global EVIDENCE_OVERRIDE_ENABLED
+    EVIDENCE_OVERRIDE_ENABLED = bool(enabled)
+
+
+def _verdicts_for(matrix: dict | None, quadrant: str | None) -> dict[str, str]:
+    """{strategy_id: verdict} for one quadrant, tolerating any malformed matrix."""
+    if not matrix or not quadrant or not isinstance(matrix, dict):
+        return {}
+    strategies = matrix.get("strategies")
+    if not isinstance(strategies, dict):
+        return {}
+    out: dict[str, str] = {}
+    for sid, entry in strategies.items():
+        if not isinstance(entry, dict):
+            continue
+        cells = entry.get("cells")
+        if not isinstance(cells, dict):
+            continue
+        cell = cells.get(quadrant)
+        if isinstance(cell, dict) and isinstance(cell.get("verdict"), str):
+            out[sid] = cell["verdict"]
+    return out
+
+
+def evidence_adjustment(quadrant: str | None, matrix: dict | None = None,
+                        force: bool = False) -> dict:
+    """What the evidence would change for `quadrant`, and whether it applied.
+
+    Returns: base, excluded, added, result, applied, fallback, reason.
+    `force=True` applies the override regardless of EVIDENCE_OVERRIDE_ENABLED
+    (used by the API/tests so a preview never needs a global flag flip).
+    """
+    from services.strategies import STRATEGIES
+
+    base = strategies_for_regime(quadrant)
+    enabled = force or EVIDENCE_OVERRIDE_ENABLED
+
+    if not enabled:
+        return {"base": sorted(base), "excluded": [], "added": [], "result": sorted(base),
+                "applied": False, "fallback": False, "reason": "Evidence override is off."}
+
+    verdicts = _verdicts_for(matrix, quadrant)
+    if not verdicts:
+        return {"base": sorted(base), "excluded": [], "added": [], "result": sorted(base),
+                "applied": False, "fallback": True,
+                "reason": "No usable edge matrix for this quadrant — using the hand-written tags."}
+
+    excluded = sorted(s for s in base if verdicts.get(s) == "mis-tagged")
+    added = sorted(
+        s for s, v in verdicts.items()
+        if v == "untagged-edge" and s not in base and s in STRATEGIES
+    )
+    result = (base - set(excluded)) | set(added)
+
+    fallback = False
+    reason = "Evidence applied."
+    if not result and base:
+        # SAFETY INVARIANT: never hand back an empty playbook.
+        result = set(base)
+        excluded, added, fallback = [], [], True
+        reason = ("Evidence would have excluded every strategy for this regime — "
+                  "ignored and fell back to the hand-written tags.")
+    return {"base": sorted(base), "excluded": excluded, "added": added,
+            "result": sorted(result), "applied": not fallback, "fallback": fallback,
+            "reason": reason}
+
+
+def strategies_for_regime_with_evidence(quadrant: str | None, matrix: dict | None = None,
+                                        force: bool = False) -> set[str]:
+    """Evidence-aware version of `strategies_for_regime`.
+
+    With no matrix (or the override disabled) the result is IDENTICAL to
+    `strategies_for_regime(quadrant)` — that equivalence is covered by
+    test_edge.py for all four quadrants plus the None case.
+    """
+    return set(evidence_adjustment(quadrant, matrix, force=force)["result"])

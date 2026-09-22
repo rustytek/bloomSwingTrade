@@ -39,6 +39,17 @@ class User(Base):
     atr_stop_mult = Column(Float, default=2.5, nullable=False)
     r_multiple = Column(Float, default=2.0, nullable=False)
 
+    # Chosen open-R ceiling. NULL means "not chosen" — consumers then fall back
+    # to the DERIVED budget (max_positions x risk_pct, see
+    # services/portfolio_risk.implied_max_open_r). The distinction is reported
+    # through `budget_basis` so the UI never presents a derived number as a
+    # deliberate one.
+    max_open_r = Column(Float, nullable=True)
+
+    # Opt-in: let services/edge_matrix.py evidence override the hand-written
+    # Strategy.regimes tags on the Today playbook. Ships OFF.
+    use_evidence_regimes = Column(Boolean, default=False, nullable=True)
+
     watchlist = relationship("WatchlistItem", back_populates="user", cascade="all, delete-orphan")
     portfolio = relationship("PortfolioPosition", back_populates="user", cascade="all, delete-orphan")
 
@@ -87,9 +98,26 @@ class PortfolioPosition(Base):
     added_at = Column(DateTime, default=utcnow)
     notes = Column(Text, nullable=True)
     stop_loss = Column(Float, nullable=True)
+    # The FIRST stop ever set on this position. Written once at creation (or the
+    # first time a stop is supplied) and never overwritten — R-multiples must be
+    # measured against the initial risk, otherwise trailing a stop up silently
+    # inflates the recorded R on every trade.
+    initial_stop = Column(Float, nullable=True)
     target = Column(Float, nullable=True)
     entry_date = Column(Date, nullable=True)
     strategy = Column(String(32), nullable=True)
+
+    # ── The trade plan's INTENT, captured at commit time ────────────────────
+    # These were previously stuffed into `notes` as "THESIS:"/"INVALIDATION:"/
+    # "TIME STOP:"/"PLAN: entry <x>" prefixed lines because no columns existed.
+    # `planned_entry` is the price the plan said to pay and is WRITE-ONCE (like
+    # initial_stop): it is the denominator for the entry-chasing execution
+    # metric, so overwriting it on an edit would erase the evidence of a chase.
+    planned_entry = Column(Float, nullable=True)
+    planned_entry_high = Column(Float, nullable=True)   # top of the plan's entry zone
+    thesis = Column(Text, nullable=True)
+    invalidation = Column(Text, nullable=True)
+    time_stop_days = Column(Integer, nullable=True)
 
     user = relationship("User", back_populates="portfolio")
 
@@ -108,12 +136,20 @@ class ClosedTrade(Base):
     exit_price = Column(Float, nullable=False)
     entry_date = Column(Date, nullable=True)
     exit_date = Column(Date, nullable=True)
-    stop_loss = Column(Float, nullable=True)
+    stop_loss = Column(Float, nullable=True)     # stop in force at the moment of exit
+    initial_stop = Column(Float, nullable=True)  # stop at entry — the R denominator
     target = Column(Float, nullable=True)
     strategy = Column(String(32), nullable=True)
     pnl = Column(Float, nullable=False)
     pnl_pct = Column(Float, nullable=False)
     r_multiple = Column(Float, nullable=True)   # null when no valid stop was set
+    # Carried over from PortfolioPosition on close — the plan's intent, so the
+    # journal can compare what was PLANNED against what was actually done.
+    planned_entry = Column(Float, nullable=True)
+    planned_entry_high = Column(Float, nullable=True)
+    thesis = Column(Text, nullable=True)
+    invalidation = Column(Text, nullable=True)
+    time_stop_days = Column(Integer, nullable=True)
     notes = Column(Text, nullable=True)
     opened_at = Column(DateTime, nullable=True)
     closed_at = Column(DateTime, default=utcnow)

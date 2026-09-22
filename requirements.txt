@@ -4,7 +4,13 @@ sqlalchemy==2.0.36
 python-jose[cryptography]==3.3.0
 bcrypt==4.2.1
 python-multipart==0.0.20
-yfinance>=1.2.0
+# Upper bound is deliberate: yfinance ships breaking changes in minor releases
+# (see CLAUDE.md — chart_service had to stop using yf.download() for exactly this
+# reason). Verified working on 1.7.0: Ticker.history() delegates via *args/**kwargs
+# to PriceHistory.history(), which still accepts period/interval/auto_adjust with
+# auto_adjust=True, so cached closes remain split- and dividend-adjusted.
+# Re-verify those three kwargs before relaxing this bound.
+yfinance>=1.2.0,<2.0
 pandas==2.2.3
 numpy==2.1.3
 httpx==0.28.0

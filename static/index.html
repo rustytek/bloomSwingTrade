@@ -278,11 +278,13 @@
       macd_sig: 'MACD signal line crossover. Bullish=upward momentum, Bearish=downward momentum',
       vs_ma50: '% above/below 50-day moving average. Positive=above (bullish near-term)',
       vs_ma200: '% above/below 200-day moving average. Positive=above (bullish long-term trend)',
-      p52w: 'Position within 52-week range (0%=at low, 100%=at high). >75% = near highs',
-      vol_r: 'Volume ratio: recent 5-day avg vs 20-day avg. >1.5 = high volume (confirmation)',
+      p52w: 'Position within the true 52-week (252 trading-day) range. 0% = at the 52-week low, 100% = at the 52-week high. >75% = near highs',
+      vol_r: "Volume confirmation ratio: TODAY's share volume ÷ the prior 20-day average volume. 1.0 = an average day, >1.5 = a genuine high-volume day (breakout confirmation)",
+      vol_r_5d: 'Smoothed volume ratio: the recent 5-day average volume ÷ the 20-day average volume. Slower-moving than the single-day ratio — use it to spot a multi-day build in participation, not a single-bar confirmation',
       beta: 'Volatility vs S&P 500. 1.0=market, >1=more volatile, <1=less volatile',
       div: 'Annual dividend yield %. Income investors seek >2%',
-      ann_ret: 'Annualized return based on the last 1 month (21 trading days) of price data',
+      ann_ret: 'Annualized return computed over the FULL cached price history. This is the same return series Sharpe, Sortino, and Calmar are calculated from, so it is the one to compare against them',
+      ann_ret_1m: 'Annualized return extrapolated from just the last 1 month (21 trading days) of price data. Very noisy — a short-term pace, not a long-run rate. Do not compare it against Sharpe/Sortino/Calmar',
       sharpe: 'Sharpe Ratio — (Return − Risk-Free Rate) ÷ Total Volatility (σ). Measures general-purpose risk-adjusted return. >1 = good, >2 = excellent. Penalizes ALL volatility, including upside.',
       sortino: 'Sortino Ratio — like Sharpe but only penalizes DOWNSIDE volatility. Rewards strategies with high upside swings. >1 = good, >2 = excellent. Prefer over Sharpe for asymmetric return profiles.',
       gain_sharpe: 'Sortino Ratio — like Sharpe but only penalizes DOWNSIDE volatility. Rewards strategies with high upside swings. >1 = good, >2 = excellent.',
@@ -298,10 +300,11 @@
       avg_dollar_vol_m: 'Average dollar volume over about 20 trading days, in millions. Higher means easier entry/exit.',
       score_f: 'Fundamental score 0-5. Rates P/E, margins, growth, debt, FCF',
       score_t: 'Technical score 0-5. Rates RSI, MACD, MA position, volume',
-      score_m: 'Momentum score 0-5. Rates 52W position, volume trend, earnings',
+      score_m: 'Momentum score 0-5. Rates 52W position and volume trend',
       score: 'Overall composite score 0-5. Average of F+T+M scores',
-      gc: 'Golden Cross: MA50 crossed above MA200 (bullish long-term signal)',
-      dc: 'Death Cross: MA50 crossed below MA200 (bearish long-term signal)',
+      gc: 'Golden Cross EVENT: MA50 crossed above MA200 within the last 5 trading days. This is a fresh crossover, not a standing trend — most stocks in an uptrend will NOT have it. For "is MA50 above MA200 right now", use MA Trend instead',
+      dc: 'Death Cross EVENT: MA50 crossed below MA200 within the last 5 trading days. A fresh crossover, not a standing trend. For "is MA50 below MA200 right now", use MA Trend instead',
+      ma_state: 'MA Trend state: Bullish = MA50 is currently above MA200; Bearish = MA50 is currently below MA200. This is the standing condition (what the old Golden/Death Cross flags actually meant), independent of whether a crossover just happened',
       vol_1m: '1-month annualized volatility (std dev of daily returns × √252). Lower=less risky. <20%=low, >40%=high',
       max_dd_1m: 'Max drawdown over the last 1 month: largest peak-to-trough decline. Lower is better',
     };
@@ -320,7 +323,8 @@
       { k: 'sharpe', label: 'Sharpe', w: 62 },
       { k: 'sortino', label: 'Sortino', w: 68 },
       { k: 'max_dd_1m', label: 'MaxDD 1M', w: 80 },
-      { k: 'ann_ret', label: 'AnnRet', w: 68 },
+      { k: 'ann_ret', label: 'AnnRet (full)', w: 92 },
+      { k: 'ann_ret_1m', label: 'AnnRet (1M)', w: 92 },
       { k: 'beta', label: 'Beta', w: 52 },
       { k: 'calmar', label: 'Calmar', w: 65 },
       { k: 'info_ratio', label: 'Info R.', w: 65 },
@@ -335,7 +339,9 @@
       { k: 'macd_sig', label: 'MACD', w: 70 },
       { k: 'vs_ma200', label: 'vMA200', w: 72 },
       { k: 'p52w', label: '52W%', w: 58 },
-      { k: 'vol_r', label: 'VolR', w: 58 },
+      { k: 'vol_r', label: 'VolR (1D)', w: 74 },
+      { k: 'vol_r_5d', label: 'VolR (5D)', w: 74 },
+      { k: 'ma_state', label: 'MA Trend', w: 78 },
       { k: 'ret_5d', label: '5D', w: 58 },
       { k: 'ret_21d', label: '21D', w: 58 },
       { k: 'ret_63d', label: '63D', w: 58 },
@@ -379,7 +385,8 @@
       { name: 'Momentum', f: { p52w_min: 60, vs_ma200: 'above', vs_ma50: 'above', vol_r_min: 1.2 } },
       { name: 'Oversold', f: { rsi_min: 25, rsi_max: 40, vs_ma50: 'below' } },
       { name: 'Dividend', f: { div_min: 2, fcf_only: true, pe_max: 25 } },
-      { name: 'Golden Cross', f: { gc: true, vs_ma200: 'above' } },
+      { name: 'Golden Cross (new)', f: { gc: true } },
+      { name: 'Bull MA Trend', f: { ma_state: 'bull', vs_ma200: 'above' } },
       { name: 'Large Cap Quality', f: { cap_tier: 'Large', pm_min: 15, fcf_only: true, score_f_min: 3 } },
     ];
 
@@ -387,8 +394,8 @@
       pe_min: '', pe_max: '', fwd_pe_min: '', fwd_pe_max: '',
       eps_grw_min: '', eps_grw_max: '', rev_grw_min: '', rev_grw_max: '',
       pm_min: '', pm_max: '', debt_eq_min: '', debt_eq_max: '', fcf_only: false,
-      rsi_min: '', rsi_max: '', macd: '', vs_ma200: '', vs_ma50: '', gc: false, dc: false,
-      vol_r_min: '', p52w_min: '', p52w_max: '', earn_beat: false, earn_soon: false,
+      rsi_min: '', rsi_max: '', macd: '', vs_ma200: '', vs_ma50: '', gc: false, dc: false, ma_state: '',
+      vol_r_min: '', vol_r_5d_min: '', p52w_min: '', p52w_max: '', earn_soon: false,
       gain_sharpe_min: '', vol_max: '',
       beta_min: '', beta_max: '', div_min: '', div_max: '', sectors: [],
       asset_type: '', cap_tier: '', mkt_cap_min: '', mkt_cap_max: '',
@@ -840,13 +847,17 @@
         ['vs MA50', s.vs_ma50 != null ? fmtPct(s.vs_ma50) : null],
         ['vs MA200', s.vs_ma200 != null ? fmtPct(s.vs_ma200) : null],
         ['52W Position', s.p52w != null ? s.p52w + '%' : null],
-        ['Volume Ratio', fmt2(s.vol_r)],
+        ['MA Trend', s.ma_state === 'bull' ? 'Bullish (MA50 > MA200)' : s.ma_state === 'bear' ? 'Bearish (MA50 < MA200)' : null],
+        ['MA Cross (last 5d)', (s.gc_event ?? s.gc) ? 'Golden cross' : (s.dc_event ?? s.dc) ? 'Death cross' : 'None'],
+        ['Vol Ratio (today vs 20D avg)', fmt2(s.vol_r)],
+        ['Vol Ratio (5D vs 20D avg)', fmt2(s.vol_r_5d)],
         ['5D Return', s.ret_5d != null ? fmtPct(s.ret_5d) : null],
         ['21D Return', s.ret_21d != null ? fmtPct(s.ret_21d) : null],
         ['63D Return', s.ret_63d != null ? fmtPct(s.ret_63d) : null],
         ['21D vs SPY', s.rel_spy_21d != null ? fmtPct(s.rel_spy_21d) : null],
         ['Avg $ Volume', s.avg_dollar_vol_m != null ? '$' + fmt1(s.avg_dollar_vol_m) + 'M' : null],
-        ['Ann Return', s.ann_ret != null ? fmtPct(s.ann_ret) : null],
+        ['Ann Return (full history)', s.ann_ret != null ? fmtPct(s.ann_ret) : null],
+        ['Ann Return (1M)', s.ann_ret_1m != null ? fmtPct(s.ann_ret_1m) : null],
         ['Volatility', s.vol != null ? fmtPct(s.vol) : null],
         ['Sharpe', fmt2(s.sharpe)],
         ['Sortino', fmt2(s.sortino)],
@@ -1002,16 +1013,17 @@
                     { lbl: 'RSI 40-65', tip: 'RSI (Relative Strength Index) in neutral-bullish zone — not overbought or oversold', pass: (s.rsi || 0) >= 40 && (s.rsi || 0) <= 65 },
                     { lbl: 'Above MA200', tip: 'Price above 200-day Moving Average — long-term uptrend', pass: (s.vs_ma200 || 0) > 0 },
                     { lbl: 'MA200 +10%', tip: 'Price more than 10% above 200-day MA — strong uptrend', pass: (s.vs_ma200 || 0) > 10 },
-                    { lbl: 'Golden Cross', tip: 'Golden Cross — 50-day MA recently crossed above 200-day MA (bullish signal)', pass: s.gc },
-                    { lbl: 'No Death Cross', tip: 'No Death Cross — 50-day MA has not crossed below 200-day MA (no bearish signal)', pass: !s.dc }]
+                    { lbl: 'MA50 > MA200', tip: 'MA Trend is bullish — the 50-day MA is currently above the 200-day MA. This is the standing trend state, not a crossover event.', pass: s.ma_state === 'bull' },
+                    { lbl: 'Golden Cross (5d)', tip: 'Golden Cross EVENT — the 50-day MA crossed above the 200-day MA within the last 5 trading days. A fresh crossover, so most stocks in an established uptrend will not have it.', pass: (s.gc_event ?? s.gc) === true },
+                    { lbl: 'No Death Cross (5d)', tip: 'No Death Cross EVENT — the 50-day MA did not cross below the 200-day MA in the last 5 trading days.', pass: !(s.dc_event ?? s.dc) }]
                 },
                 {
                   lbl: 'Momentum', tip: 'Momentum Score — measures recent price strength, volume activity, and relative performance.', score: s.score?.m, col: '#00c48c', items: [
                     { lbl: 'Up Today', tip: 'Positive price change today', pass: (s.chg_pct || 0) > 0 },
                     { lbl: 'Up >1%', tip: 'Price up more than 1% today — strong session', pass: (s.chg_pct || 0) > 1 },
-                    { lbl: 'Vol Ratio >1.2x', tip: 'Volume Ratio above 1.2x — trading above average volume (elevated interest)', pass: (s.vol_r || 0) > 1.2 },
-                    { lbl: '52W Pos >70%', tip: '52-Week Position above 70% — price near the high end of its yearly range', pass: (s.p52w || 0) > 70 },
-                    { lbl: 'Beat Estimates', tip: 'Beat earnings estimates last quarter — EPS (Earnings Per Share) exceeded analyst consensus', pass: s.earn_beat }]
+                    { lbl: 'Vol Ratio >1.2x', tip: "Volume Ratio above 1.2x — today's share volume is more than 1.2x the prior 20-day average (elevated interest)", pass: (s.vol_r || 0) > 1.2 },
+                    { lbl: '52W Pos >70%', tip: '52-Week Position above 70% — price near the high end of its true 252-trading-day range', pass: (s.p52w || 0) > 70 },
+                    { lbl: '5D Vol Ratio >1.2x', tip: 'Smoothed Volume Ratio above 1.2x — the recent 5-day average volume is more than 1.2x the 20-day average (a multi-day build in participation)', pass: (s.vol_r_5d || 0) > 1.2 }]
                 }
               ].map(({ lbl, tip, score, col, items }) => (
                 <div key={lbl} style={{ background: '#141414', borderRadius: 4, padding: 14 }}>
@@ -2071,9 +2083,9 @@
       const countFund = () => [f.pe_min, f.pe_max, f.fwd_pe_min, f.fwd_pe_max, f.eps_grw_min, f.eps_grw_max,
       f.rev_grw_min, f.rev_grw_max, f.pm_min, f.pm_max, f.debt_eq_min, f.debt_eq_max, f.fcf_only]
         .filter(v => v !== '' && v !== false && v != null).length;
-      const countTech = () => [f.rsi_min, f.rsi_max, f.macd, f.vs_ma200, f.vs_ma50, f.gc, f.dc]
+      const countTech = () => [f.rsi_min, f.rsi_max, f.macd, f.vs_ma200, f.vs_ma50, f.gc, f.dc, f.ma_state]
         .filter(v => v !== '' && v !== false && v != null).length;
-      const countMom = () => [f.vol_r_min, f.p52w_min, f.p52w_max, f.earn_beat, f.earn_soon, f.gain_sharpe_min, f.vol_max,
+      const countMom = () => [f.vol_r_min, f.vol_r_5d_min, f.p52w_min, f.p52w_max, f.earn_soon, f.gain_sharpe_min, f.vol_max,
         f.chg_pct_min, f.chg_pct_max, f.ann_ret_min, f.ann_ret_max, f.ret_5d_min, f.ret_5d_max,
         f.ret_21d_min, f.ret_21d_max, f.ret_63d_min, f.ret_63d_max, f.rel_spy_21d_min, f.rel_spy_21d_max]
         .filter(v => v !== '' && v !== false && v != null).length;
@@ -2171,18 +2183,29 @@
                 <option value="">Any</option><option value="above">Above</option><option value="below">Below</option>
               </select>
             </div>
+            <div style={{ marginBottom: 6 }}>
+              <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}><Tip label="MA Trend (state)" tip={COL_TIPS.ma_state} /></div>
+              <select value={f.ma_state} onChange={e => setFilters(p => ({ ...p, ma_state: e.target.value }))}>
+                <option value="">Any</option><option value="bull">Bullish (MA50 &gt; MA200)</option><option value="bear">Bearish (MA50 &lt; MA200)</option>
+              </select>
+            </div>
             <div style={{ display: 'flex', gap: 12, marginTop: 4 }}>
-              <Toggle checked={f.gc} onChange={v => setFilters(p => ({ ...p, gc: v }))} label="Golden Cross" />
-              <Toggle checked={f.dc} onChange={v => setFilters(p => ({ ...p, dc: v }))} label="Death Cross" />
+              <Toggle checked={f.gc} onChange={v => setFilters(p => ({ ...p, gc: v }))} label="Golden Cross (last 5d)" />
+              <Toggle checked={f.dc} onChange={v => setFilters(p => ({ ...p, dc: v }))} label="Death Cross (last 5d)" />
             </div>
           </FilterSection>
 
           <FilterSection title="Momentum" badge={countMom()}>
             <RangeRow label="52W Position %" tip={COL_TIPS.p52w} minKey="p52w_min" maxKey="p52w_max" filters={f} setFilters={setFilters} step="1" />
             <div style={{ marginBottom: 6 }}>
-              <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}><Tip label="Min Volume Ratio" tip={COL_TIPS.vol_r} /></div>
+              <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}><Tip label="Min Vol Ratio (today vs 20D avg)" tip={COL_TIPS.vol_r} /></div>
               <input type="number" placeholder="e.g. 1.5" step="0.1" value={f.vol_r_min}
                 onChange={e => setFilters(p => ({ ...p, vol_r_min: e.target.value }))} style={{ width: '100%' }} />
+            </div>
+            <div style={{ marginBottom: 6 }}>
+              <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}><Tip label="Min Vol Ratio (5D vs 20D avg)" tip={COL_TIPS.vol_r_5d} /></div>
+              <input type="number" placeholder="e.g. 1.2" step="0.1" value={f.vol_r_5d_min}
+                onChange={e => setFilters(p => ({ ...p, vol_r_5d_min: e.target.value }))} style={{ width: '100%' }} />
             </div>
             <div style={{ marginBottom: 6 }}>
               <div style={{ fontSize: 10, color: '#666', marginBottom: 3 }}>Gain Sharpe</div>
@@ -2195,11 +2218,10 @@
                 onChange={e => setFilters(p => ({ ...p, vol_max: e.target.value }))} style={{ width: '100%' }} />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4, marginBottom: 8 }}>
-              <Toggle checked={f.earn_beat} onChange={v => setFilters(p => ({ ...p, earn_beat: v }))} label="Earnings Beat" />
               <Toggle checked={f.earn_soon} onChange={v => setFilters(p => ({ ...p, earn_soon: v }))} label="Earnings Soon" />
             </div>
             <RangeRow label="Today Chg %" tip={COL_TIPS.chg_pct} minKey="chg_pct_min" maxKey="chg_pct_max" filters={f} setFilters={setFilters} step="0.1" />
-            <RangeRow label="Ann Return %" tip={COL_TIPS.ann_ret} minKey="ann_ret_min" maxKey="ann_ret_max" filters={f} setFilters={setFilters} step="1" />
+            <RangeRow label="Ann Return % (full history)" tip={COL_TIPS.ann_ret} minKey="ann_ret_min" maxKey="ann_ret_max" filters={f} setFilters={setFilters} step="1" />
             <RangeRow label="5D Return %" tip={COL_TIPS.ret_5d} minKey="ret_5d_min" maxKey="ret_5d_max" filters={f} setFilters={setFilters} step="0.1" />
             <RangeRow label="21D Return %" tip={COL_TIPS.ret_21d} minKey="ret_21d_min" maxKey="ret_21d_max" filters={f} setFilters={setFilters} step="0.1" />
             <RangeRow label="63D Return %" tip={COL_TIPS.ret_63d} minKey="ret_63d_min" maxKey="ret_63d_max" filters={f} setFilters={setFilters} step="0.1" />
@@ -2283,12 +2305,12 @@
         const f = filters;
         return [f.pe_min, f.pe_max, f.fwd_pe_min, f.fwd_pe_max, f.eps_grw_min, f.eps_grw_max,
         f.rev_grw_min, f.rev_grw_max, f.pm_min, f.pm_max, f.debt_eq_min, f.debt_eq_max,
-        f.rsi_min, f.rsi_max, f.macd, f.vs_ma200, f.vs_ma50, f.vol_r_min, f.p52w_min, f.p52w_max, f.gain_sharpe_min, f.vol_max,
+        f.rsi_min, f.rsi_max, f.macd, f.vs_ma200, f.vs_ma50, f.ma_state, f.vol_r_min, f.vol_r_5d_min, f.p52w_min, f.p52w_max, f.gain_sharpe_min, f.vol_max,
         f.beta_min, f.beta_max, f.div_min, f.div_max, f.asset_type, f.cap_tier,
         f.swing_score_min, f.score_min, f.score_f_min, f.score_t_min, f.score_m_min,
         f.sharpe_min, f.sortino_min, f.calmar_min, f.info_ratio_min, f.treynor_min, f.max_dd_1m_max, ...f.sectors]
           .filter(v => v !== '' && v !== false && v != null).length +
-          (f.fcf_only ? 1 : 0) + (f.gc ? 1 : 0) + (f.dc ? 1 : 0) + (f.earn_beat ? 1 : 0) + (f.earn_soon ? 1 : 0);
+          (f.fcf_only ? 1 : 0) + (f.gc ? 1 : 0) + (f.dc ? 1 : 0) + (f.earn_soon ? 1 : 0);
       }, [filters]);
       const exportCSV = () => {
         if (!results.length) return;
@@ -2519,6 +2541,12 @@
           case 'vs_ma200': return s.vs_ma200 != null ? <span className="mono" style={{ color: clr(s.vs_ma200) }}>{fmtPct(s.vs_ma200)}</span> : '—';
           case 'p52w': return s.p52w != null ? <span className="mono">{s.p52w}%</span> : '—';
           case 'vol_r': return s.vol_r != null ? <span className="mono" style={{ color: s.vol_r > 1.5 ? '#f0a500' : s.vol_r < 0.7 ? '#555' : '#c8c8c8' }}>{fmt2(s.vol_r)}×</span> : '—';
+          case 'vol_r_5d': return s.vol_r_5d != null ? <span className="mono" style={{ color: s.vol_r_5d > 1.2 ? '#f0a500' : s.vol_r_5d < 0.8 ? '#555' : '#c8c8c8' }}>{fmt2(s.vol_r_5d)}×</span> : '—';
+          case 'ma_state': {
+            const st = s.ma_state === 'bull' ? 'Bull' : s.ma_state === 'bear' ? 'Bear' : null;
+            if (!st) return '—';
+            return <span style={{ color: st === 'Bull' ? '#00d26a' : '#ff4d4d', fontSize: 10 }}>{st}</span>;
+          }
           case 'ret_5d':
           case 'ret_21d':
           case 'ret_63d':
@@ -2527,6 +2555,7 @@
           case 'beta': return <span className="mono">{fmt2(s.beta)}</span>;
           case 'div': return s.div != null ? <span className="mono" style={{ color: '#00d26a' }}>{s.div}%</span> : '—';
           case 'ann_ret': return s.ann_ret != null ? <span className="mono" style={{ color: clr(s.ann_ret) }}>{fmtPct(s.ann_ret)}</span> : '—';
+          case 'ann_ret_1m': return s.ann_ret_1m != null ? <span className="mono" style={{ color: clr(s.ann_ret_1m) }}>{fmtPct(s.ann_ret_1m)}</span> : '—';
           case 'sharpe':
           case 'gain_sharpe':
           case 'sortino': {
@@ -2672,7 +2701,17 @@
           if (gen !== loadGen.current) return;
           if (r.ok) {
             const data = await r.json();
-            const list = data.results || [];
+            let list = data.results || [];
+            // Client-side safety net for the schema_v 2 filters. The backend may or may not
+            // honour these keys yet; applying them here keeps the behaviour correct either way
+            // (re-applying a filter the server already applied is a no-op).
+            if (f.ma_state === 'bull' || f.ma_state === 'bear') {
+              list = list.filter(s => s.ma_state === f.ma_state);
+            }
+            if (f.vol_r_5d_min !== '' && f.vol_r_5d_min != null) {
+              const min = Number(f.vol_r_5d_min);
+              if (!Number.isNaN(min)) list = list.filter(s => s.vol_r_5d != null && s.vol_r_5d >= min);
+            }
             if (data.rate_limit_exceeded) setRateLimitExceeded(true);
             setSectors([...new Set(list.map(s => s.sector).filter(Boolean))].sort());
             setResults(list);

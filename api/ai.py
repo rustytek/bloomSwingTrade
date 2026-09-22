@@ -182,9 +182,14 @@ def _debug_llm_user_message(mode: str, target_chars: int | None = None) -> str:
         "market_value": 1042.0,
         "pnl_pct": 4.2,
         "rsi": 55.1,
+        # Mirrors the real quote contract (schema v2): vol_r is the single-bar
+        # ratio, ann_ret is full-history, ann_ret_1m is the 21-bar pace, and
+        # ma_state carries the standing MA trend.
         "vol_r": 1.15,
         "chg_pct": 0.8,
-        "ann_ret": 24.5,
+        "ann_ret": 18.3,
+        "ann_ret_1m": 24.5,
+        "ma_state": "bull",
         "sharpe": 1.1,
         "sector": "Technology",
         "macd_sig": "bullish",
@@ -346,9 +351,14 @@ async def get_signals(
     if data is None:
         raise HTTPException(status_code=404, detail=f"No data for {ticker}")
 
+    # Quote schema v2: `gc`/`dc` are crossover EVENTS (a cross in the last 5 bars),
+    # `ma_state` is the standing MA50-vs-MA200 trend, `ann_ret_1m` is the 21-bar
+    # annualized return (distinct from `ann_ret`, which is full-history). Pass both
+    # halves of each pair so the model can't conflate a fresh cross with an
+    # established trend, or a 1-month pace with a long-run rate.
     technicals = {k: data.get(k) for k in [
-        "rsi", "macd_sig", "vs_ma50", "vs_ma200", "gc", "dc",
-        "vol_r", "p52w", "chg_pct", "score"
+        "rsi", "macd_sig", "vs_ma50", "vs_ma200", "ma_state", "gc", "dc",
+        "vol_r", "p52w", "ann_ret_1m", "chg_pct", "score"
     ]}
     signals = await svc.generate_signals(ticker, technicals)
     return {"ticker": ticker, "signals": signals}
@@ -591,7 +601,10 @@ async def market_chat(
             "market_value": round(mv, 2),
             "pnl_pct": round((mv - cost) / cost * 100, 2) if cost > 0 else 0,
             "rsi": q.get("rsi"), "vol_r": q.get("vol_r"), "chg_pct": q.get("chg_pct"),
-            "ann_ret": q.get("ann_ret"), "sharpe": q.get("sharpe"),
+            # ann_ret = full-history annualized (the one sharpe is consistent with);
+            # ann_ret_1m = 21-bar pace; ma_state = standing MA50/MA200 trend.
+            "ann_ret": q.get("ann_ret"), "ann_ret_1m": q.get("ann_ret_1m"),
+            "ma_state": q.get("ma_state"), "sharpe": q.get("sharpe"),
             "sector": q.get("sector", "Unknown"), "macd_sig": q.get("macd_sig"),
         })
 

@@ -532,11 +532,11 @@
 
     <!-- Volume signal table from portfolio/watchlist -->
     <div class="panel">
-      <div class="panel-title" title="Wyckoff volume analysis for your portfolio and watchlist stocks. Compares price change direction with volume ratio (recent 5-day avg vs 20-day avg). High volume on up days = institutional accumulation. High volume on down days = panic/supply. Low volume pullbacks in an uptrend = healthy — no selling pressure. Low volume on up days = weak rally, potential distribution.">Wyckoff Volume Signals <span class="panel-sub">vol_r = 5D avg vol ÷ 20D avg vol · from screener cache</span></div>
+      <div class="panel-title" title="Wyckoff volume analysis for your portfolio and watchlist stocks. Compares today's price change direction with the volume ratio (today's share volume ÷ the prior 20-day average volume). High volume on up days = institutional accumulation. High volume on down days = panic/supply. Low volume pullbacks in an uptrend = healthy — no selling pressure. Low volume on up days = weak rally, potential distribution.">Wyckoff Volume Signals <span class="panel-sub">vol_r = today's vol ÷ prior 20D avg vol · from screener cache</span></div>
       <div id="wyckoffSignals" class="loading">Loading signals…</div>
       <div class="panel-desc" style="margin-top:10px;">
         <strong>Signal guide:</strong>
-        <span class="tag tag-bull">Accumulation Breakout</span> Price up + high volume (vol_r &gt; 1.2) — institutions buying, strong demand. Bullish continuation signal.
+        <span class="tag tag-bull">Accumulation Breakout</span> Price up + high volume (vol_r &gt; 1.2, i.e. today's volume more than 1.2× the prior 20-day average) — institutions buying, strong demand. Bullish continuation signal.
         <span class="tag tag-bear">Panic / Supply</span> Price down + high volume — sellers in control, supply overwhelming demand. Wait for stabilization.
         <span class="tag tag-warn">Low-Vol Pullback</span> Price down + low volume — healthy correction in an uptrend, no institutional selling. Potential buy-the-dip opportunity.
         <span class="tag tag-bear">Distribution (Top)</span> Price up + low volume — weak rally, no institutional participation. Risk of reversal — tighten stops.
@@ -1343,7 +1343,7 @@ function renderCorrMatrix() {
 // ── Wyckoff signals table ─────────────────────────────────────────────────────
 async function renderWyckoffSignals(tickers) {
   const el = document.getElementById('wyckoffSignals');
-  // Fetch screener data to get vol_r and chg_pct
+  // Fetch screener data to get vol_r (today's volume ÷ prior 20-day average) and chg_pct
   try {
     const body = JSON.stringify({ tickers });
     const token = localStorage.getItem('st_token');
@@ -1377,7 +1377,7 @@ async function renderWyckoffSignals(tickers) {
         <th style="padding:6px 8px;text-align:left;color:#666;font-size:11px;">Ticker</th>
         <th style="padding:6px 8px;text-align:right;color:#666;font-size:11px;">Price</th>
         <th style="padding:6px 8px;text-align:right;color:#666;font-size:11px;">Chg%</th>
-        <th style="padding:6px 8px;text-align:right;color:#666;font-size:11px;">Vol Ratio</th>
+        <th style="padding:6px 8px;text-align:right;color:#666;font-size:11px;" title="Today's share volume ÷ the prior 20-day average volume. 1.0 = an average day.">Vol Ratio</th>
         <th style="padding:6px 8px;text-align:right;color:#666;font-size:11px;">RSI</th>
         <th style="padding:6px 8px;text-align:left;color:#666;font-size:11px;">Wyckoff Signal</th>
       </tr></thead>
@@ -1577,13 +1577,18 @@ function _renderTdBody() {
           { lbl: 'MACD', val: s.macd_sig ?? '—', col: s.macd_sig?.includes('Bullish') ? '#26a65b' : s.macd_sig?.includes('Bearish') ? '#e05252' : '#888', tip: 'MACD signal crossover. Bullish = upward momentum, Bearish = downward.' },
           { lbl: 'vs MA50', val: fmtPct(s.vs_ma50), col: (s.vs_ma50 ?? 0) > 0 ? '#26a65b' : '#e05252', tip: '% above/below 50-day moving average. Above = near-term bullish.' },
           { lbl: 'vs MA200', val: fmtPct(s.vs_ma200), col: (s.vs_ma200 ?? 0) > 0 ? '#26a65b' : '#e05252', tip: '% above/below 200-day MA. Above = in a long-term uptrend.' },
-          { lbl: '52W Position', val: s.p52w != null ? s.p52w.toFixed(0) + '%' : '—', col: '#ccc', tip: '0% = at 52-week low, 100% = at 52-week high. >70% = near highs (strength).' },
-          { lbl: 'Vol Ratio', val: s.vol_r?.toFixed(2) ?? '—', col: (s.vol_r ?? 1) > 1.2 ? '#f0a500' : '#ccc', tip: 'Volume ratio: 5-day avg ÷ 20-day avg. >1.2 = elevated volume (institutional interest).' },
+          { lbl: '52W Position', val: s.p52w != null ? s.p52w.toFixed(0) + '%' : '—', col: '#ccc', tip: 'Position within the true 52-week (252 trading-day) range. 0% = at the 52-week low, 100% = at the 52-week high. >70% = near highs (strength).' },
+          { lbl: 'Vol Ratio', val: s.vol_r?.toFixed(2) ?? '—', col: (s.vol_r ?? 1) > 1.2 ? '#f0a500' : '#ccc', tip: "Volume ratio: today's share volume ÷ the prior 20-day average volume. >1.2 = elevated volume (institutional interest)." },
           { lbl: 'Sharpe', val: s.sharpe?.toFixed(2) ?? '—', col: (s.sharpe ?? 0) > 1 ? '#26a65b' : (s.sharpe ?? 0) < 0 ? '#e05252' : '#ccc', tip: 'Sharpe Ratio. >1 = good risk-adjusted return, >2 = excellent.' },
           { lbl: 'Sortino', val: s.sortino?.toFixed(2) ?? '—', col: (s.sortino ?? 0) > 1 ? '#26a65b' : '#ccc', tip: 'Like Sharpe but only penalizes downside volatility. Prefer >1.' },
           { lbl: 'Beta', val: s.beta?.toFixed(2) ?? '—', col: '#ccc', tip: 'Volatility vs S&P 500. 1.0 = market, >1 = more volatile, <1 = defensive.' },
           { lbl: 'P/E', val: s.pe?.toFixed(1) ?? '—', col: '#ccc', tip: 'Price-to-Earnings. <15 = value, 15-25 = fair, >25 = growth premium.' },
-          { lbl: 'Trend', val: s.gc ? '🟢 Golden X' : s.dc ? '🔴 Death X' : '—', col: s.gc ? '#26a65b' : s.dc ? '#e05252' : '#777', tip: 'Golden Cross = MA50 > MA200 (bullish). Death Cross = MA50 < MA200 (bearish).' },
+          { lbl: 'MA Trend', val: s.ma_state === 'bull' ? '🟢 Bull' : s.ma_state === 'bear' ? '🔴 Bear' : '—',
+            col: s.ma_state === 'bull' ? '#26a65b' : s.ma_state === 'bear' ? '#e05252' : '#777',
+            tip: 'Standing MA trend state: Bull = MA50 is currently above MA200, Bear = MA50 is currently below MA200. Shows "—" on older cached quotes that predate this field.' },
+          { lbl: 'MA Cross (5d)', val: (s.gc_event ?? s.gc) ? '🟢 Golden X' : (s.dc_event ?? s.dc) ? '🔴 Death X' : 'None',
+            col: (s.gc_event ?? s.gc) ? '#26a65b' : (s.dc_event ?? s.dc) ? '#e05252' : '#777',
+            tip: 'Crossover EVENT in the last 5 trading days: Golden X = MA50 crossed above MA200, Death X = MA50 crossed below MA200. Most stocks show "None" — an established trend is not a crossover. For the standing trend, see MA Trend.' },
           { lbl: 'Mkt Cap', val: s.mkt_cap ? (s.mkt_cap >= 1000 ? '$' + (s.mkt_cap/1000).toFixed(1) + 'T' : s.mkt_cap >= 1 ? '$' + s.mkt_cap.toFixed(1) + 'B' : '$' + (s.mkt_cap*1000).toFixed(0) + 'M') : '—', col: '#ccc', tip: 'Market capitalization.' },
         ];
         qm.innerHTML = metrics.map(m => `
@@ -1618,8 +1623,12 @@ function _renderTdBody() {
       ['vs MA50', pct(s.vs_ma50)],
       ['vs MA200', pct(s.vs_ma200)],
       ['52W Position', s.p52w != null ? s.p52w.toFixed(0) + '%' : null],
-      ['Volume Ratio', s.vol_r?.toFixed(2)],
-      ['Annualized Return', pct(s.ann_ret)],
+      ['MA Trend', s.ma_state === 'bull' ? 'Bullish (MA50 > MA200)' : s.ma_state === 'bear' ? 'Bearish (MA50 < MA200)' : null],
+      ['MA Cross (last 5d)', (s.gc_event ?? s.gc) ? 'Golden cross' : (s.dc_event ?? s.dc) ? 'Death cross' : 'None'],
+      ['Vol Ratio (today vs 20D avg)', s.vol_r?.toFixed(2)],
+      ['Vol Ratio (5D vs 20D avg)', s.vol_r_5d?.toFixed(2)],
+      ['Annualized Return (full history)', pct(s.ann_ret)],
+      ['Annualized Return (1M)', pct(s.ann_ret_1m)],
       ['Sharpe Ratio', s.sharpe?.toFixed(2)],
       ['Sortino Ratio', s.sortino?.toFixed(2)],
       ['Calmar Ratio', s.calmar?.toFixed(2)],
@@ -1652,13 +1661,14 @@ function _renderTdBody() {
         { lbl: 'RSI 40–65', pass: s.rsi >= 40 && s.rsi <= 65, tip: 'RSI in healthy swing zone — not overbought or oversold' },
         { lbl: 'Above MA200', pass: (s.vs_ma200 || 0) > 0, tip: 'Price above 200-day moving average — long-term uptrend' },
         { lbl: 'Above MA50', pass: (s.vs_ma50 || 0) > 0, tip: 'Price above 50-day moving average — near-term uptrend' },
-        { lbl: 'Golden Cross', pass: !!s.gc, tip: 'MA50 recently crossed above MA200 (bullish trend signal)' },
-        { lbl: 'No Death Cross', pass: !s.dc, tip: 'MA50 has not crossed below MA200 (no bearish trend signal)' },
+        { lbl: 'MA50 > MA200', pass: s.ma_state === 'bull', tip: 'Standing MA trend state is bullish — MA50 is currently above MA200' },
+        { lbl: 'Golden Cross (5d)', pass: (s.gc_event ?? s.gc) === true, tip: 'Golden cross EVENT — MA50 crossed above MA200 within the last 5 trading days (a fresh crossover, not an established trend)' },
+        { lbl: 'No Death Cross (5d)', pass: !(s.dc_event ?? s.dc), tip: 'No death cross EVENT — MA50 did not cross below MA200 in the last 5 trading days' },
       ]},
       { cat: 'Momentum', col: '#26a65b', tip: 'Volume, relative strength, and risk-adjusted return signals.', items: [
         { lbl: 'Up Today', pass: (s.chg_pct || 0) > 0, tip: 'Positive price session today' },
-        { lbl: 'Vol Ratio > 1.2x', pass: (s.vol_r || 0) > 1.2, tip: 'Above-average volume — elevated institutional interest' },
-        { lbl: '52W Pos > 70%', pass: (s.p52w || 0) > 70, tip: 'Trading near 52-week highs — price strength' },
+        { lbl: 'Vol Ratio > 1.2x', pass: (s.vol_r || 0) > 1.2, tip: "Today's share volume is more than 1.2x the prior 20-day average — elevated institutional interest" },
+        { lbl: '52W Pos > 70%', pass: (s.p52w || 0) > 70, tip: 'Trading in the top 30% of its true 52-week (252 trading-day) range — price strength' },
         { lbl: 'Sharpe > 1', pass: (s.sharpe || 0) > 1, tip: 'Strong risk-adjusted return (Sharpe Ratio above 1)' },
         { lbl: 'Beats SPY (InfoR)', pass: (s.info_ratio || 0) > 0, tip: 'Information Ratio positive — outperforming the SPY benchmark' },
       ]},

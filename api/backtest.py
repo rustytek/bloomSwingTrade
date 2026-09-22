@@ -18,12 +18,23 @@ from services.strategies import STRATEGIES, strategy_catalog
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
 
 # Built from the registry so newly added strategies are accepted automatically.
-_STRATEGY_PATTERN = "^(" + "|".join(STRATEGIES) + ")$"
+# Only *actionable* strategies are backtestable: the walk-forward engine models a
+# long-only equal-weight rotation, so a watchlist-only bearish signal (e.g.
+# bear_reversal_watch, actionable=False) would produce a meaningless long equity
+# curve. Non-actionable strategies stay in GET /api/backtest/strategies (the
+# catalog) flagged `backtestable: false`.
+BACKTESTABLE_STRATEGIES = [sid for sid, s in STRATEGIES.items() if s.actionable]
+_STRATEGY_PATTERN = "^(" + "|".join(BACKTESTABLE_STRATEGIES) + ")$"
 
 
 @router.get("/strategies")
 def strategies():
-    return {"strategies": strategy_catalog()}
+    catalog = strategy_catalog()
+    for row in catalog:
+        # Visible in the catalog either way — just flagged so the UI can grey out
+        # the "Run backtest" control for watchlist-only signals.
+        row["backtestable"] = bool(row.get("actionable"))
+    return {"strategies": catalog, "backtestable": BACKTESTABLE_STRATEGIES}
 
 
 @router.get("/walk-forward")
@@ -39,6 +50,19 @@ def walk_forward(
     start_date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     end_date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     archive: bool = Query(False),
+    # ── Trade-plan simulation ──────────────────────────────────────────────
+    # mode=rotation is the historical behaviour and stays the default, so every
+    # existing caller/bookmark keeps working. mode=trade_plan simulates what the
+    # user actually does live (ATR stop, R target, fixed-fractional sizing,
+    # limited slots). The risk overrides below default to the authenticated
+    # user's saved settings, matching the Today dashboard.
+    mode: str = Query("rotation", pattern="^(rotation|trade_plan)$"),
+    account_size: float | None = Query(None, gt=0),
+    risk_pct: float | None = Query(None, gt=0, le=100),
+    max_positions: int | None = Query(None, ge=1, le=50),
+    atr_stop_mult: float | None = Query(None, gt=0, le=10),
+    r_multiple: float | None = Query(None, gt=0, le=20),
+    exit_rules: str | None = Query(None, pattern=r"^[a-z,]+$"),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -56,6 +80,13 @@ def walk_forward(
         start_date=start_date,
         end_date=end_date,
         archive=archive,
+        mode=mode,
+        account_size=account_size if account_size is not None else user.account_size,
+        risk_pct=risk_pct if risk_pct is not None else user.risk_pct,
+        max_positions=max_positions if max_positions is not None else user.max_positions,
+        atr_stop_mult=atr_stop_mult if atr_stop_mult is not None else user.atr_stop_mult,
+        r_multiple=r_multiple if r_multiple is not None else user.r_multiple,
+        exit_rules=exit_rules,
     )
 
 

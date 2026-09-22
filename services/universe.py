@@ -1,7 +1,44 @@
 """
 S&P 500 constituents (as of early 2025) + major ETFs.
 This defines the screener universe.  Update periodically as the index changes.
+
+SURVIVORSHIP BIAS — READ THIS BEFORE TRUSTING ANY BACKTEST NUMBER
+-----------------------------------------------------------------
+This list is TODAY's index membership, not point-in-time membership. It is a
+perfectly good *screener* universe and a systematically optimistic *backtest*
+universe, because every name in it is one that:
+  - still exists (it did not go bankrupt, get acquired, or delist), and
+  - is still in the index (it was not dropped for poor performance).
+
+Any historical test run over this list therefore only ever trades the winners,
+chosen with hindsight the strategy did not have at the time. CAGR, win rate and
+expectancy all come out too high. The distortion is worst for long lookbacks and
+for strategies that buy weakness (a falling name that later recovered is in the
+list; one that went to zero never appears).
+
+We do NOT attempt to reconstruct point-in-time index membership: yfinance does
+not serve historical constituent lists, and there is no free source wired into
+this app. The honest response is disclosure, not a silent fix — so every
+consumer that reports historical performance renders UNIVERSE_CAVEAT.
+
+Consumers: services/backtest.py (caveats block), services/edge_matrix.py,
+services/scorecard.py, api/scorecard.py.
 """
+
+# When this constituent list was last curated. Rendered alongside UNIVERSE_CAVEAT
+# so a stale list is visible rather than implied.
+UNIVERSE_AS_OF = "2025-01"
+
+UNIVERSE_CAVEAT = (
+    "The ticker universe is TODAY's S&P 500 / ETF constituent list "
+    f"(services/universe.py, curated {UNIVERSE_AS_OF}), not point-in-time index "
+    "membership. Companies that went bankrupt, were acquired, or were dropped "
+    "from the index never appear, so any historical result only ever trades names "
+    "that survived AND stayed in the index. Returns, win rates and expectancy are "
+    "all biased upward — treat them as an optimistic ceiling, not a forecast. "
+    "Point-in-time membership is not available through yfinance, so this bias is "
+    "disclosed rather than corrected."
+)
 
 SP500 = [
     # ── Technology ──────────────────────────────────────────────────────────

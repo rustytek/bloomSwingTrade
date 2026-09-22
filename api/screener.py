@@ -38,16 +38,22 @@ class ScreenerFilters(BaseModel):
     macd: Optional[str] = None           # "bullish" | "bearish" | "neutral" | None
     vs_ma200: Optional[str] = None       # "above" | "below" | None
     vs_ma50: Optional[str] = None
+    # gc/dc are CROSSOVER EVENT filters — "crossed in the last 5 bars" (the UI
+    # labels them "Golden/Death Cross (last 5d)"). To filter on the standing
+    # MA50-vs-MA200 trend instead, use ma_state.
     gc: bool = False
     dc: bool = False
+    ma_state: Optional[str] = None       # "bull" | "bear" | "" / None (no filter)
 
     # Momentum
     gain_sharpe_min: Optional[float] = None
     vol_max: Optional[float] = None
-    vol_r_min: Optional[float] = None
+    vol_r_min: Optional[float] = None    # single-bar ratio: today's vol / prior 20-day avg
+    vol_r_5d_min: Optional[float] = None  # smoothed ratio: 5-day avg vol / 20-day avg
     p52w_min: Optional[float] = None
     p52w_max: Optional[float] = None
-    earn_beat: bool = False
+    # NOTE: `earn_beat` was removed with quote schema v2 — the field no longer
+    # exists on a quote, so the old filter matched nothing and returned zero rows.
     earn_soon: bool = False
 
     # Portfolio / Meta
@@ -147,14 +153,19 @@ def _passes(stock: dict, f: ScreenerFilters) -> bool:
     if f.vs_ma200 == "below" and (stock.get("vs_ma200") or 0) >= 0: return False
     if f.vs_ma50 == "above" and (stock.get("vs_ma50") or 0) <= 0: return False
     if f.vs_ma50 == "below" and (stock.get("vs_ma50") or 0) >= 0: return False
-    if f.gc and not stock.get("gc"): return False
-    if f.dc and not stock.get("dc"): return False
+    # gc/dc = a NEW cross within the last 5 bars (an event). ma_state = the
+    # standing MA50-vs-MA200 condition. They are deliberately separate filters:
+    # most names in an established uptrend have ma_state == "bull" but no recent
+    # cross event, and that distinction is the whole point of schema v2.
+    if f.gc and not (stock.get("gc_event") if stock.get("gc_event") is not None else stock.get("gc")): return False
+    if f.dc and not (stock.get("dc_event") if stock.get("dc_event") is not None else stock.get("dc")): return False
+    if f.ma_state in ("bull", "bear") and stock.get("ma_state") != f.ma_state: return False
 
     if not between(stock.get("vol_r"), f.vol_r_min, None): return False
+    if not between(stock.get("vol_r_5d"), f.vol_r_5d_min, None): return False
     if not between(stock.get("gain_sharpe"), f.gain_sharpe_min, None): return False
     if not between(stock.get("vol_1m", stock.get("vol")), None, f.vol_max): return False
     if not between(stock.get("p52w"), f.p52w_min, f.p52w_max): return False
-    if f.earn_beat and not stock.get("earn_beat"): return False
     if f.earn_soon and not stock.get("earn_soon"): return False
 
     if not between(stock.get("beta"), f.beta_min, f.beta_max): return False

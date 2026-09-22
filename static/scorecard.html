@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SwingTrader — Scorecard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background:#0b0b0c; color:#d8d8d8; font-family:'Inter',sans-serif; font-size:14px; line-height:1.5; }
+    .topbar { min-height:44px; background:#121215; border-bottom:1px solid #232327; display:flex; align-items:center; padding:0 16px; gap:12px; position:sticky; top:0; z-index:10; flex-wrap:wrap; }
+    .brand { font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:700; color:#fff; letter-spacing:1px; text-decoration:none; white-space:nowrap; }
+    .topbar-sep { width:1px; height:20px; background:#232327; flex-shrink:0; }
+    .universe-status { display:flex; align-items:center; gap:6px; min-width:0; }
+    .universe-text { font-size:11px; color:#444; white-space:nowrap; }
+    .universe-text.loading { color:#f0a500; }
+    .data-time { font-size:10px; color:#555; margin-left:8px; white-space:nowrap; }
+    .topbar-actions { margin-left:auto; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .topbar-left { display:flex; align-items:center; gap:8px; }
+    .username { font-size:11px; color:#555; }
+    .btn { display:inline-flex; align-items:center; gap:5px; padding:5px 10px; border-radius:3px; border:1px solid #2a2a2f; background:#1a1a1e; color:#999; font-size:11px; font-weight:600; cursor:pointer; text-decoration:none; font-family:'Inter',sans-serif; }
+    .btn:hover { color:#ddd; background:#232327; }
+    .btn-primary { background:#f0a500; color:#000; border-color:#f0a500; }
+    .btn-primary:hover { background:#ffb71a; color:#000; }
+    .btn-active { color:#f0a500; border-color:#3a2f10; background:#1c1810; }
+    .btn[disabled], .btn:disabled { opacity:.42; cursor:not-allowed; }
+    .hint { position:relative; }
+    .hint::after { content:attr(data-tip); position:absolute; left:50%; bottom:calc(100% + 9px); transform:translateX(-50%); display:none; width:min(300px,70vw); padding:8px 10px; background:#1e1e22; border:1px solid #333; border-radius:4px; color:#d8d8d8; font-size:11px; font-weight:400; line-height:1.45; letter-spacing:0; text-transform:none; white-space:normal; box-shadow:0 6px 18px #000c; z-index:200; pointer-events:none; text-align:left; }
+    .hint:hover::after, .hint:focus-within::after { display:block; }
+    .topbar .hint::after { top:calc(100% + 9px); bottom:auto; }
+    .page { max-width:1560px; margin:0 auto; padding:18px; display:flex; flex-direction:column; gap:16px; }
+    .mono { font-family:'JetBrains Mono',monospace; }
+    .muted { color:#777; } .up { color:#3fbf7f; } .down { color:#e5484d; } .warn { color:#f0a500; }
+    .ticker-link { color:#f0a500; cursor:pointer; font-family:'JetBrains Mono',monospace; font-weight:700; }
+    .ticker-link:hover { text-decoration:underline; }
+    .panel { background:#121215; border:1px solid #232327; border-radius:6px; padding:16px; min-width:0; }
+    .panel-title { display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:13px; color:#ccc; font-weight:700; margin-bottom:8px; text-transform:uppercase; letter-spacing:.05em; }
+    .panel-sub { font-size:11px; color:#666; font-weight:400; text-transform:none; letter-spacing:0; }
+    .panel-desc { color:#777; font-size:12px; line-height:1.55; margin:0 0 12px; }
+    .stat-label { font-size:11px; color:#777; text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px; }
+    .stat-value { font:700 26px 'JetBrains Mono',monospace; color:#eee; }
+    .stat-sub { font-size:11.5px; color:#777; margin-top:3px; line-height:1.45; }
+    .tiles { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th { text-align:left; padding:7px 8px; color:#666; border-bottom:1px solid #232327; font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+    td { padding:8px; border-bottom:1px solid #1a1a1d; vertical-align:top; }
+    .pill { display:inline-flex; align-items:center; padding:2px 7px; border-radius:3px; background:#1a1a1e; border:1px solid #2a2a2f; font-size:11px; color:#999; margin:1px 3px 1px 0; }
+    .note { color:#777; font-size:12px; line-height:1.6; }
+    .error { color:#e5484d; font-size:12px; }
+    .empty { color:#666; font-size:12px; padding:14px; text-align:center; }
+    .modal { position:fixed; inset:0; background:rgba(0,0,0,.76); display:none; align-items:center; justify-content:center; z-index:100; padding:20px; }
+    .modal-card { width:min(980px,96vw); max-height:88vh; overflow:auto; background:#121215; border:1px solid #2a2a2f; border-radius:6px; box-shadow:0 18px 60px #000; }
+    .modal-head { display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid #232327; position:sticky; top:0; background:#121215; z-index:2; }
+    .modal-body { padding:16px; display:grid; grid-template-columns:1.2fr .8fr; gap:16px; }
+    .chart-wrap { height:300px; }
+    .icon-btn { margin-left:auto; background:#1a1a1e; color:#888; border:1px solid #2a2a2f; border-radius:4px; padding:4px 10px; cursor:pointer; }
+
+    .badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:3px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; border:1px solid #2a2a2f; background:#17171a; color:#aaa; white-space:nowrap; }
+    .badge.ok { background:#0e1b12; color:#3fbf7f; border-color:#1d3a28; }
+    .badge.bad { background:#25090b; color:#ff7175; border-color:#4a1418; }
+    .badge.amber { background:#1c1808; color:#f0a500; border-color:#3a3110; }
+    .badge.blue { background:#0e131f; color:#7aa2f7; border-color:#22304f; }
+    .badge.grey { background:#17171a; color:#8d8d93; border-color:#2a2a2f; }
+
+    /* ── Execution-quality cards ───────────────────────────────────────────── */
+    .exq { border:1px solid #232327; border-radius:6px; background:#101013; margin-bottom:10px; overflow:hidden; }
+    .exq-head { display:flex; align-items:center; gap:12px; padding:11px 13px; background:#16161a; border-bottom:1px solid #232327; flex-wrap:wrap; border-left:3px solid #33333a; }
+    .exq.costly .exq-head { border-left-color:#e5484d; }
+    .exq.clean .exq-head { border-left-color:#3fbf7f; }
+    .exq-name { font-size:13px; font-weight:700; color:#eee; font-family:'JetBrains Mono',monospace; }
+    .exq-cost { margin-left:auto; font:700 17px 'JetBrains Mono',monospace; }
+    .exq-body { padding:11px 13px; font-size:12px; color:#9a9a9a; line-height:1.55; }
+    details.offenders { margin-top:9px; border:1px solid #232327; border-radius:5px; background:#0e0e11; padding:8px 11px; }
+    details.offenders summary { cursor:pointer; font-size:11.5px; color:#bbb; font-weight:700; list-style:none; }
+    details.offenders summary::-webkit-details-marker { display:none; }
+    details.offenders summary::before { content:'▸ '; color:#f0a500; }
+    details.offenders[open] summary::before { content:'▾ '; }
+
+    /* ── UNAVAILABLE — deliberately unlike any number on the page ──────────── */
+    .unav { border:1px dashed #4a4a52; border-radius:6px; margin-bottom:10px; overflow:hidden;
+            background-image:repeating-linear-gradient(135deg,#141417 0 7px,#0f0f12 7px 14px); }
+    .unav-head { display:flex; align-items:center; gap:12px; padding:11px 13px; border-bottom:1px dashed #33333a; flex-wrap:wrap; }
+    .unav-name { font-size:13px; font-weight:700; color:#9a9aa2; font-family:'JetBrains Mono',monospace; }
+    .unav-value { margin-left:auto; font:700 12px 'Inter',sans-serif; color:#8d8d93; text-transform:uppercase; letter-spacing:.08em;
+                  border:1px dashed #4a4a52; border-radius:3px; padding:3px 9px; background:#0b0b0c; }
+    .unav-body { padding:11px 13px; font-size:12px; line-height:1.55; }
+    .unav-k { font-size:9.5px; color:#6d6d73; text-transform:uppercase; letter-spacing:.08em; font-weight:700; margin-bottom:2px; }
+    .unav-v { color:#a9a9b0; margin-bottom:9px; }
+    .unav-v:last-child { margin-bottom:0; }
+    .honesty { border:1px solid #3a3110; background:#1c1808; color:#e0bd6a; border-radius:6px; padding:11px 13px; font-size:12px; line-height:1.5; margin-bottom:12px; }
+
+    .drift-pos { color:#3fbf7f; } .drift-neg { color:#e5484d; } .drift-flat { color:#bbb; }
+    .cav { border-radius:6px; padding:11px 13px; margin-bottom:8px; line-height:1.5; background:#151518; border:1px solid #26262a; color:#8d8d93; font-size:12px; }
+    @media (max-width:1100px) { .tiles { grid-template-columns:repeat(2,minmax(0,1fr)); } .modal-body { grid-template-columns:1fr; } }
+    @media (max-width:640px) { .tiles { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <div class="topbar" id="topbar"></div>
+
+  <main class="page">
+    <div id="loading" class="empty">Loading your scorecard…</div>
+
+    <section id="tilesWrap" class="tiles" hidden></section>
+
+    <section class="panel" id="strategyWrap" hidden>
+      <div class="panel-title">Per-Strategy Scorecard <span class="panel-sub">what you actually got vs what the backtest said to expect</span></div>
+      <div class="panel-desc">
+        Drift is <strong>your realized average R minus the tested expected R</strong>. A negative drift is only meaningful
+        once there are enough closed trades to judge — below that threshold the verdict stays "monitoring", which means
+        <em>too few trades to judge</em>, not "broken". Where there is no tested benchmark, the drift column says so
+        rather than implying underperformance.
+      </div>
+      <div id="strategyTable"></div>
+      <div id="matrixNote" style="margin-top:12px;"></div>
+    </section>
+
+    <section class="panel" id="execWrap" hidden>
+      <div class="panel-title">
+        <span>Execution Quality <span class="panel-sub">ranked by what it cost you, in R</span></span>
+        <span id="execTotal" class="mono" style="font-size:12px;"></span>
+      </div>
+      <div class="panel-desc">
+        These are leaks between the plan and the fill. They are ranked by realized R cost because that is the
+        decision: <strong>fixing the top item here is usually worth more than adding a new strategy.</strong>
+        Only realized losses count — no counterfactual is invented for the winners.
+      </div>
+      <div id="execSummary" class="note" style="margin-bottom:12px;"></div>
+      <div id="execRanked"></div>
+    </section>
+
+    <section class="panel" id="unavailWrap" hidden>
+      <div class="panel-title">Not Measurable Yet <span class="panel-sub">metrics the app does not have the data to compute</span></div>
+      <div id="honestyNote"></div>
+      <div class="panel-desc">
+        Nothing below is a zero and nothing below is an estimate. These metrics could not be computed at all.
+        Each card names the exact field that would have to be recorded first.
+      </div>
+      <div id="unavailList"></div>
+    </section>
+
+    <section class="panel" id="caveatWrap" hidden>
+      <div class="panel-title">Caveats</div>
+      <div id="caveatList"></div>
+    </section>
+  </main>
+
+<script src="/static/js/common.js"></script>
+<script>
+'use strict';
+/* Scorecard. esc(), api(), fmtPct/fmtNum, tickerLink() and the universal
+   ticker-detail modal come from /static/js/common.js — never redeclared here. */
+
+let SC = null;   // /api/scorecard -> { scorecard, execution_quality }
+
+/* Null-safe display helpers — never emit undefined/NaN. */
+const N = (v) => (v === null || v === undefined || (typeof v === 'number' && !isFinite(v))) ? null : v;
+function num(v, d = 2) { const x = N(v); return x === null || isNaN(Number(x)) ? '--' : Number(x).toFixed(d); }
+function pctv(v, d = 1) { const x = N(v); return x === null || isNaN(Number(x)) ? '--' : Number(x).toFixed(d) + '%'; }
+function signed(v, d = 2, suffix = '') { const x = N(v); if (x === null || isNaN(Number(x))) return '--'; const n = Number(x); return (n >= 0 ? '+' : '') + n.toFixed(d) + suffix; }
+function moneyv(v, d = 2) { const x = N(v); if (x === null || isNaN(Number(x))) return '--'; const n = Number(x); return (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+const tl = (t, size) => tickerLink(t, size);
+
+function safeRender(fn, id) {
+  try { fn(); } catch (e) {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = `<div class="error" style="padding:10px;">Section failed to render: ${esc(e && e.message ? e.message : String(e))}</div>`;
+  }
+}
+function tile(label, value, sub, cls, tip) {
+  return `<div class="panel hint" data-tip="${esc(tip || label)}">
+    <div class="stat-label">${esc(label)}</div>
+    <div class="stat-value ${cls || ''}">${value}</div>
+    <div class="stat-sub">${sub || ''}</div></div>`;
+}
+
+/* ── Load ────────────────────────────────────────────────────────────────── */
+async function load() {
+  try {
+    SC = await api('/api/scorecard');
+  } catch (e) {
+    document.getElementById('loading').innerHTML =
+      `<span class="error">Could not load the scorecard: ${esc(e && e.message ? e.message : 'unavailable')}</span>`;
+    return;
+  }
+  document.getElementById('loading').hidden = true;
+  ['tilesWrap', 'strategyWrap', 'execWrap', 'unavailWrap', 'caveatWrap'].forEach(id => { document.getElementById(id).hidden = false; });
+  safeRender(renderTiles, 'tilesWrap');
+  safeRender(renderStrategies, 'strategyTable');
+  safeRender(renderExecution, 'execRanked');
+  safeRender(renderUnavailable, 'unavailList');
+  safeRender(renderCaveats, 'caveatList');
+}
+
+/* ── Blended expected R ───────────────────────────────────────────────────
+   There is no single account-level "expected R" on the payload, so it is built
+   here as a TRADE-WEIGHTED mean of the per-strategy expected_r values that
+   actually exist. Strategies with no benchmark are excluded from the weight
+   rather than counted as zero, and the coverage is always stated. */
+function blendedExpectedR(rows) {
+  let wsum = 0, w = 0, covered = 0, total = 0;
+  (rows || []).forEach(r => {
+    const trades = Number(N(r.trades) ?? 0);
+    total += trades;
+    const e = N(r.expected_r);
+    if (e !== null && trades > 0) { wsum += Number(e) * trades; w += trades; covered += trades; }
+  });
+  return { value: w > 0 ? wsum / w : null, covered, total };
+}
+
+function renderTiles() {
+  const sc = (SC && SC.scorecard) || {};
+  const overall = sc.overall || {};
+  const rows = sc.strategies || [];
+  const blend = blendedExpectedR(rows);
+  const realized = N(overall.avg_r);
+  const gap = (realized !== null && blend.value !== null) ? Number(realized) - blend.value : null;
+
+  const expSub = blend.value === null
+    ? '<span class="warn">no tested benchmark yet</span>'
+    : `<span class="muted">weighted over ${esc(blend.covered)} of ${esc(blend.total)} closed trades</span>`;
+  const gapSub = gap === null
+    ? '<span class="warn">needs both a realized R and a tested R</span>'
+    : `<span class="muted">realized minus tested</span>`;
+  const rSub = realized === null
+    ? '<span class="warn">no closed trade carries an R-multiple</span>'
+    : `<span class="muted">${esc(overall.r_sample ?? 0)} of ${esc(overall.trades ?? 0)} trades carry an R</span>`;
+
+  document.getElementById('tilesWrap').innerHTML = [
+    tile('Realized Expectancy', realized === null ? '<span class="muted">--</span>' : signed(realized, 2) + 'R', rSub,
+      realized === null ? '' : (Number(realized) >= 0 ? 'up' : 'down'),
+      'Your average R-multiple across every closed trade that recorded one. This is the real number — everything else on this page exists to explain it.'),
+    tile('Tested Expectancy', blend.value === null ? '<span class="muted">--</span>' : signed(blend.value, 2) + 'R', expSub,
+      blend.value === null ? '' : (blend.value >= 0 ? 'up' : 'down'),
+      'What the edge matrix expected, trade-weighted across strategies that have a benchmark. Only a trade_plan-mode matrix produces a per-trade R.'),
+    tile('Gap', gap === null ? '<span class="muted">--</span>' : signed(gap, 2) + 'R', gapSub,
+      gap === null ? '' : (gap >= 0 ? 'up' : 'down'),
+      'Realized minus tested. Persistently negative means either the edge decayed or execution is leaking — check Execution Quality before dropping a strategy.'),
+    tile('Realized P&L', moneyv(overall.total_pnl), `<span class="muted">${esc(overall.wins ?? 0)}W / ${esc(overall.losses ?? 0)}L / ${esc(overall.scratch ?? 0)} scratch · win rate ${pctv(overall.win_rate, 1)}</span>`,
+      N(overall.total_pnl) === null ? '' : (Number(overall.total_pnl) >= 0 ? 'up' : 'down'),
+      'Total realized profit and loss across all closed trades.'),
+  ].join('');
+}
+
+/* ── Per-strategy table ──────────────────────────────────────────────────── */
+const VERDICT_BADGE = {
+  on_track: ['ok', 'on track'],
+  outperforming: ['blue', 'outperforming'],
+  underperforming: ['bad', 'underperforming'],
+  monitoring: ['amber', 'monitoring'],
+  no_benchmark: ['grey', 'no benchmark'],
+};
+
+function hasBenchmark(row) {
+  return N(row.expected_r) !== null;
+}
+
+function driftCell(row) {
+  const verdict = String(((row.recommendation || {}).verdict) || '').toLowerCase();
+  if (!hasBenchmark(row)) {
+    return `<span class="muted" style="font-style:italic;">no tested benchmark yet</span>`;
+  }
+  const d = N(row.drift);
+  if (d === null) return '<span class="muted">--</span>';
+  // Sample-size guard: below the judging threshold the drift is shown but
+  // explicitly NOT coloured as a verdict — "monitoring" is not "broken".
+  if (verdict === 'monitoring') {
+    return `<span class="mono drift-flat">${signed(d, 2)}R</span>`
+      + `<div class="muted" style="font-size:10.5px;">too few trades to judge</div>`;
+  }
+  const cls = Number(d) >= 0 ? 'drift-pos' : 'drift-neg';
+  return `<span class="mono ${cls}" style="font-weight:700;">${signed(d, 2)}R</span>`;
+}
+
+function renderStrategies() {
+  const sc = (SC && SC.scorecard) || {};
+  const rows = sc.strategies || [];
+  const el = document.getElementById('strategyTable');
+  if (!rows.length) {
+    el.innerHTML = '<div class="note">No closed trades yet. Close a position from the portfolio and it will be scored here.</div>';
+  } else {
+    el.innerHTML = `<table><thead><tr>
+        <th>Strategy</th><th>Trades</th><th>W / L / S</th><th>Win Rate</th>
+        <th>Your Avg R</th><th>Tested R</th><th>Drift</th><th>Realized P&amp;L</th><th>Recommendation</th>
+      </tr></thead><tbody>${rows.map(r => {
+        const rec = r.recommendation || {};
+        const verdict = String(rec.verdict || '').toLowerCase();
+        const [bcls, blabel] = VERDICT_BADGE[verdict] || ['grey', verdict || 'unknown'];
+        const avgR = N(r.avg_r);
+        const pnl = N(r.total_pnl);
+        return `<tr>
+          <td>
+            <div style="color:#eee;font-weight:700;">${esc(r.name || r.strategy || '--')}</div>
+            <div class="muted mono" style="font-size:10px;">${esc(r.strategy || '')}</div>
+            <div style="margin-top:4px;"><span class="badge ${bcls}">${esc(blabel)}</span></div>
+          </td>
+          <td class="mono">${esc(r.trades ?? 0)}<div class="muted" style="font-size:10.5px;">${esc(r.r_sample ?? 0)} with R</div></td>
+          <td class="mono">${esc(r.wins ?? 0)} / ${esc(r.losses ?? 0)} / ${esc(r.scratch ?? 0)}</td>
+          <td class="mono">${pctv(r.win_rate, 1)}</td>
+          <td class="mono ${avgR === null ? 'muted' : (Number(avgR) >= 0 ? 'up' : 'down')}" style="font-weight:700;">${avgR === null ? '--' : signed(avgR, 2) + 'R'}</td>
+          <td class="mono">${hasBenchmark(r) ? signed(r.expected_r, 2) + 'R' : '<span class="muted" style="font-style:italic;">none</span>'}
+            <div class="muted" style="font-size:10px;">${esc(r.expected_r_source || '')}</div></td>
+          <td>${driftCell(r)}</td>
+          <td class="mono ${pnl === null ? 'muted' : (Number(pnl) >= 0 ? 'up' : 'down')}">${moneyv(r.total_pnl)}</td>
+          <td style="font-size:11.5px;color:#bbb;max-width:340px;">${esc(rec.text || '')}</td>
+        </tr>`;
+      }).join('')}</tbody></table>`;
+  }
+
+  // Edge-matrix provenance — says plainly why a benchmark may be missing.
+  const em = sc.edge_matrix || {};
+  const th = sc.thresholds || {};
+  const bits = [];
+  if (em.available) {
+    bits.push(`Benchmarks come from an edge matrix built in <strong>${esc(em.mode || 'unknown')}</strong> mode`
+      + (em.generated_at ? ` on ${esc(new Date(em.generated_at).toLocaleString())}` : '') + '.');
+    if (em.mode && em.mode !== 'trade_plan') {
+      bits.push('A rotation-mode matrix has <strong>no per-trade R</strong>, so drift cannot be computed from it. Rebuild in trade_plan mode.');
+    }
+  } else {
+    bits.push(esc(em.note || 'No edge matrix cached, so there is no tested benchmark to compare against.'));
+  }
+  if (N(th.min_trades_to_judge) !== null) {
+    bits.push(`A strategy needs ${esc(th.min_trades_to_judge)} closed trades before a verdict is given, and ${esc(th.min_r_sample ?? '—')} trades carrying an R before drift is trusted.`);
+  }
+  document.getElementById('matrixNote').innerHTML =
+    `<div class="cav">${bits.join(' ')} <a class="btn" href="/backtest" style="margin-left:6px;">Open Strategy Lab ▸</a></div>`;
+}
+
+/* ── Execution quality (ranked) ──────────────────────────────────────────── */
+const METRIC_LABELS = {
+  entry_chasing: 'Entry chasing',
+  stop_loosening: 'Stop loosening',
+  overstayed_horizon: 'Overstayed the horizon',
+  off_regime_entries: 'Off-regime entries',
+};
+function metricLabel(id) { return METRIC_LABELS[id] || String(id || 'metric').replace(/_/g, ' '); }
+
+function offenderRow(o) {
+  const cells = [];
+  cells.push(`<td>${tl(o.ticker)}</td>`);
+  cells.push(`<td class="muted" style="font-size:11px;">${esc(o.strategy || '--')}</td>`);
+  const facts = [];
+  if (N(o.initial_stop) !== null) facts.push(`initial stop ${num(o.initial_stop, 2)} → final ${num(o.final_stop, 2)}`);
+  if (N(o.exit_price) !== null) facts.push(`exit ${num(o.exit_price, 2)}`);
+  if (N(o.days_held) !== null) facts.push(`held ${esc(o.days_held)}d vs ${esc(o.horizon_days ?? '--')}d horizon`);
+  if (o.entry_date) facts.push(`entered ${esc(o.entry_date)} in ${esc(o.quadrant_at_entry || '--')}`);
+  if (Array.isArray(o.tagged_regimes) && o.tagged_regimes.length) facts.push(`tagged for ${o.tagged_regimes.map(esc).join(', ')}`);
+  cells.push(`<td style="font-size:11px;color:#9a9a9a;">${facts.join(' · ') || '--'}</td>`);
+  const r = N(o.r_multiple);
+  cells.push(`<td class="mono ${r === null ? 'muted' : (Number(r) >= 0 ? 'up' : 'down')}">${r === null ? '--' : signed(r, 2) + 'R'}</td>`);
+  const rc = N(o.r_cost);
+  cells.push(`<td class="mono ${rc === null ? 'muted' : 'down'}" style="font-weight:700;">`
+    + (rc === null
+      ? `<span class="muted" style="font-style:italic;">not priced</span>${o.r_cost_note ? `<div class="muted" style="font-size:10px;font-weight:400;">${esc(o.r_cost_note)}</div>` : ''}`
+      : `${num(rc, 2)}R`)
+    + '</td>');
+  return `<tr>${cells.join('')}</tr>`;
+}
+
+function renderExecution() {
+  const eq = (SC && SC.execution_quality) || {};
+  const ranked = Array.isArray(eq.ranked) ? eq.ranked : [];
+  const total = N(eq.total_r_cost);
+  const totalEl = document.getElementById('execTotal');
+  totalEl.innerHTML = total === null
+    ? '<span class="muted">total cost not computable</span>'
+    : `<span class="stat-label" style="display:inline;margin:0;">Measured cost</span> <span class="${Number(total) > 0 ? 'down' : 'up'}" style="font-weight:700;font-size:17px;">${num(total, 2)}R</span>`;
+  document.getElementById('execSummary').textContent = eq.summary || '';
+
+  const el = document.getElementById('execRanked');
+  if (!ranked.length) {
+    el.innerHTML = '<div class="note">No execution metric could be computed from the trades recorded so far. See "Not Measurable Yet" below for exactly what is missing.</div>';
+    return;
+  }
+  el.innerHTML = ranked.map(m => {
+    const cost = N(m.r_cost);
+    const count = N(m.value);
+    const clean = (count !== null && Number(count) === 0);
+    const offenders = Array.isArray(m.offenders) ? m.offenders : [];
+    const costHtml = cost === null
+      ? '<span class="muted">--</span>'
+      : `<span class="${Number(cost) > 0 ? 'down' : 'up'}">${num(cost, 2)}R</span>`;
+    const extras = [];
+    if (N(m.trades_examined) !== null) extras.push(`${esc(m.trades_examined)} trades examined`);
+    if (N(m.trades_with_both_stops) !== null) extras.push(`${esc(m.trades_with_both_stops)} comparable`);
+    if (N(m.unpriced_offenders) !== null && Number(m.unpriced_offenders) > 0) extras.push(`${esc(m.unpriced_offenders)} offender(s) with no priceable R cost`);
+    if (N(m.entry_dates_not_in_spy_cache) !== null && Number(m.entry_dates_not_in_spy_cache) > 0) extras.push(`${esc(m.entry_dates_not_in_spy_cache)} entry date(s) missing from the SPY cache`);
+    return `<div class="exq ${clean ? 'clean' : 'costly'}">
+      <div class="exq-head">
+        <span class="exq-name">${esc(metricLabel(m.metric))}</span>
+        <span class="badge ${clean ? 'ok' : 'bad'}">${clean ? 'measured — none found' : `${esc(count === null ? '?' : count)} offender${Number(count) === 1 ? '' : 's'}`}</span>
+        <span class="exq-cost">${costHtml}</span>
+      </div>
+      <div class="exq-body">
+        <div>${esc(m.detail || '')}</div>
+        ${m.partial_note ? `<div class="warn" style="font-size:11.5px;margin-top:6px;">${esc(m.partial_note)}</div>` : ''}
+        ${m.note ? `<div class="muted" style="font-size:11.5px;margin-top:6px;">${esc(m.note)}</div>` : ''}
+        ${extras.length ? `<div class="muted" style="font-size:11px;margin-top:6px;">${extras.join(' · ')}</div>` : ''}
+        ${offenders.length ? `<details class="offenders">
+          <summary>Show the ${offenders.length} offending trade${offenders.length === 1 ? '' : 's'}</summary>
+          <table style="margin-top:8px;"><thead><tr><th>Ticker</th><th>Strategy</th><th>What happened</th><th>R</th><th>R cost</th></tr></thead>
+          <tbody>${offenders.map(offenderRow).join('')}</tbody></table>
+        </details>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ── Unavailable metrics ─────────────────────────────────────────────────────
+   THE point of this section: "not measurable yet" must never look like
+   "measured, found nothing". No number, no zero, no dash-that-reads-as-none is
+   rendered for these — a hatched dashed card with the literal words
+   "NOT MEASURABLE YET", plus the reason and the field that would fix it. */
+function renderUnavailable() {
+  const eq = (SC && SC.execution_quality) || {};
+  const list = Array.isArray(eq.unavailable) ? eq.unavailable : [];
+  document.getElementById('honestyNote').innerHTML = eq.honesty_note
+    ? `<div class="honesty">${esc(eq.honesty_note)}</div>` : '';
+  const el = document.getElementById('unavailList');
+  if (!list.length) {
+    el.innerHTML = '<div class="note">Every execution metric was computable from the data recorded. Nothing is being hidden here.</div>';
+    return;
+  }
+  el.innerHTML = list.map(m => {
+    const obs = m.observed && typeof m.observed === 'object' ? m.observed : null;
+    const obsHtml = obs ? Object.keys(obs).map(k =>
+      `<span class="pill">${esc(String(k).replace(/_/g, ' '))}: ${esc(obs[k])}</span>`).join('') : '';
+    return `<div class="unav">
+      <div class="unav-head">
+        <span class="unav-name">${esc(metricLabel(m.metric))}</span>
+        <span class="unav-value">not measurable yet</span>
+      </div>
+      <div class="unav-body">
+        <div class="unav-k">Why it cannot be computed</div>
+        <div class="unav-v">${esc(m.reason || 'No reason supplied by the backend.')}</div>
+        <div class="unav-k">What it needs</div>
+        <div class="unav-v">${esc(m.needs || 'Not specified.')}</div>
+        ${obsHtml ? `<div class="unav-k">What we could observe</div><div class="unav-v">${obsHtml}</div>` : ''}
+        <div class="unav-k">R cost</div>
+        <div class="unav-v"><em>unknown — this metric contributes nothing to the measured total above, and that absence is not evidence that it costs nothing.</em></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderCaveats() {
+  const sc = (SC && SC.scorecard) || {};
+  const list = Array.isArray(sc.caveats) ? sc.caveats : [];
+  const el = document.getElementById('caveatList');
+  if (!list.length) { document.getElementById('caveatWrap').hidden = true; return; }
+  el.innerHTML = list.map(c => {
+    if (c && typeof c === 'object') {
+      return `<div class="cav"><strong style="color:#bbb;">${esc(c.title || 'Caveat')}</strong><div>${esc(c.detail || '')}</div></div>`;
+    }
+    return `<div class="cav">${esc(c)}</div>`;
+  }).join('');
+}
+
+initHeader('/scorecard').catch(() => { /* header is non-fatal */ });
+load();
+</script>
+</body>
+</html>

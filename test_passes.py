@@ -14,9 +14,69 @@ No network, no DB, no HTTP. Deterministic (randomness seeded).
 """
 from __future__ import annotations
 
+import importlib.abc
+import importlib.machinery
 import math
 import random
+import sys
 import traceback
+import types
+
+# ──────────────────────────────────────────────────────────────────────────
+# Web-dependency stubs
+# ──────────────────────────────────────────────────────────────────────────
+# Some pure helpers under test live in api/*.py, which import fastapi (and,
+# transitively, jose/passlib through auth.deps). This runner is deliberately
+# dependency-light, so those packages may not be installed. Install permissive
+# stand-ins for them — appended to the END of sys.meta_path, so a real install
+# always wins. The stubs only have to survive import time: every function these
+# tests actually call is plain arithmetic.
+_STUBBED_PACKAGES = ("fastapi", "jose", "passlib", "bcrypt")
+
+
+class _Stub:
+    """Stands in for any attribute of a stubbed module."""
+
+    def __init__(self, name: str):
+        self._name = name
+
+    def __call__(self, *args, **kwargs):
+        # Decorator use: @router.get("/x") -> the inner call gets the function
+        # and must return it unchanged so the module still defines real symbols.
+        if len(args) == 1 and not kwargs and callable(args[0]) and not isinstance(args[0], _Stub):
+            return args[0]
+        return _Stub(f"{self._name}()")
+
+    def __getattr__(self, item):
+        return _Stub(f"{self._name}.{item}")
+
+    def __repr__(self):
+        return f"<stub {self._name}>"
+
+
+class _StubModule(types.ModuleType):
+    def __getattr__(self, item):
+        if item.startswith("__"):
+            raise AttributeError(item)
+        return _Stub(f"{self.__name__}.{item}")
+
+
+class _StubFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split(".")[0] in _STUBBED_PACKAGES:
+            return importlib.machinery.ModuleSpec(fullname, self)
+        return None
+
+    def create_module(self, spec):
+        module = _StubModule(spec.name)
+        module.__path__ = []          # allow `import pkg.submodule`
+        return module
+
+    def exec_module(self, module):
+        pass
+
+
+sys.meta_path.append(_StubFinder())
 
 from services.indicators import calc_atr
 from services.trade_plan import build_trade_plan
@@ -367,11 +427,74 @@ def test_mean_reversion_triggers():
     _assert_setup_like(setup, "mean_reversion")
 
 
+EXPECTED_STRATEGY_IDS = {
+    "momentum_rotation", "pullback_50ma", "breakout_volume", "mean_reversion",
+    "dual_momentum", "volatility_breakout", "sector_rotation",
+    "bear_reversal_watch", "low_vol_trend",
+}
+
+
 @test
 def test_strategies_registry_keys():
-    assert set(STRATEGIES) == {
-        "momentum_rotation", "pullback_50ma", "breakout_volume", "mean_reversion",
-    }
+    assert set(STRATEGIES) == EXPECTED_STRATEGY_IDS, (
+        f"registry drift: extra={set(STRATEGIES) - EXPECTED_STRATEGY_IDS} "
+        f"missing={EXPECTED_STRATEGY_IDS - set(STRATEGIES)}"
+    )
+    # The dict key must be the Strategy's own .id — a mismatch silently breaks
+    # STRATEGIES[setup.strategy] lookups in today.py / backtest.py.
+    for key, strat in STRATEGIES.items():
+        assert strat.id == key, f"registry key {key!r} != strategy.id {strat.id!r}"
+
+
+@test
+def test_every_strategy_declares_regimes_and_actionable():
+    from services.regime import QUADRANTS
+    for sid, strat in STRATEGIES.items():
+        assert isinstance(strat.regimes, list) and strat.regimes, (
+            f"{sid}: must declare a non-empty regimes list"
+        )
+        for q in strat.regimes:
+            assert q in QUADRANTS, f"{sid}: unknown regime quadrant {q!r}"
+        assert isinstance(strat.actionable, bool), (
+            f"{sid}: actionable must be a bool, got {type(strat.actionable).__name__}"
+        )
+
+
+# ---- non-actionable strategies must not be backtestable as longs ----
+@test
+def test_non_actionable_strategy_not_backtestable():
+    """bear_reversal_watch is an explicit 'do NOT buy' signal (actionable=False).
+    The long-only walk-forward engine must never accept it."""
+    from api.backtest import BACKTESTABLE_STRATEGIES, _STRATEGY_PATTERN
+    import re
+
+    non_actionable = [sid for sid, s in STRATEGIES.items() if not s.actionable]
+    assert non_actionable, "expected at least one non-actionable strategy (bear_reversal_watch)"
+    assert "bear_reversal_watch" in non_actionable
+
+    for sid in non_actionable:
+        assert sid not in BACKTESTABLE_STRATEGIES, f"{sid} must not be backtestable"
+        assert not re.match(_STRATEGY_PATTERN, sid), (
+            f"{sid} must be rejected by the walk-forward query pattern"
+        )
+    for sid, s in STRATEGIES.items():
+        if s.actionable:
+            assert sid in BACKTESTABLE_STRATEGIES
+            assert re.match(_STRATEGY_PATTERN, sid)
+
+    # Defensive second gate: calling the engine directly returns a clear note,
+    # not a 500 and not an equity curve. db/user are never touched on this path.
+    from services.backtest import run_walk_forward_backtest
+    res = run_walk_forward_backtest(db=None, user_id=1, strategy_id="bear_reversal_watch")
+    assert res["equity"] == [], "non-actionable strategy must produce no equity curve"
+    assert res["metrics"] == {}
+    assert any("watchlist-only" in n for n in res["notes"]), res["notes"]
+
+    # …and it stays visible in the catalog, just flagged.
+    from services.strategies import strategy_catalog
+    cat = {row["id"]: row for row in strategy_catalog()}
+    assert "bear_reversal_watch" in cat, "must stay visible in the strategy catalog"
+    assert cat["bear_reversal_watch"]["actionable"] is False
 
 
 # ---- negative: flat / declining series should NOT trigger ----
@@ -421,6 +544,295 @@ def closed_trade_r_multiple(avg_cost, exit_price, stop_loss):
     return None
 
 
+@test
+def test_r_multiple_uses_initial_stop_not_trailed_stop():
+    """R must be measured against the stop the trade was OPENED with. Trailing a
+    stop up shrinks (avg_cost - stop) and would otherwise inflate recorded R."""
+    from api.portfolio import compute_r_multiple
+
+    # Entry 100, initial stop 90 (1R = $10), stop later trailed up to 98, exit 120.
+    r, r_stop = compute_r_multiple(100, 120, initial_stop=90, stop_loss=98)
+    assert r_stop == 90, "must use the initial stop as the denominator"
+    assert r == 2.0, f"expected 2.0R against the initial stop, got {r}"
+    # Against the trailed stop it would have been (120-100)/(100-98) = 10.0R.
+    inflated, _ = compute_r_multiple(100, 120, initial_stop=None, stop_loss=98)
+    assert inflated == 10.0, "sanity: the trailed stop really does inflate R"
+    assert r != inflated
+
+    # Legacy row: initial_stop is NULL -> fall back to stop_loss.
+    r_legacy, legacy_stop = compute_r_multiple(100, 120, initial_stop=None, stop_loss=90)
+    assert legacy_stop == 90 and r_legacy == 2.0, "legacy null must fall back to stop_loss"
+
+    # Exact -1R loss measured on the initial stop, even with a trailed stop set.
+    assert compute_r_multiple(100, 90, initial_stop=90, stop_loss=95)[0] == -1.0
+    # No stop at all -> None
+    assert compute_r_multiple(100, 120, None, None)[0] is None
+    # Stop at/above cost -> None (non-positive denominator)
+    assert compute_r_multiple(100, 120, 110, None)[0] is None
+    assert compute_r_multiple(100, 120, 100, None)[0] is None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 5. Backtest: turnover cost + risk-free-adjusted Sharpe
+# ──────────────────────────────────────────────────────────────────────────
+@test
+def test_turnover_cost_is_not_clipped():
+    """A full rotation must cost twice a half rotation. The old
+    min(1.0, turnover) clip charged both the same."""
+    from services.backtest import turnover_cost
+
+    cost = 0.001          # 10 bps
+    top_n = 5
+    prev = {"A", "B", "C", "D", "E"}
+
+    # No change -> no cost
+    assert turnover_cost(set(prev), prev, top_n, cost) == 0.0
+
+    # Full rotation: sym_diff = 10 = 2*top_n -> 2 * cost (sell all + buy all)
+    full = {"F", "G", "H", "I", "J"}
+    assert approx(turnover_cost(full, prev, top_n, cost), 2 * cost)
+
+    # Half rotation: swap 2 of 5 -> sym_diff = 4 -> 0.8 * cost, and it must be
+    # strictly less than the full-rotation charge (the bug made them equal).
+    half = {"A", "B", "C", "F", "G"}
+    assert approx(turnover_cost(half, prev, top_n, cost), 4 / 5 * cost)
+    assert turnover_cost(half, prev, top_n, cost) < turnover_cost(full, prev, top_n, cost)
+
+    # Regression guard for the exact bug: the old code was
+    #   min(1.0, sym_diff/top_n) * cost
+    # which capped at 1*cost. A full rotation must now cost strictly more.
+    old_clipped = min(1.0, len(full.symmetric_difference(prev)) / top_n) * cost
+    assert turnover_cost(full, prev, top_n, cost) > old_clipped
+
+
+@test
+def test_metrics_sharpe_subtracts_risk_free_rate():
+    """_metrics must charge the same 5% risk-free rate indicators.py does,
+    de-annualized to the rebalance period."""
+    import math as _math
+    from services.backtest import _metrics, RISK_FREE_RATE
+    from statistics import pstdev, mean as _mean
+
+    assert RISK_FREE_RATE == 0.05, "must match indicators.compute_performance_metrics"
+
+    ppy = 252 / 5
+    # 20 weekly periods, deterministic alternating-ish returns
+    vals = [1.0]
+    rets = [0.01, -0.004, 0.012, 0.002, -0.008] * 4
+    dates = []
+    from datetime import date as _d, timedelta as _td
+    day = _d(2024, 1, 1)
+    dates.append(day.isoformat())
+    for r in rets:
+        vals.append(round(vals[-1] * (1 + r), 6))
+        day += _td(days=5)
+        dates.append(day.isoformat())
+    equity = [{"date": d, "value": v} for d, v in zip(dates, vals)]
+
+    m = _metrics(equity, ppy)
+    actual_rets = [equity[i + 1]["value"] / equity[i]["value"] - 1 for i in range(len(equity) - 1)]
+    vol = pstdev(actual_rets)
+    rf_period = (1 + RISK_FREE_RATE) ** (1 / ppy) - 1
+    expected = _mean([r - rf_period for r in actual_rets]) / vol * _math.sqrt(ppy)
+    assert m["sharpe"] == round(expected, 2), f"got {m['sharpe']} expected {round(expected, 2)}"
+
+    # And it must differ from the old no-rf definition on this series.
+    naive = _mean(actual_rets) / vol * _math.sqrt(ppy)
+    assert round(naive, 2) != m["sharpe"], "rf subtraction had no effect — check the formula"
+    assert m["sharpe"] < round(naive, 2), "excess-return Sharpe must be lower than the raw one"
+    assert m["sortino"] is not None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 5b. Quote schema v2 consumers (screener filters, watchlist ranking)
+# ──────────────────────────────────────────────────────────────────────────
+def _v2_quote(**over):
+    """A minimal schema-v2 quote. Every range filter treats None as 'no value',
+    so only the fields a given test cares about need to be set."""
+    q = {
+        "ticker": "TEST", "schema_v": 2, "quote_type": "EQUITY",
+        "ma_state": "bull", "gc": False, "dc": False,
+        "gc_event": False, "dc_event": False,
+        "vol_r": 1.0, "vol_r_5d": 1.0, "p52w": 50.0,
+    }
+    q.update(over)
+    return q
+
+
+@test
+def test_screener_earn_beat_filter_is_gone():
+    """earn_beat no longer exists on a quote — leaving the filter in place made
+    it match nothing and return zero rows."""
+    from api.screener import ScreenerFilters
+    assert not hasattr(ScreenerFilters(), "earn_beat"), "earn_beat must be removed"
+    import inspect
+    from api import screener
+    assert "earn_beat" not in inspect.getsource(screener._passes), (
+        "_passes must no longer reference earn_beat"
+    )
+    # earn_soon is a different field and must survive.
+    assert hasattr(ScreenerFilters(), "earn_soon")
+
+
+@test
+def test_screener_ma_state_and_vol_r_5d_filters():
+    from api.screener import ScreenerFilters, _passes
+
+    bull = _v2_quote(ma_state="bull")
+    bear = _v2_quote(ma_state="bear")
+    none_state = _v2_quote(ma_state=None)
+
+    # No filter set -> everything passes (empty string must behave as "no filter")
+    for f in (ScreenerFilters(), ScreenerFilters(ma_state=""), ScreenerFilters(ma_state=None)):
+        assert _passes(bull, f) and _passes(bear, f) and _passes(none_state, f)
+
+    f_bull = ScreenerFilters(ma_state="bull")
+    assert _passes(bull, f_bull)
+    assert not _passes(bear, f_bull)
+    assert not _passes(none_state, f_bull)
+    assert _passes(bear, ScreenerFilters(ma_state="bear"))
+
+    # vol_r_5d_min is the SMOOTHED ratio and must be independent of vol_r.
+    hi5 = _v2_quote(vol_r=0.5, vol_r_5d=1.8)
+    lo5 = _v2_quote(vol_r=3.0, vol_r_5d=0.9)
+    assert _passes(hi5, ScreenerFilters(vol_r_5d_min=1.2))
+    assert not _passes(lo5, ScreenerFilters(vol_r_5d_min=1.2))
+    # …and vol_r_min still filters the single-bar ratio.
+    assert _passes(lo5, ScreenerFilters(vol_r_min=1.2))
+    assert not _passes(hi5, ScreenerFilters(vol_r_min=1.2))
+
+
+@test
+def test_screener_gc_filter_is_an_event_not_a_state():
+    """gc/dc filter on a CROSS within the last 5 bars. An established uptrend
+    (ma_state bull, no recent cross) must NOT satisfy the gc filter."""
+    from api.screener import ScreenerFilters, _passes
+
+    established = _v2_quote(ma_state="bull", gc=False, gc_event=False)
+    fresh_cross = _v2_quote(ma_state="bull", gc=True, gc_event=True)
+    f_gc = ScreenerFilters(gc=True)
+    assert not _passes(established, f_gc), "an established trend is not a cross event"
+    assert _passes(fresh_cross, f_gc)
+    # ma_state is the way to ask for the standing trend instead.
+    assert _passes(established, ScreenerFilters(ma_state="bull"))
+
+    f_dc = ScreenerFilters(dc=True)
+    assert not _passes(_v2_quote(dc=False, dc_event=False), f_dc)
+    assert _passes(_v2_quote(dc=True, dc_event=True), f_dc)
+
+
+@test
+def test_screener_filters_accept_new_frontend_keys():
+    """The frontend POSTs ma_state and vol_r_5d_min. They must be real model
+    fields, not silently-dropped extras."""
+    from api.screener import ScreenerFilters
+    f = ScreenerFilters(**{"ma_state": "bull", "vol_r_5d_min": 1.3})
+    assert f.ma_state == "bull"
+    assert f.vol_r_5d_min == 1.3
+
+
+@test
+def test_watchlist_rank_uses_ma_state_not_gc_event():
+    """The 0.5 trend bonus must key off the standing MA state. Keying it off the
+    5-bar `gc` event meant it essentially never fired and reordered rankings."""
+    from api.watchlist import composite_rank
+
+    # Quotes identical except for the MA trend state / cross event.
+    base = {"ticker": "X", "score": {"o": 5, "f": 3, "t": 3, "m": 3}, "max_dd_1m": 0}
+    bull = {**base, "ma_state": "bull", "gc": False, "gc_event": False}
+    bear = {**base, "ma_state": "bear", "gc": False, "gc_event": False}
+    fresh = {**base, "ma_state": "bull", "gc": True, "gc_event": True}
+    nostate = {**base, "ma_state": None, "gc": False, "gc_event": False}
+
+    # The trend-STATE bonus keeps its original 0.5 weight.
+    assert approx(composite_rank(bull) - composite_rank(bear), 0.5)
+    assert approx(composite_rank(bull) - composite_rank(nostate), 0.5)
+    # A fresh cross is a SEPARATE, smaller bonus on top of the state bonus.
+    assert approx(composite_rank(fresh) - composite_rank(bull), 0.25)
+    assert composite_rank(fresh) > composite_rank(bull) > composite_rank(bear)
+
+    # Regression: before the fix an established uptrend with no recent cross
+    # (gc False) scored the same as a downtrend on this term. It must not now.
+    assert composite_rank(bull) != composite_rank(bear)
+
+    # vol_r (single-bar ratio) keeps its 1.2 threshold and 0.5 weight.
+    assert approx(
+        composite_rank({**bull, "vol_r": 1.5}) - composite_rank({**bull, "vol_r": 1.0}), 0.5
+    )
+
+
+@test
+def test_ai_technicals_whitelist_covers_schema_v2():
+    import inspect
+    from api import ai
+
+    src = inspect.getsource(ai)
+    idx = src.index("technicals = {k: data.get(k) for k in [")
+    block = src[idx: idx + 400]
+    for field in ("ma_state", "ann_ret_1m", "rsi", "macd_sig", "vs_ma200", "gc", "dc",
+                  "vol_r", "p52w", "score"):
+        assert f'"{field}"' in block, f"technicals whitelist missing {field}"
+    assert "earn_beat" not in src, "api/ai.py must not reference the removed earn_beat"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 6. Journal stats: win-rate / scratch split
+# ──────────────────────────────────────────────────────────────────────────
+class _FakeTrade:
+    """Duck-types the ClosedTrade fields api/journal.py::_stats reads."""
+    def __init__(self, pnl, pnl_pct, r_multiple=None, strategy=None):
+        self.pnl = pnl
+        self.pnl_pct = pnl_pct
+        self.r_multiple = r_multiple
+        self.strategy = strategy
+
+
+@test
+def test_journal_stats_scratch_split_and_r_sample():
+    from api.journal import _stats
+
+    trades = [
+        _FakeTrade(100, 5.0, r_multiple=2.0),
+        _FakeTrade(50, 2.0),              # win, no R recorded (no valid stop)
+        _FakeTrade(-40, -2.0, r_multiple=-1.0),
+        _FakeTrade(0, 0.0),               # breakeven scratch — neither win nor loss
+    ]
+    s = _stats(trades)
+    assert s["count"] == 4
+    assert s["wins"] == 2
+    assert s["losses"] == 1
+    assert s["scratch"] == 1, "pnl == 0 must be counted as scratch, not a loss"
+    # wins / (wins + losses) = 2/3, NOT 2/4 (the old pnl <= 0 bucketing)
+    assert s["win_rate"] == round(2 / 3 * 100, 1), f"got {s['win_rate']}"
+    assert s["win_rate"] != 50.0, "scratch must not be counted in the loss bucket"
+    # avg_loss_pct must not be diluted by the breakeven trade
+    assert s["avg_loss_pct"] == -2.0
+
+    # Mixed denominators are now explicit: only 2 of 4 trades carry an R.
+    assert s["r_sample"] == 2
+    assert s["avg_r"] == 0.5 and s["expectancy_r"] == 0.5
+
+    # All-scratch edge case -> win_rate undefined rather than 0%
+    assert _stats([_FakeTrade(0, 0.0)])["win_rate"] is None
+    assert _stats([])["count"] == 0
+
+
+@test
+def test_journal_aggregates_use_all_trades_not_the_page():
+    """stats/by_strategy must be built from every closed trade, not the LIMIT-ed
+    display page — otherwise the headline numbers change with the page size."""
+    import inspect
+    from api import journal
+
+    src = inspect.getsource(journal.get_journal)
+    assert '"stats": _stats(all_trades)' in src, "stats must be computed from all_trades"
+    assert "for t in all_trades:" in src, "by_strategy must be built from all_trades"
+    assert '"stats": _stats(trades)' not in src, "stats must not use the limited page"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 7. ClosedTrade R-multiple math (legacy formula mirror)
+# ──────────────────────────────────────────────────────────────────────────
 @test
 def test_r_multiple_known_cases():
     # +2R winner: cost 100, stop 90, exit 120 -> (120-100)/(100-90)=2.0

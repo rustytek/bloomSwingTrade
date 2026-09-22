@@ -157,7 +157,11 @@ def calc_adx(
     for i, adx_v in enumerate(adx_vals):
         idx = offset + i
         if 0 <= idx < n:
-            di_idx = idx - 1  # dx/DI series is offset by the initial diff()
+            # The DI/dx series is produced by Wilder-smoothing the diff()-based
+            # TR/DM lists, so its element k maps to bar index `period + k`.
+            # Hence bar `idx` reads DI at `idx - period` (NOT idx - 1, which
+            # both looked ahead on early bars and ran off the end on recent ones).
+            di_idx = idx - period
             result[idx] = {
                 "adx": _safe(adx_v),
                 "plus_di": _safe(plus_di_series[di_idx]) if 0 <= di_idx < len(plus_di_series) else None,
@@ -237,12 +241,17 @@ def compute_score(stock: dict) -> dict:
     debt_eq = stock.get("debt_eq")
     rsi = stock.get("rsi") or 0
     vs_ma200 = stock.get("vs_ma200") or 0
-    gc = stock.get("gc", False)
-    dc = stock.get("dc", False)
+    # These two points describe the MA50/MA200 trend STATE, not the crossover
+    # event. `gc`/`dc` are now event flags, so read `ma_state` when present and
+    # only fall back to the legacy state-style flags for pre-v2 cached quotes.
+    ma_state = stock.get("ma_state")
+    if ma_state in ("bull", "bear"):
+        ma_bull = ma_state == "bull"
+    else:
+        ma_bull = bool(stock.get("gc")) and not stock.get("dc")
     chg_pct = stock.get("chg_pct") or 0
     vol_r = stock.get("vol_r") or 0
     p52w = stock.get("p52w") or 0
-    earn_beat = stock.get("earn_beat", False)
 
     # Fundamental
     f = 0
@@ -257,8 +266,9 @@ def compute_score(stock: dict) -> dict:
     if 40 <= rsi <= 65: t += 1
     if vs_ma200 > 0: t += 1
     if vs_ma200 > 10: t += 1
-    if gc: t += 1
-    if not dc: t += 1
+    if ma_bull: t += 1       # MA50 above MA200
+    if ma_bull: t += 1       # and not below it (kept as two points for parity
+                             # with the historical 5-point Technical scale)
 
     # Momentum
     m = 0
@@ -266,7 +276,8 @@ def compute_score(stock: dict) -> dict:
     if chg_pct > 1: m += 1
     if vol_r > 1.2: m += 1
     if p52w > 70: m += 1
-    if earn_beat: m += 1
+    # NOTE: there used to be an `earn_beat` point here. yfinance has no
+    # "earningsBeat" field, so it was always False and could never be earned.
 
     f = min(5, f)
     t = min(5, t)
@@ -314,7 +325,13 @@ def compute_swing_score(stock: dict) -> dict:
     if stock.get("macd_sig") == "bullish":
         trend += 3
         add_reason(3, "bullish MACD")
-    if not stock.get("dc"):
+    # Trend STATE, not the crossover event — see the note in compute_score().
+    ma_state = stock.get("ma_state")
+    if ma_state in ("bull", "bear"):
+        ma_bull = ma_state == "bull"
+    else:
+        ma_bull = not stock.get("dc")
+    if ma_bull:
         trend += 1
     trend = min(25, trend)
 
@@ -470,7 +487,7 @@ def compute_performance_metrics(
         beta:      pre-computed beta from yfinance; used for Treynor
     """
     _empty = {
-        "ann_ret": None, "vol": None, "sharpe": None,
+        "ann_ret": None, "ann_ret_1m": None, "vol": None, "sharpe": None,
         "gain_sharpe": None, "sortino": None, "calmar": None,
         "info_ratio": None, "treynor": None,
         "vol_1m": None, "max_dd_1m": None,
@@ -483,7 +500,8 @@ def compute_performance_metrics(
     n = len(arr)
     daily_ret = np.diff(arr) / arr[:-1]
     total_ret = (arr[-1] - arr[0]) / arr[0]
-    ann_ret = ((1 + total_ret) ** (252 / n) - 1) * 100
+    # n prices span n-1 return periods — annualize over the periods, not the prices.
+    ann_ret = ((1 + total_ret) ** (252 / (n - 1)) - 1) * 100
     vol = float(np.std(daily_ret) * np.sqrt(252) * 100)
     rf = 0.05  # 5% risk-free rate
 
@@ -520,7 +538,9 @@ def compute_performance_metrics(
             excess_daily = stock_ret_sub - spy_ret
             tracking_err = float(np.std(excess_daily) * np.sqrt(252))
             spy_total = (spy_arr[-1] - spy_arr[0]) / spy_arr[0]
-            spy_ann = ((1 + spy_total) ** (252 / len(spy_arr)) - 1)
+            # same n-1 return-period convention as ann_ret above, so the
+            # excess return being divided by tracking error is apples-to-apples
+            spy_ann = ((1 + spy_total) ** (252 / (len(spy_arr) - 1)) - 1)
             excess_ann = ann_ret / 100 - spy_ann
             if tracking_err > 0:
                 info_ratio = excess_ann / tracking_err
@@ -538,7 +558,7 @@ def compute_performance_metrics(
     if n1 >= 2:
         dr_1m = np.diff(arr_1m) / arr_1m[:-1]
         total_1m = (arr_1m[-1] - arr_1m[0]) / arr_1m[0]
-        ann_ret_1m = ((1 + total_1m) ** (252 / n1) - 1) * 100
+        ann_ret_1m = ((1 + total_1m) ** (252 / (n1 - 1)) - 1) * 100
         vol_1m = float(np.std(dr_1m) * np.sqrt(252) * 100)
         peak_1m = arr_1m[0]
         max_dd_1m_raw = 0.0
@@ -551,7 +571,12 @@ def compute_performance_metrics(
         max_dd_1m = round(max_dd_1m_raw * 100, 2)  # as positive %
 
     raw = {
-        "ann_ret": round(ann_ret_1m, 2) if ann_ret_1m is not None else None,
+        # Full-history annualized return — this is the figure Sharpe, Sortino,
+        # Calmar, Info Ratio and Treynor are all computed from.
+        "ann_ret": round(ann_ret, 2),
+        # The 21-bar (1-month) annualized return, reported separately so it can
+        # never be mistaken for the denominator-matching `ann_ret` above.
+        "ann_ret_1m": round(ann_ret_1m, 2) if ann_ret_1m is not None else None,
         "vol": round(vol, 2),
         "sharpe": round(sharpe, 3) if sharpe is not None else None,
         "gain_sharpe": round(sortino, 3) if sortino is not None else None,  # legacy key

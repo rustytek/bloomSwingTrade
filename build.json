@@ -1,7 +1,7 @@
 {
   "args": {},
   "labels": {
-    "io.hass.version": "1.17.0",
+    "io.hass.version": "1.18.0",
     "io.hass.type": "addon",
     "io.hass.arch": "aarch64|amd64"
   }

@@ -30,6 +30,24 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 # In-memory layer on top of SQLite cache
 _mem_cache: dict[str, dict] = {}
 
+# Enriched-quote field-contract version. Bump when the MEANING of a field
+# changes so previously-cached quotes are re-fetched instead of silently
+# serving old semantics.
+#   1 -> original
+#   2 -> p52w limited to 252 bars; gc/dc are crossover EVENTS (+ gc_event/
+#        dc_event/ma_state); ann_ret is full-history (ann_ret_1m added);
+#        vol_r is today-vs-prior-20 (+ vol_r_5d); earn_beat removed.
+QUOTE_SCHEMA_VERSION = 2
+
+
+def _quote_schema_ok(data: dict | None) -> bool:
+    """True only when a cached quote was produced by the CURRENT field contract.
+
+    Cached rows written before a semantics change carry the old meanings under
+    the same key names, so a timestamp check alone is not enough.
+    """
+    return isinstance(data, dict) and data.get("schema_v") == QUOTE_SCHEMA_VERSION
+
 
 def _last_market_close() -> datetime:
     """Return the most recent NYSE market close (4:00 PM ET, weekdays) as UTC.
@@ -159,7 +177,13 @@ def _fetch_quote_sync(ticker: str) -> dict:
     if rev_grw is not None:
         rev_grw = rev_grw * 100
     if div_yield is not None:
-        div_yield = div_yield * 100
+        # yfinance changed units mid-flight: older releases returned a fraction
+        # (0.0132 = 1.32%), recent ones already return a percent (1.32). Treat
+        # anything <= 1.0 as a fraction and scale it; take larger values as
+        # already-percent. A genuine yield > 100% doesn't exist, and a real
+        # sub-1% yield reported as a percent (e.g. 0.6) is only mis-scaled to
+        # 60 in the rare ambiguous band — far better than a blanket 100x error.
+        div_yield = div_yield * 100 if div_yield <= 1.0 else div_yield
     if debt_eq is not None:
         debt_eq = debt_eq / 100  # yfinance returns e.g. 152 for 1.52
 
@@ -185,7 +209,8 @@ def _fetch_quote_sync(ticker: str) -> dict:
         "beta": round(beta, 2) if beta is not None else None,
         "div": round(div_yield, 2) if div_yield is not None else None,
         "fcf_pos": fcf is not None and fcf > 0,
-        "earn_beat": full_info.get("earningsBeat", False),
+        # NOTE: no "earn_beat" — yfinance exposes no earnings-beat field at all,
+        # so it was always False and its compute_score point was unreachable.
         "earn_soon": False,  # not reliably in yfinance free tier
     }
 
@@ -235,33 +260,52 @@ def _enrich_with_technicals(quote: dict, history: list[dict]) -> dict:
     vs_ma200 = ((price - ma200_val) / ma200_val * 100) if ma200_val else None
     vs_ma50 = ((price - ma50_val) / ma50_val * 100) if ma50_val else None
 
-    # Golden / Death Cross: MA50 crosses MA200
-    gc = dc = False
+    # Golden / Death Cross — an EVENT (a cross in the last 5 bars) is reported
+    # separately from the STATE (which MA is on top right now). The two MA
+    # series have different None-padding lengths, so compare the CLEANED lists
+    # from the end: index -1 is the same bar in both, and so is -1-k.
+    CROSS_LOOKBACK = 5
+    gc_event = dc_event = False
+    ma_state: str | None = None
     ma50_clean = [v for v in ma50 if v is not None]
     ma200_clean = [v for v in ma200 if v is not None]
     min_len = min(len(ma50_clean), len(ma200_clean))
+    if min_len >= 1:
+        ma_state = "bull" if ma50_clean[-1] > ma200_clean[-1] else "bear"
     if min_len >= 2:
-        if ma50_clean[-1] > ma200_clean[-1] and ma50_clean[-2] <= ma200_clean[-2]:
-            gc = True
-        elif ma50_clean[-1] < ma200_clean[-1] and ma50_clean[-2] >= ma200_clean[-2]:
-            dc = True
-        elif ma50_clean[-1] > ma200_clean[-1]:
-            gc = True  # currently in golden cross territory
-        else:
-            dc = True  # currently in death cross territory
+        # Walk the last CROSS_LOOKBACK bar-pairs looking for a sign flip.
+        for k in range(min(CROSS_LOOKBACK, min_len - 1)):
+            now_above = ma50_clean[-1 - k] > ma200_clean[-1 - k]
+            prev_above = ma50_clean[-2 - k] > ma200_clean[-2 - k]
+            if now_above and not prev_above:
+                gc_event = True
+                break
+            if not now_above and prev_above:
+                dc_event = True
+                break
 
-    # 52-week position
+    # 52-week position — the LAST 252 bars only (history is now 5y; using the
+    # whole cache made this a 5-year range position). Mirrors BreakoutVolume.
     if len(closes) >= 2:
-        high52 = max(highs)
-        low52 = min(lows)
+        highs_52 = highs[-252:] if len(highs) >= 252 else highs
+        lows_52 = lows[-252:] if len(lows) >= 252 else lows
+        high52 = max(highs_52)
+        low52 = min(lows_52)
         p52w = ((price - low52) / (high52 - low52) * 100) if high52 != low52 else 50
     else:
         p52w = None
 
-    # Volume ratio (avg last 20 bars vs avg last 5 bars)
+    # Volume ratios. `vol_r` is the conventional single-bar confirmation figure
+    # (today vs the PRIOR 20-day average, today excluded) — that's how every
+    # consumer's 1.15/1.5/2.5 thresholds are meant to read. `vol_r_5d` keeps the
+    # old 5-day-vs-20-day smoothed ratio for anything that wants a trend.
+    prior20 = vols[-21:-1] if len(vols) >= 21 else vols[:-1]
+    avg_prior_20 = (sum(prior20) / len(prior20)) if prior20 else 0
+    vol_r = (vols[-1] / avg_prior_20) if (vols and avg_prior_20 > 0) else 1.0
+
     avg_vol_20 = sum(vols[-20:]) / min(20, len(vols)) if vols else 0
     avg_vol_5 = sum(vols[-5:]) / min(5, len(vols)) if vols else 0
-    vol_r = (avg_vol_5 / avg_vol_20) if avg_vol_20 > 0 else 1.0
+    vol_r_5d = (avg_vol_5 / avg_vol_20) if avg_vol_20 > 0 else 1.0
     avg_dollar_vol_m = (avg_vol_20 * price / 1_000_000) if avg_vol_20 and price else None
 
     def period_return(series: list[float] | None, bars: int) -> float | None:
@@ -295,15 +339,23 @@ def _enrich_with_technicals(quote: dict, history: list[dict]) -> dict:
 
     enriched = {
         **quote,
+        # Field-contract version. Bump whenever the MEANING of an enriched field
+        # changes — cached quotes below this version are treated as stale and
+        # re-enriched regardless of their timestamp (see _quote_schema_ok).
+        "schema_v": QUOTE_SCHEMA_VERSION,
         "spark": spark,
         "rsi": round(rsi_val, 1) if rsi_val is not None else None,
         "macd_sig": macd_sig,
         "vs_ma50": round(vs_ma50, 1) if vs_ma50 is not None else None,
         "vs_ma200": round(vs_ma200, 1) if vs_ma200 is not None else None,
-        "gc": gc,
-        "dc": dc,
+        "gc_event": gc_event,
+        "dc_event": dc_event,
+        "ma_state": ma_state,
+        "gc": gc_event,   # legacy alias of gc_event
+        "dc": dc_event,   # legacy alias of dc_event
         "p52w": round(p52w, 1) if p52w is not None else None,
         "vol_r": round(vol_r, 2),
+        "vol_r_5d": round(vol_r_5d, 2),
         "avg_dollar_vol_m": round(avg_dollar_vol_m, 1) if avg_dollar_vol_m is not None else None,
         "ret_5d": round(ret_5d, 2) if ret_5d is not None else None,
         "ret_21d": round(ret_21d, 2) if ret_21d is not None else None,
@@ -338,7 +390,8 @@ async def get_quote(ticker: str, db: Session, force_refresh: bool = False) -> Op
     # 1. Check memory cache
     if not force_refresh and cache_key in _mem_cache:
         entry = _mem_cache[cache_key]
-        if _is_fresh(entry["cached_at"]):
+        # Old-contract quotes are stale no matter how recently they were cached.
+        if _is_fresh(entry["cached_at"]) and _quote_schema_ok(entry.get("data")):
             return _attach_cache_metadata(entry["data"], entry["cached_at"])
 
     # 2. Check SQLite cache
@@ -346,8 +399,10 @@ async def get_quote(ticker: str, db: Session, force_refresh: bool = False) -> Op
     quote_cached_at = row.quote_cached_at or row.cached_at if row else None
     if not force_refresh and row and row.quote_json and quote_cached_at and _is_fresh(quote_cached_at):
         data = json.loads(row.quote_json)
-        _mem_cache[cache_key] = {"data": data, "cached_at": quote_cached_at}
-        return _attach_cache_metadata(data, quote_cached_at)
+        if _quote_schema_ok(data):
+            _mem_cache[cache_key] = {"data": data, "cached_at": quote_cached_at}
+            return _attach_cache_metadata(data, quote_cached_at)
+        # else: pre-v2 semantics — fall through to a fresh fetch + re-enrich.
 
     # 3. Fetch from yfinance
     try:
@@ -583,6 +638,35 @@ def invalidate_short_history_cache(db: Session, min_bars: int = 420) -> int:
             "Invalidated %s short history cache entries (<%s bars) so MA200 breadth can refresh",
             count,
             min_bars,
+        )
+    return count
+
+
+def invalidate_legacy_schema_cache(db: Session) -> int:
+    """Force quote refresh for rows written under an older field contract.
+
+    `get_quote` already refuses to serve a quote whose `schema_v` is behind
+    QUOTE_SCHEMA_VERSION, but the background refresher (`refresh_universe`)
+    picks stale tickers by timestamp alone. Back-dating those rows at startup
+    lets the sweep re-fetch them instead of waiting for an on-demand hit.
+    """
+    epoch = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    rows = db.query(StockCache).filter(StockCache.quote_json.isnot(None)).all()
+    count = 0
+    for row in rows:
+        try:
+            data = json.loads(row.quote_json or "{}")
+        except Exception:
+            data = {}
+        if not _quote_schema_ok(data):
+            row.quote_cached_at = epoch
+            row.cached_at = epoch
+            count += 1
+    if count:
+        db.commit()
+        logger.info(
+            "Invalidated %s cache entries below quote schema v%s — will re-enrich",
+            count, QUOTE_SCHEMA_VERSION,
         )
     return count
 

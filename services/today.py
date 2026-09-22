@@ -26,6 +26,7 @@ from services.strategies import STRATEGIES
 from services.trade_plan import build_trade_plan
 from services.universe import UNIVERSE
 from services import chart_service
+from services import regime as regime_mod
 from services.regime import classify_regime, strategies_for_regime, QUADRANT_INFO
 
 _TTL_SECONDS = 15 * 60
@@ -66,7 +67,10 @@ def position_flags(pos: PortfolioPosition, quote: dict, bars: list[dict] | None 
     reasons: list[str] = []
     if (quote.get("vs_ma200") or 0) < 0:
         reasons.append("below 200MA")
-    if (quote.get("ann_ret") or 0) < 10:
+    # ann_ret_1m = the 21-bar (1-month) annualized %. Quote field `ann_ret` is now
+    # the FULL-HISTORY annualized return (what Sharpe/Sortino/Calmar use), which is
+    # NOT the intent here — this flag is about recent momentum going soft.
+    if (quote.get("ann_ret_1m") or 0) < 10:
         reasons.append("weak 1M annualized return")
     if quote.get("sharpe") is not None and quote["sharpe"] < 0.5:
         reasons.append("low Sharpe")
@@ -314,6 +318,109 @@ def _build_setups(cache: dict[str, dict], held: set[str], account_size: float,
     return out
 
 
+# ── Evidence-aware regime filtering ──────────────────────────────────────────
+# `Strategy.regimes` is a hand-written opinion about which quadrants a strategy
+# suits. services/edge_matrix.py turns the walk-forward backtest into evidence
+# about whether that opinion survives contact with data. This wires the two
+# together for the Playbook — under three hard safety constraints:
+#
+#   1. NEVER BUILD THE MATRIX HERE. get_cached_matrix() reads the 12h per-user
+#      cache and returns None on a miss; a cold build takes minutes and would
+#      block the dashboard. A miss means "no evidence", not "wait".
+#   2. NEVER CHANGE WHAT THE USER SEES on a missing, stale or malformed matrix.
+#      Every failure path degrades to exactly today's tag-based behaviour, and
+#      every exception is swallowed into that same fallback.
+#   3. SHIP OFF. Requires the per-user `use_evidence_regimes` setting (or the
+#      module-level services/regime.set_evidence_override opt-in).
+
+def _evidence_cell(matrix, quadrant, strategy_id) -> dict | None:
+    """One strategy's evidence cell for a quadrant, tolerating any shape."""
+    try:
+        cell = matrix["strategies"][strategy_id]["cells"][quadrant]
+    except Exception:  # noqa: BLE001 — a malformed matrix is "no evidence"
+        return None
+    if not isinstance(cell, dict):
+        return None
+    verdict = cell.get("verdict")
+    n = cell.get("periods", cell.get("n"))
+    if not isinstance(n, (int, float)) or not math.isfinite(n):
+        n = None
+    return {
+        "verdict": verdict if isinstance(verdict, str) else None,
+        "n": int(n) if n is not None else None,
+        "detail": cell.get("verdict_detail") if isinstance(cell.get("verdict_detail"), str)
+                  else None,
+    }
+
+
+def _resolve_active_strategies(db: Session, user, quadrant: str | None) -> tuple[set, dict, dict]:
+    """(active_ids, evidence_summary, matrix) for the Playbook.
+
+    Returns the plain tag-based set unless the evidence override is opted into
+    AND a usable cached matrix exists AND applying it leaves a non-empty
+    playbook.
+    """
+    base = strategies_for_regime(quadrant)
+    opted_in = bool(getattr(user, "use_evidence_regimes", False)) or \
+        bool(getattr(regime_mod, "EVIDENCE_OVERRIDE_ENABLED", False))
+    summary = {
+        "enabled": opted_in,
+        "applied": False,
+        "fallback": False,
+        "matrix_available": False,
+        "matrix_generated_at": None,
+        "excluded": [],
+        "added": [],
+        "reason": ("Evidence override is off — the Playbook uses the hand-written "
+                   "Strategy.regimes tags."),
+    }
+    if not opted_in:
+        return base, summary, None
+
+    matrix = None
+    try:
+        from services.edge_matrix import get_cached_matrix
+        matrix = get_cached_matrix(user.id)   # cache read only — never builds
+    except Exception:  # noqa: BLE001
+        matrix = None
+    if not isinstance(matrix, dict):
+        matrix = None
+    summary["matrix_available"] = matrix is not None
+    summary["matrix_generated_at"] = (matrix or {}).get("generated_at")
+    if matrix is None:
+        summary["fallback"] = True
+        summary["reason"] = ("Evidence override is on but no edge matrix is cached — "
+                             "using the hand-written tags. Build one on the Backtest page.")
+        return base, summary, None
+
+    try:
+        adj = evidence_adjustment_safe(quadrant, matrix)
+    except Exception:  # noqa: BLE001
+        adj = None
+    if not adj or not adj.get("result"):
+        summary["fallback"] = True
+        summary["reason"] = ("The cached edge matrix could not be applied — using the "
+                             "hand-written tags.")
+        return base, summary, matrix
+
+    summary["applied"] = bool(adj.get("applied"))
+    summary["fallback"] = bool(adj.get("fallback"))
+    summary["excluded"] = list(adj.get("excluded") or [])
+    summary["added"] = list(adj.get("added") or [])
+    summary["reason"] = adj.get("reason") or summary["reason"]
+    return set(adj["result"]), summary, matrix
+
+
+def evidence_adjustment_safe(quadrant, matrix):
+    """`services.regime.evidence_adjustment` with force=True.
+
+    `force` is correct here: the opt-in decision was already made per-user in
+    `_resolve_active_strategies`, and the module-level flag must not have to be
+    flipped globally for one user's dashboard.
+    """
+    return regime_mod.evidence_adjustment(quadrant, matrix, force=True)
+
+
 # ── Top-level builder ────────────────────────────────────────────────────────
 
 async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
@@ -335,27 +442,66 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
     cache = _load_all_cache(db)
 
     regime = await _build_regime(cache)
-    active_ids = strategies_for_regime(regime["quadrant"])
+    tagged_ids = strategies_for_regime(regime["quadrant"])
+    active_ids, evidence, matrix = _resolve_active_strategies(db, user, regime["quadrant"])
     pos_rows = _build_positions(positions, cache, atr_stop_mult)
     held = {p.ticker for p in positions}
     setups = _build_setups(cache, held, account_size, risk_pct, atr_stop_mult, r_multiple,
                            active_ids=active_ids)
 
-    strategy_regime_status = [
-        {
+    strategy_regime_status = []
+    for s in STRATEGIES.values():
+        is_active = s.id in active_ids
+        was_tagged = s.id in tagged_ids
+        cell = _evidence_cell(matrix, regime["quadrant"], s.id) if matrix else None
+        # What the evidence did to THIS strategy, so the UI can explain itself
+        # instead of silently reordering the playbook.
+        if not evidence["enabled"]:
+            effect, effect_note = None, None
+        elif s.id in evidence["excluded"]:
+            effect = "excluded"
+            effect_note = ("Tagged for this regime, but the edge matrix marks it mis-tagged "
+                           "here — the evidence stood it down.")
+        elif s.id in evidence["added"]:
+            effect = "promoted"
+            effect_note = ("Not tagged for this regime, but the edge matrix found a real "
+                           "edge here — the evidence promoted it.")
+        elif evidence["applied"]:
+            effect, effect_note = "unchanged", "Evidence agrees with the hand-written tag."
+        else:
+            effect = "unchanged"
+            effect_note = "Evidence not applied — the hand-written tag stands."
+
+        base_reason = (
+            f"Matches current regime ({regime['quadrant_label']})" if was_tagged
+            else f"Built for {', '.join(QUADRANT_INFO[q]['label'] for q in s.regimes) or 'no tagged regime'} — "
+                 f"current regime is {regime['quadrant_label']}, so this strategy sits out."
+        )
+        if effect == "excluded":
+            reason = f"{base_reason} Overridden: {effect_note}"
+        elif effect == "promoted":
+            reason = f"{base_reason} Overridden: {effect_note}"
+        else:
+            reason = base_reason
+
+        strategy_regime_status.append({
             "id": s.id,
             "name": s.name,
-            "active": s.id in active_ids,
+            "active": is_active,
+            "tagged_for_regime": was_tagged,
             "regimes": s.regimes,
             "actionable": s.actionable,
-            "reason": (
-                f"Matches current regime ({regime['quadrant_label']})" if s.id in active_ids
-                else f"Built for {', '.join(QUADRANT_INFO[q]['label'] for q in s.regimes) or 'no tagged regime'} — "
-                     f"current regime is {regime['quadrant_label']}, so this strategy sits out."
-            ),
-        }
-        for s in STRATEGIES.values()
-    ]
+            "reason": reason,
+            "evidence": {
+                "override_enabled": evidence["enabled"],
+                "override_applied": evidence["applied"],
+                "effect": effect,
+                "note": effect_note,
+                "verdict": (cell or {}).get("verdict"),
+                "n": (cell or {}).get("n"),
+                "verdict_detail": (cell or {}).get("detail"),
+            },
+        })
 
     # Data freshness from SPY cache row
     spy_row = db.query(StockCache).filter(StockCache.ticker == "SPY").first()
@@ -387,6 +533,7 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
         "positions": pos_rows,
         "setups": setups,
         "strategy_regime_status": strategy_regime_status,
+        "evidence_regimes": evidence,
         "suppressed_by_regime": suppressed,
         "checklist": checklist,
         "capacity": {

@@ -73,6 +73,13 @@ class Strategy(ABC):
     # False = informational/watchlist only — never gets a live trade_plan
     # built for it (e.g. a long-only account can't act on a bearish signal).
     actionable: bool = True
+    # Machine-readable upper bound of the hold window, in TRADING days.
+    # `details["horizon"]` is prose for humans ("3–10 day snap-back"); this is
+    # the number code can act on — it drives the backtest's TimeStop and
+    # services/scorecard.py's "held past the strategy's horizon" check, which
+    # stays UNAVAILABLE for any strategy leaving this None. None means the
+    # strategy has no time-based exit (open-ended hold, or no position at all).
+    horizon_days: int | None = None
 
     def applies_to(self, ticker: str) -> bool:
         """Ticker-universe restriction (e.g. Sector Rotation only trades the
@@ -133,6 +140,7 @@ class MomentumRotation(Strategy):
     min_bars = 110
     REGRESSION_BARS = 90
     regimes = ["trending_bull"]
+    horizon_days = 21   # rotate on each rebalance (weekly-monthly)
 
     def candidate(self, bars: list[dict], idx: int) -> dict | None:
         closes = _tail_closes(bars, idx, self.REGRESSION_BARS + 20)
@@ -211,6 +219,7 @@ class Pullback50MA(Strategy):
     }
     min_bars = 220
     regimes = ["trending_bull"]
+    horizon_days = 42   # 2 weeks-2 months
 
     def candidate(self, bars: list[dict], idx: int) -> dict | None:
         closes = _tail_closes(bars, idx, 260)
@@ -296,6 +305,7 @@ class BreakoutVolume(Strategy):
     LOOKBACK = 60
     VOL_RATIO_MIN = 1.5
     regimes = ["trending_bull"]
+    horizon_days = 42   # 2 weeks-2 months
 
     def candidate(self, bars: list[dict], idx: int) -> dict | None:
         closes = _tail_closes(bars, idx, 260)
@@ -385,6 +395,7 @@ class MeanReversionRSI2(Strategy):
     RSI_TRIGGER = 10.0
     RSI_FORMING = 20.0
     regimes = ["choppy_calm"]
+    horizon_days = 10   # 3-10 day snap-back
 
     def candidate(self, bars: list[dict], idx: int) -> dict | None:
         closes = _tail_closes(bars, idx, 260)
@@ -453,18 +464,20 @@ class DualMomentum(Strategy):
         "rules": [
             "12-1 month momentum: total return from 252 bars ago to 21 bars ago (skips the most recent month, which tends to mean-revert).",
             "Absolute momentum gate: that return must be > 0 — if it isn't beating cash, skip it entirely (this is what rotates a basket into bonds/cash in a bear market).",
-            "Relative momentum score: 12-1 return divided by annualized daily-return volatility over the same window.",
+            "Relative momentum score: 12-1 return divided by annualized daily-return volatility over that same 252 -> 21 bar window (the skipped last month is excluded from the volatility too).",
             "Rank all candidates by score; hold the top N.",
         ],
-        "scoring": "score = (P[t-21]/P[t-252] − 1) / annualized_vol(daily returns, 231-bar window)   — risk-adjusted 12-1 month momentum. Must be > 0.",
+        "scoring": "score = (P[t-21]/P[t-252] − 1) / annualized_vol(daily returns over the same 252 -> 21 bar window)   — risk-adjusted 12-1 month momentum. Must be > 0.",
         "parameters": [
             ["Momentum window", "252 -> 21 bars ago (12-1 month)"],
+            ["Volatility window", "252 -> 21 bars ago (same 12-1 span)"],
             ["Absolute momentum gate", "12-1 return > 0"],
             ["Min history", "260 bars"],
         ],
     }
     min_bars = 260
     regimes = ["trending_bull", "trending_bear"]
+    horizon_days = 63   # hold 1-3 months
 
     def candidate(self, bars: list[dict], idx: int) -> dict | None:
         closes = _tail_closes(bars, idx, 260)
@@ -477,7 +490,9 @@ class DualMomentum(Strategy):
         mom_12_1 = end_px / start_px - 1
         if mom_12_1 <= 0:
             return None
-        window = np.array(closes[-232:-1], dtype=float)
+        # Volatility is measured over the SAME 12-1 span as the return above
+        # (252 -> 21 bars ago), i.e. it also skips the most recent month.
+        window = np.array(closes[-253:-21], dtype=float)
         rets = np.diff(window) / window[:-1]
         vol = float(np.std(rets) * math.sqrt(252)) if len(rets) > 1 else 0.0
         if vol <= 0:
@@ -512,13 +527,13 @@ class VolatilityBreakout(Strategy):
         "how": "Buys the first close above a rolling 20-day high once ATR shows volatility is expanding, which is when a range starts becoming a trend.",
         "rules": [
             "Donchian breakout: close >= highest high of the prior 20 bars.",
-            "Volatility expansion confirm: current ATR(14) > its own 20-day average ATR (vol is rising, not fading).",
+            "Volatility expansion confirm: current ATR(14) > the average of the PRIOR 20 ATR readings, today excluded (vol is rising, not fading).",
             "Trend filter: close above the 50-day MA (skip breakouts fighting the intermediate trend).",
         ],
-        "scoring": "score = (close/prior_20d_high − 1) × (ATR/avg_ATR_20)   — rewards a cleaner breakout thrust with more volatility expansion behind it.",
+        "scoring": "score = (close/prior_20d_high − 1) × (ATR/avg_prior_20_ATR)   — rewards a cleaner breakout thrust with more volatility expansion behind it.",
         "parameters": [
             ["Donchian channel", "20-day high"],
-            ["Volatility confirm", "ATR(14) > 20-day avg ATR"],
+            ["Volatility confirm", "ATR(14) > avg of prior 20 ATRs (today excluded)"],
             ["Trend filter", "close > 50-day MA"],
             ["Min history", "90 bars"],
         ],
@@ -526,6 +541,7 @@ class VolatilityBreakout(Strategy):
     min_bars = 90
     CHANNEL = 20
     regimes = ["trending_bull"]
+    horizon_days = 30   # 2-6 week hold
 
     def candidate(self, bars: list[dict], idx: int) -> dict | None:
         lo = max(0, idx + 1 - 120)
@@ -547,10 +563,13 @@ class VolatilityBreakout(Strategy):
 
         atr = calc_atr(highs, lows, closes, 14)
         valid_atr = [a for a in atr if a is not None]
-        if len(valid_atr) < 20 or not valid_atr[-1]:
+        if len(valid_atr) < 21 or not valid_atr[-1]:
             return None
         atr_now = valid_atr[-1]
-        avg_atr20 = float(np.mean(valid_atr[-20:]))
+        # PRIOR 20 ATR readings — today is excluded so it isn't compared against
+        # an average it is itself part of (same convention BreakoutVolume uses
+        # for its 20-day volume average).
+        avg_atr20 = float(np.mean(valid_atr[-21:-1]))
         if avg_atr20 <= 0 or atr_now <= avg_atr20:
             return None
 
@@ -564,7 +583,7 @@ class VolatilityBreakout(Strategy):
             "state": "triggered",
             "reasons": [
                 f"new {self.CHANNEL}-day Donchian high",
-                f"ATR expanding ({vol_ratio:.2f}x 20-day avg)",
+                f"ATR expanding ({vol_ratio:.2f}x prior 20-day avg)",
                 "above 50-day MA",
             ],
             "breakout_level": round(prior_high, 2),
@@ -605,6 +624,7 @@ class SectorRotation(Strategy):
     min_bars = 80
     REGRESSION_BARS = 63
     regimes = ["trending_bull", "choppy_calm"]
+    horizon_days = 42   # hold 1-2 months
 
     def applies_to(self, ticker: str) -> bool:
         return ticker in SECTOR_ETFS
@@ -675,6 +695,7 @@ class BearReversalWatch(Strategy):
     }
     min_bars = 220
     regimes = ["trending_bear", "choppy_volatile"]
+    horizon_days = None  # watchlist-only, no position is ever opened
     actionable = False
 
     def candidate(self, bars: list[dict], idx: int) -> dict | None:
@@ -729,6 +750,7 @@ class LowVolTrend(Strategy):
     }
     min_bars = 220
     regimes = ["choppy_calm", "choppy_volatile"]
+    horizon_days = None  # open-ended: hold while the trend and low-vol profile persist
 
     def candidate(self, bars: list[dict], idx: int) -> dict | None:
         closes = _tail_closes(bars, idx, 260)

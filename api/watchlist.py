@@ -120,6 +120,60 @@ def remove_ticker(
     db.commit()
 
 
+def composite_rank(q: dict) -> float:
+    """Composite auto-populate quality score for one cached quote.
+
+    Module-level (rather than nested in the endpoint) so it is unit-testable
+    without a DB or an HTTP request.
+    """
+    sc = q.get("score") or {}
+    overall = sc.get("o") or 0
+    score_f = sc.get("f") or 0
+    score_t = sc.get("t") or 0
+    score_m = sc.get("m") or 0
+    sharpe = q.get("sharpe") or 0
+    sortino = q.get("sortino") or q.get("gain_sharpe") or 0
+    calmar = q.get("calmar") or 0
+    info_ratio = q.get("info_ratio") or 0
+    rsi = q.get("rsi") or 50
+    vs_ma200 = q.get("vs_ma200") or 0
+    vs_ma50 = q.get("vs_ma50") or 0
+    vol_r = q.get("vol_r") or 0
+    p52w = q.get("p52w") or 0
+    max_dd = q.get("max_dd_1m") or 50
+    macd = q.get("macd_sig") or ""
+    # Quote schema v2: `gc`/`gc_event` is a CROSSOVER EVENT (a cross within the
+    # last 5 bars), not the standing trend. The original 0.5 bonus was meant as a
+    # trend-STATE bonus ("MA50 above MA200"), which is now `ma_state == "bull"` —
+    # leaving it on `gc` would make the bonus essentially never fire and would
+    # silently reorder the watchlist. A fresh cross gets its own smaller bonus.
+    ma_bull = q.get("ma_state") == "bull"
+    gc_event = bool(q.get("gc_event") if q.get("gc_event") is not None else q.get("gc"))
+
+    rank = overall * 3.0           # 0-15 from composite score
+    rank += score_f * 0.5          # fundamentals bonus
+    rank += score_t * 0.5          # technicals bonus
+    rank += score_m * 0.5          # momentum bonus
+    rank += min(2.0, max(0, sharpe))         # Sharpe up to +2
+    rank += min(1.5, max(0, sortino * 0.5))  # Sortino up to +1.5
+    rank += min(1.0, max(0, calmar * 0.3))   # Calmar up to +1
+    rank += min(0.5, max(0, info_ratio * 0.3))  # Info ratio up to +0.5
+    rank += 1.0 if 40 <= rsi <= 65 else 0   # RSI sweet spot
+    rank += 1.0 if vs_ma200 > 5 else 0.5 if vs_ma200 > 0 else 0  # Above MA200
+    rank += 0.5 if vs_ma50 > 0 else 0        # Above MA50
+    # vol_r is now a true single-bar ratio (today's volume / prior 20-day average)
+    # rather than the old 5-day/20-day average ratio (now `vol_r_5d`). Threshold
+    # kept at 1.2 — it still reads as "traded above its recent average", just on
+    # one bar, so it is timelier but noisier.
+    rank += 0.5 if vol_r > 1.2 else 0        # Volume confirmation
+    rank += 0.5 if p52w > 60 else 0          # Upper half of 52W range
+    rank += 0.5 if macd == "bullish" else 0  # MACD bullish
+    rank += 0.5 if ma_bull else 0            # MA50 above MA200 (trend STATE)
+    rank += 0.25 if gc_event else 0          # fresh golden cross (last 5 bars)
+    rank -= min(3.0, max_dd * 0.1)           # Penalize drawdown
+    return rank
+
+
 @router.post("/auto-populate", status_code=status.HTTP_200_OK)
 def auto_populate_watchlist(
     req: AutoPopulateRequest = AutoPopulateRequest(),
@@ -145,43 +199,6 @@ def auto_populate_watchlist(
                 stocks.append(q)
         except Exception:
             pass
-
-    def composite_rank(q: dict) -> float:
-        sc = q.get("score") or {}
-        overall = sc.get("o") or 0
-        score_f = sc.get("f") or 0
-        score_t = sc.get("t") or 0
-        score_m = sc.get("m") or 0
-        sharpe = q.get("sharpe") or 0
-        sortino = q.get("sortino") or q.get("gain_sharpe") or 0
-        calmar = q.get("calmar") or 0
-        info_ratio = q.get("info_ratio") or 0
-        rsi = q.get("rsi") or 50
-        vs_ma200 = q.get("vs_ma200") or 0
-        vs_ma50 = q.get("vs_ma50") or 0
-        vol_r = q.get("vol_r") or 0
-        p52w = q.get("p52w") or 0
-        max_dd = q.get("max_dd_1m") or 50
-        macd = q.get("macd_sig") or ""
-        gc = q.get("gc") or False
-
-        rank = overall * 3.0           # 0-15 from composite score
-        rank += score_f * 0.5          # fundamentals bonus
-        rank += score_t * 0.5          # technicals bonus
-        rank += score_m * 0.5          # momentum bonus
-        rank += min(2.0, max(0, sharpe))         # Sharpe up to +2
-        rank += min(1.5, max(0, sortino * 0.5))  # Sortino up to +1.5
-        rank += min(1.0, max(0, calmar * 0.3))   # Calmar up to +1
-        rank += min(0.5, max(0, info_ratio * 0.3))  # Info ratio up to +0.5
-        rank += 1.0 if 40 <= rsi <= 65 else 0   # RSI sweet spot
-        rank += 1.0 if vs_ma200 > 5 else 0.5 if vs_ma200 > 0 else 0  # Above MA200
-        rank += 0.5 if vs_ma50 > 0 else 0        # Above MA50
-        rank += 0.5 if vol_r > 1.2 else 0        # Volume confirmation
-        rank += 0.5 if p52w > 60 else 0          # Upper half of 52W range
-        rank += 0.5 if macd == "bullish" else 0   # MACD bullish
-        rank += 0.5 if gc else 0                  # Golden cross
-        rank -= min(3.0, max_dd * 0.1)            # Penalize drawdown
-        return rank
 
     # Optional sector restriction
     if want_sectors:

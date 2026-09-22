@@ -3,130 +3,241 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SwingTrader - Backtest Lab</title>
+  <title>SwingTrader — Strategy Lab</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background:#0d0d0d; color:#d8d8d8; font-family:'Inter',sans-serif; font-size:14px; line-height:1.5; }
-    .topbar { height:44px; background:#111; border-bottom:1px solid #1a1a1a; display:flex; align-items:center; padding:0 16px; gap:12px; position:sticky; top:0; z-index:10; }
+    body { background:#0b0b0c; color:#d8d8d8; font-family:'Inter',sans-serif; font-size:14px; line-height:1.5; }
+    .topbar { min-height:44px; background:#121215; border-bottom:1px solid #232327; display:flex; align-items:center; padding:0 16px; gap:12px; position:sticky; top:0; z-index:10; flex-wrap:wrap; }
     .brand { font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:700; color:#fff; letter-spacing:1px; text-decoration:none; white-space:nowrap; }
-    .topbar-sep { width:1px; height:20px; background:#222; flex-shrink:0; }
+    .topbar-sep { width:1px; height:20px; background:#232327; flex-shrink:0; }
     .universe-status { display:flex; align-items:center; gap:6px; min-width:0; }
     .universe-text { font-size:11px; color:#444; white-space:nowrap; }
     .universe-text.loading { color:#f0a500; }
-    .progress { display:inline-block; width:60px; height:4px; background:#1a1a1a; border-radius:2px; overflow:hidden; }
-    .progress-bar { display:block; width:0; height:100%; background:#f0a500; transition:width .5s; }
     .data-time { font-size:10px; color:#555; margin-left:8px; white-space:nowrap; }
-    .topbar-actions { margin-left:auto; display:flex; align-items:center; gap:10px; }
+    .topbar-actions { margin-left:auto; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .topbar-left { display:flex; align-items:center; gap:8px; }
     .username { font-size:11px; color:#555; }
-    .btn { display:inline-flex; align-items:center; gap:5px; padding:5px 10px; border-radius:3px; border:1px solid #2a2a2a; background:#1a1a1a; color:#999; font-size:11px; font-weight:600; cursor:pointer; text-decoration:none; font-family:'Inter',sans-serif; }
-    .btn:hover { color:#ddd; background:#222; }
+    .btn { display:inline-flex; align-items:center; gap:5px; padding:5px 10px; border-radius:3px; border:1px solid #2a2a2f; background:#1a1a1e; color:#999; font-size:11px; font-weight:600; cursor:pointer; text-decoration:none; font-family:'Inter',sans-serif; }
+    .btn:hover { color:#ddd; background:#232327; }
     .btn-primary { background:#f0a500; color:#000; border-color:#f0a500; }
+    .btn-primary:hover { background:#ffb71a; color:#000; }
     .btn-active { color:#f0a500; border-color:#3a2f10; background:#1c1810; }
+    .btn[disabled], .btn:disabled { opacity:.42; cursor:not-allowed; }
     .hint { position:relative; }
-    .hint::after { content:attr(data-tip); position:absolute; left:50%; bottom:calc(100% + 9px); transform:translateX(-50%); display:none; width:min(280px, 70vw); padding:8px 10px; background:#1e1e1e; border:1px solid #333; border-radius:4px; color:#d8d8d8; font-size:11px; font-weight:400; line-height:1.45; letter-spacing:0; text-transform:none; white-space:normal; box-shadow:0 6px 18px #000c; z-index:200; pointer-events:none; }
-    .hint::before { content:''; position:absolute; left:50%; bottom:calc(100% + 4px); transform:translateX(-50%); display:none; border:5px solid transparent; border-top-color:#333; z-index:201; pointer-events:none; }
-    .hint:hover::after, .hint:hover::before, .hint:focus-within::after, .hint:focus-within::before, .hint:focus::after, .hint:focus::before { display:block; }
+    .hint::after { content:attr(data-tip); position:absolute; left:50%; bottom:calc(100% + 9px); transform:translateX(-50%); display:none; width:min(300px,70vw); padding:8px 10px; background:#1e1e22; border:1px solid #333; border-radius:4px; color:#d8d8d8; font-size:11px; font-weight:400; line-height:1.45; letter-spacing:0; text-transform:none; white-space:normal; box-shadow:0 6px 18px #000c; z-index:200; pointer-events:none; text-align:left; }
+    .hint:hover::after, .hint:focus-within::after { display:block; }
     .topbar .hint::after { top:calc(100% + 9px); bottom:auto; }
-    .topbar .hint::before { top:calc(100% + 4px); bottom:auto; border-top-color:transparent; border-bottom-color:#333; }
     .page { max-width:1700px; margin:0 auto; padding:20px; display:flex; flex-direction:column; gap:16px; }
-    .tutorial { display:grid; grid-template-columns:1.1fr 1fr; gap:16px; background:#101010; border:1px solid #1e1e1e; border-radius:6px; padding:16px; }
+    .mono { font-family:'JetBrains Mono',monospace; }
+    .muted { color:#777; } .up { color:#3fbf7f; } .down { color:#e5484d; } .warn { color:#f0a500; }
+    .ticker-link { color:#f0a500; cursor:pointer; font-family:'JetBrains Mono',monospace; font-weight:700; }
+    .ticker-link:hover { text-decoration:underline; }
+    .tutorial { display:grid; grid-template-columns:1.1fr 1fr; gap:16px; background:#101013; border:1px solid #232327; border-radius:6px; padding:16px; }
     .tutorial-title { font-size:14px; color:#eee; font-weight:800; margin-bottom:8px; }
     .tutorial-copy { color:#999; font-size:12px; line-height:1.6; }
     .tutorial-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
-    .tutorial-item { background:#151515; border:1px solid #222; border-radius:4px; padding:9px 10px; min-width:0; }
+    .tutorial-item { background:#151518; border:1px solid #232327; border-radius:4px; padding:9px 10px; min-width:0; }
     .tutorial-key { color:#f0a500; font:700 11px 'JetBrains Mono',monospace; margin-bottom:3px; text-transform:uppercase; }
     .tutorial-value { color:#aaa; font-size:12px; line-height:1.45; }
     .workflow-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
-    .controls { display:flex; align-items:end; gap:12px; flex-wrap:wrap; padding:12px; background:#101010; border:1px solid #1e1e1e; border-radius:6px; }
+    .controls { display:flex; align-items:end; gap:12px; flex-wrap:wrap; padding:12px; background:#101013; border:1px solid #232327; border-radius:6px; }
     label { display:flex; flex-direction:column; gap:5px; font-size:11px; color:#777; text-transform:uppercase; letter-spacing:.06em; }
-    select, input { background:#1a1a1a; border:1px solid #2a2a2a; color:#ddd; border-radius:4px; padding:7px 9px; font-family:'Inter',sans-serif; min-width:100px; }
-    input[type=checkbox] { min-width:auto; }
+    label.inline { flex-direction:row; align-items:center; text-transform:none; letter-spacing:0; font-size:12px; margin-bottom:7px; gap:6px; }
+    select, input { background:#1a1a1e; border:1px solid #2a2a2f; color:#ddd; border-radius:4px; padding:7px 9px; font-family:'Inter',sans-serif; min-width:100px; }
+    input[type=checkbox] { min-width:auto; accent-color:#f0a500; }
     .grid4 { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
     .grid2 { display:grid; grid-template-columns:1.4fr .9fr; gap:16px; }
-    .panel { background:#111; border:1px solid #1e1e1e; border-radius:6px; padding:16px; min-width:0; }
+    .panel { background:#121215; border:1px solid #232327; border-radius:6px; padding:16px; min-width:0; }
     .panel-title { display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:13px; color:#ccc; font-weight:700; margin-bottom:12px; }
     .panel-sub { font-size:11px; color:#666; font-weight:400; }
     .panel-desc { color:#777; font-size:12px; line-height:1.55; margin:-4px 0 12px; }
-    .metric-help { color:#777; font-size:11px; line-height:1.45; margin-top:8px; border-top:1px solid #1b1b1b; padding-top:8px; }
+    .metric-help { color:#777; font-size:11px; line-height:1.45; margin-top:8px; border-top:1px solid #1b1b1f; padding-top:8px; }
     .stat-label { font-size:11px; color:#777; text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px; }
     .stat-value { font:700 24px 'JetBrains Mono',monospace; color:#eee; }
     .stat-sub { font-size:12px; color:#777; margin-top:3px; }
-    .up { color:#26a65b; }
-    .down { color:#e05252; }
-    .warn { color:#f0a500; }
-    .muted { color:#777; }
-    .mono { font-family:'JetBrains Mono',monospace; }
     table { width:100%; border-collapse:collapse; font-size:12px; }
-    th { text-align:left; padding:6px 8px; color:#666; border-bottom:1px solid #222; font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
-    td { padding:7px 8px; border-bottom:1px solid #171717; vertical-align:top; }
-    tr:hover td { background:#151515; }
-    .ticker-link { color:#f0a500; cursor:pointer; font-family:'JetBrains Mono',monospace; font-weight:700; }
-    .pill { display:inline-flex; align-items:center; padding:2px 7px; border-radius:3px; background:#1a1a1a; border:1px solid #2a2a2a; font-size:11px; color:#999; margin:1px 3px 1px 0; }
+    th { text-align:left; padding:6px 8px; color:#666; border-bottom:1px solid #232327; font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+    td { padding:7px 8px; border-bottom:1px solid #1a1a1d; vertical-align:top; }
+    tr:hover td { background:#151518; }
+    .pill { display:inline-flex; align-items:center; padding:2px 7px; border-radius:3px; background:#1a1a1e; border:1px solid #2a2a2f; font-size:11px; color:#999; margin:1px 3px 1px 0; }
     .replay-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
-    .status-pill { display:inline-flex; align-items:center; padding:2px 7px; border-radius:3px; border:1px solid #2a2a2a; color:#aaa; font-size:11px; background:#171717; }
+    .status-pill { display:inline-flex; align-items:center; padding:2px 7px; border-radius:3px; border:1px solid #2a2a2f; color:#aaa; font-size:11px; background:#171719; }
     .note { color:#777; font-size:12px; line-height:1.6; }
-    .error { color:#e05252; font-size:12px; }
+    .error { color:#e5484d; font-size:12px; }
     .chart-wrap { height:360px; }
-    .modal { position:fixed; inset:0; background:rgba(0,0,0,.72); display:none; align-items:center; justify-content:center; z-index:100; padding:20px; }
-    .modal-card { width:min(980px, 96vw); max-height:88vh; overflow:auto; background:#111; border:1px solid #2a2a2a; border-radius:6px; box-shadow:0 18px 60px #000; }
-    .modal-head { display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid #1e1e1e; position:sticky; top:0; background:#111; }
+    .modal { position:fixed; inset:0; background:rgba(0,0,0,.76); display:none; align-items:center; justify-content:center; z-index:100; padding:20px; }
+    .modal-card { width:min(980px,96vw); max-height:88vh; overflow:auto; background:#121215; border:1px solid #2a2a2f; border-radius:6px; box-shadow:0 18px 60px #000; }
+    .modal-head { display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid #232327; position:sticky; top:0; background:#121215; z-index:2; }
     .modal-body { padding:16px; display:grid; grid-template-columns:1.2fr .8fr; gap:16px; }
-    .icon-btn { margin-left:auto; background:#1a1a1a; color:#888; border:1px solid #2a2a2a; border-radius:4px; padding:4px 10px; cursor:pointer; }
-    @media (max-width:1100px) { .tutorial, .tutorial-list, .grid4, .grid2 { grid-template-columns:1fr; } .chart-wrap { height:300px; } }
+    #tdModal .chart-wrap { height:300px; }
+    .icon-btn { margin-left:auto; background:#1a1a1e; color:#888; border:1px solid #2a2a2f; border-radius:4px; padding:4px 10px; cursor:pointer; }
+
+    /* ── Edge matrix ───────────────────────────────────────────────────────── */
+    .edge-headline { border:1px solid #2c2c32; }
+    .edge-legend { display:flex; gap:8px; flex-wrap:wrap; margin:0 0 12px; align-items:center; }
+    .vbadge { display:inline-flex; align-items:center; padding:1px 6px; border-radius:3px; font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; border:1px solid #2a2a2f; background:#17171a; color:#aaa; white-space:nowrap; }
+    .vbadge.v-confirmed { color:#3fbf7f; border-color:#1d3a28; background:#0e1b12; }
+    .vbadge.v-unproven { color:#f0a500; border-color:#3a3110; background:#1c1808; }
+    .vbadge.v-mistagged { color:#e5484d; border-color:#4a1418; background:#25090b; }
+    .vbadge.v-untagged { color:#7aa2f7; border-color:#22304f; background:#0e131f; }
+    table.matrix { table-layout:fixed; }
+    table.matrix th { text-align:center; vertical-align:bottom; }
+    table.matrix th.rowhead, table.matrix td.rowhead { text-align:left; width:210px; }
+    table.matrix td { border-bottom:1px solid #1a1a1d; border-left:1px solid #1a1a1d; padding:0; }
+    table.matrix tr:hover td { background:inherit; }
+    th.col-current, td.col-current { outline:1px solid #f0a500; outline-offset:-1px; }
+    th.col-current { color:#f0a500; }
+    .now-tag { display:block; font-size:9px; color:#f0a500; letter-spacing:.08em; }
+    .cell { padding:8px 9px; min-height:76px; display:flex; flex-direction:column; gap:2px; }
+    .cell .c-ret { font:700 15px 'JetBrains Mono',monospace; }
+    .cell .c-win { font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#bbb; }
+    .cell .c-n { font-family:'JetBrains Mono',monospace; font-size:10px; color:#777; }
+    .cell .c-badges { display:flex; gap:4px; flex-wrap:wrap; margin-top:3px; }
+    /* Confidence is expressed structurally, not just by colour: an "insufficient"
+       cell loses its colour fill entirely and gains a hatch + explicit warning,
+       so n=12 can never be mistaken for n=300 at a glance. */
+    .cell.conf-insufficient { background-image:repeating-linear-gradient(135deg,#131316 0 6px,#0e0e11 6px 12px); opacity:.95; }
+    .cell.conf-insufficient .c-ret { color:#6d6d73 !important; font-size:13px; text-decoration:line-through; }
+    .cell.conf-insufficient .c-win, .cell.conf-insufficient .c-n { color:#6d6d73; }
+    .cell.conf-low { border-left:2px dashed #3a3110; }
+    .thin-flag { font-size:9.5px; font-weight:700; color:#f0a500; text-transform:uppercase; letter-spacing:.05em; }
+    .low-flag { font-size:9.5px; font-weight:700; color:#c9a24a; text-transform:uppercase; letter-spacing:.05em; }
+    .cold { border:1px solid #3a3110; background:#1c1808; border-radius:6px; padding:14px 16px; }
+    .cold-title { color:#f0a500; font-weight:800; font-size:13px; margin-bottom:6px; }
+    .working { color:#f0a500; font-weight:700; font-size:12px; }
+    .spin { display:inline-block; width:10px; height:10px; border:2px solid #f0a500; border-right-color:transparent; border-radius:50%; animation:sp .8s linear infinite; vertical-align:-1px; margin-right:6px; }
+    @keyframes sp { to { transform:rotate(360deg); } }
+
+    /* ── Caveats ───────────────────────────────────────────────────────────── */
+    .cav { border-radius:6px; padding:11px 13px; margin-bottom:8px; line-height:1.5; }
+    .cav:last-child { margin-bottom:0; }
+    .cav-title { font-weight:800; font-size:12.5px; margin-bottom:3px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .cav-detail { font-size:12px; }
+    .cav.sev-high { background:#25090b; border:1px solid #e5484d; }
+    .cav.sev-high .cav-title { color:#ff9598; } .cav.sev-high .cav-detail { color:#e4b8ba; }
+    .cav.sev-medium { background:#1c1808; border:1px solid #3a3110; }
+    .cav.sev-medium .cav-title { color:#f0a500; } .cav.sev-medium .cav-detail { color:#c4a86a; }
+    .cav.sev-info { background:#151518; border:1px solid #26262a; }
+    .cav.sev-info .cav-title { color:#bbb; } .cav.sev-info .cav-detail { color:#8d8d93; }
+    .sev-tag { font-size:9.5px; letter-spacing:.07em; text-transform:uppercase; border:1px solid currentColor; border-radius:3px; padding:0 5px; opacity:.85; }
+
+    /* ── Mode toggle / trade-plan block ────────────────────────────────────── */
+    .mode-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 12px; background:#101013; border:1px solid #232327; border-radius:6px; }
+    .mode-explain { font-size:11.5px; color:#8d8d93; }
+    #planParams { display:flex; align-items:end; gap:12px; flex-wrap:wrap; padding:10px 12px; background:#0e0e11; border:1px solid #232327; border-radius:6px; }
+    .skip-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:8px; margin-top:10px; }
+    .skip { background:#151518; border:1px solid #26262a; border-radius:5px; padding:8px 10px; }
+    .skip .k { font-size:9.5px; color:#6d6d73; text-transform:uppercase; letter-spacing:.06em; font-weight:700; }
+    .skip .v { font:700 16px 'JetBrains Mono',monospace; color:#ddd; }
+    th.sortable { cursor:pointer; user-select:none; }
+    th.sortable:hover { color:#f0a500; }
+    .kind-bar { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+    @media (max-width:1100px) { .tutorial, .tutorial-list, .grid4, .grid2 { grid-template-columns:1fr; } .chart-wrap { height:300px; } .modal-body { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
-  <div class="topbar">
-    <a href="/" class="brand">▲ SWING TRADER</a>
-    <div class="topbar-sep"></div>
-    <div class="universe-status">
-      <span id="universeText" class="universe-text">Loading universe...</span>
-      <span id="universeProgress" class="progress" hidden><span id="universeProgressBar" class="progress-bar"></span></span>
-      <span id="dataTime" class="data-time"></span>
-    </div>
-    <div class="topbar-actions">
-      <a class="btn hint" data-tip="Your daily guided workflow: regime, position alerts, and top setups with trade plans." href="/">Today</a>
-      <a class="btn hint" data-tip="Return to the main stock screener, filters, watchlist, portfolio, and ticker detail workspace." href="/screener">Screener</a>
-      <a class="btn hint" data-tip="Open market-wide chart dashboards for VIX, sectors, ETFs, breadth, and macro context." href="/charts">Charts</a>
-      <a class="btn hint btn-active" data-tip="Backtest the swing strategies over cached history and compare them to SPY." href="/backtest">Backtest</a>
-      <a class="btn hint" data-tip="Open the AI-assisted daily report page for saved market commentary and analysis." href="/report">Report</a>
-      <a class="btn hint" data-tip="Closed-trade log with realized P&L, R-multiple, and win-rate stats." href="/journal">Journal</a>
-      <span id="username" class="username"></span>
-      <button id="logoutBtn" class="btn hint" data-tip="End this browser session and return to the login page." type="button">Logout</button>
-    </div>
-  </div>
+  <div class="topbar" id="topbar"></div>
 
   <main class="page">
     <section class="tutorial">
       <div>
-        <div class="tutorial-title">How to Use Backtest Lab</div>
+        <div class="tutorial-title">Strategy Lab</div>
         <div class="tutorial-copy">
-          This page tests your saved tickers against a repeatable swing-trading rule set. Use it as a decision-support
-          worksheet: build a watchlist on the screener, run the weekly preset here, then monitor the Opportunity Queue,
-          Recent Rebalances, and Exit Pressure during the week. The results are historical and cached-data based, so treat
-          them as evidence to review rather than a trade instruction.
+          This is the evidence bench. The <strong>edge matrix</strong> below asks one question of every strategy:
+          does it actually make money in the market regimes it claims to be built for? Underneath, the walk-forward
+          tester runs a single strategy in detail — either as a <em>rotation</em> (ranking only) or as the
+          <em>trade plan you would really trade</em>, with stops, targets and position sizing simulated.
+          Everything here is historical and cached-data based. Read the Caveats panel before you believe a number.
         </div>
         <div class="workflow-actions">
           <button id="weeklyPresetBtn" class="btn btn-primary hint" data-tip="Sets Universe to Watchlist, Top N to 10, Rebalance to Weekly, keeps the SPY trend filter on, and reruns the test.">Weekly Saved Tickers</button>
-          <button id="strategyDetailBtn" class="btn hint" data-tip="Open a popup explaining the currently selected strategy — how it works, its rules, scoring, and parameters.">Strategy details ▸</button>
+          <button id="strategyDetailBtn" class="btn hint" data-tip="Open a popup explaining every strategy — how it works, its rules, scoring, and parameters.">Strategy details ▸</button>
+          <a class="btn hint" data-tip="Open the scorecard: your realized results versus what the backtest expected, plus ranked execution leaks." href="/scorecard">Scorecard ▸</a>
           <a class="btn hint" data-tip="Open the screener to add or remove saved tickers in your watchlist before running this weekly workflow." href="/screener">Edit Watchlist</a>
         </div>
       </div>
       <div class="tutorial-list">
-        <div class="tutorial-item"><div class="tutorial-key">Universe</div><div class="tutorial-value">Pick the saved ticker set to test: watchlist ideas, current portfolio, or both.</div></div>
+        <div class="tutorial-item"><div class="tutorial-key">Edge Matrix</div><div class="tutorial-value">Strategy × regime. Each cell is the tested result in that quadrant, with its sample size on show.</div></div>
+        <div class="tutorial-item"><div class="tutorial-key">Mode</div><div class="tutorial-value">Rotation ranks and holds. Trade plan simulates stops, targets, sizing and slot limits.</div></div>
+        <div class="tutorial-item"><div class="tutorial-key">Universe</div><div class="tutorial-value">Which saved ticker set to test: watchlist ideas, current portfolio, both, or the full universe.</div></div>
         <div class="tutorial-item"><div class="tutorial-key">Top N</div><div class="tutorial-value">How many ranked tickers the model would hold. Smaller is concentrated; larger is diversified.</div></div>
-        <div class="tutorial-item"><div class="tutorial-key">Rebalance</div><div class="tutorial-value">How often the model reranks. Weekly is the practical setting for a watchlist you review during the week.</div></div>
-        <div class="tutorial-item"><div class="tutorial-key">SPY Filter</div><div class="tutorial-value">When on, the model avoids new risk when SPY is below trend. Turn it off to see raw ticker strength.</div></div>
-        <div class="tutorial-item"><div class="tutorial-key">Equity Curve</div><div class="tutorial-value">Compare the strategy line to SPY. Watch CAGR, drawdown, and whether gains came with smoother risk.</div></div>
-        <div class="tutorial-item"><div class="tutorial-key">Opportunity Queue</div><div class="tutorial-value">Your weekly watch board: higher setup scores with clear reasons deserve the first chart review.</div></div>
+        <div class="tutorial-item"><div class="tutorial-key">Trade Log</div><div class="tutorial-value">Every simulated trade with its R-multiple and why it exited. The exit-kind mix shows if the rules bite.</div></div>
+        <div class="tutorial-item"><div class="tutorial-key">Caveats</div><div class="tutorial-value">Survivorship bias and mode limitations. These are the reasons a result is optimistic.</div></div>
       </div>
     </section>
 
+    <!-- ── 1. EDGE MATRIX (headline) ─────────────────────────────────────── -->
+    <section class="panel edge-headline">
+      <div class="panel-title">
+        <span>Edge Matrix <span class="panel-sub">strategy × market regime — does the evidence back the tag?</span></span>
+        <span style="display:flex;gap:8px;align-items:center;">
+          <span id="edgeMeta" class="panel-sub"></span>
+          <button id="edgeBuildBtn" class="btn hint" data-tip="Rebuild the matrix from scratch. This runs one full walk-forward backtest per actionable strategy and takes minutes.">Build / Rebuild</button>
+          <button id="edgeInvalidateBtn" class="btn hint" data-tip="Throw away the cached matrix so the next build starts clean.">Clear cache</button>
+        </span>
+      </div>
+      <div class="panel-desc">
+        Rows are strategies, columns are the four market regimes. Each cell shows the average return per tested
+        rebalance period in that regime, the win rate with its Wilson confidence interval, and <strong>n</strong> —
+        how many periods that is based on. A cell marked <span class="vbadge v-mistagged">mis-tagged</span> means the
+        strategy is <em>declared</em> for that regime but the data says it loses money there. Cells with too thin a
+        sample are struck through and hatched: they are not evidence.
+      </div>
+      <div class="edge-legend">
+        <span class="vbadge v-confirmed">confirmed</span>
+        <span class="vbadge v-unproven">unproven</span>
+        <span class="vbadge v-mistagged">mis-tagged</span>
+        <span class="vbadge v-untagged">untagged-edge</span>
+        <span class="note" style="font-size:11px;">— hover any badge or cell for the full explanation.</span>
+      </div>
+      <div id="edgeBody"><div class="note">Loading edge matrix…</div></div>
+      <div id="edgeCaveats" style="margin-top:14px;"></div>
+    </section>
+
+    <!-- ── 2. MODE + CONTROLS ────────────────────────────────────────────── -->
+    <section class="mode-row">
+      <span class="stat-label" style="margin:0;">Mode</span>
+      <label class="inline hint" data-tip="Rotation: equal-weight top-N rebalanced on a cadence. No stops, no targets, no sizing.">
+        <input type="radio" name="mode" value="rotation" id="modeRotation" checked> Rotation
+      </label>
+      <label class="inline hint" data-tip="Trade plan: each entry sized by services/trade_plan.py, capped at max_positions, exits evaluated bar-by-bar.">
+        <input type="radio" name="mode" value="trade_plan" id="modeTradePlan"> Trade plan
+      </label>
+      <span class="mode-explain">Rotation does <strong>not</strong> simulate stops or targets; trade_plan simulates the trade plan you actually trade.</span>
+    </section>
+
+    <section id="planParams" hidden>
+      <label class="hint" data-tip="Account equity the simulation sizes positions against. Blank uses your saved setting.">Account $
+        <input id="accountSize" type="number" min="1" step="100" placeholder="from settings">
+      </label>
+      <label class="hint" data-tip="Percent of the account risked on each trade (the distance from entry to stop). Blank uses your saved setting.">Risk %
+        <input id="riskPct" type="number" min="0.1" max="100" step="0.1" placeholder="from settings">
+      </label>
+      <label class="hint" data-tip="Maximum simultaneous open positions. When the book is full, new signals are skipped and counted.">Max positions
+        <input id="maxPositions" type="number" min="1" max="50" step="1" placeholder="from settings">
+      </label>
+      <label class="hint" data-tip="Stop distance as a multiple of ATR below the entry. Blank uses your saved setting.">ATR stop ×
+        <input id="atrStopMult" type="number" min="0.1" max="10" step="0.1" placeholder="from settings">
+      </label>
+      <label class="hint" data-tip="Profit target as a multiple of the risk taken (R). Blank uses your saved setting.">R target
+        <input id="rMultiple" type="number" min="0.1" max="20" step="0.1" placeholder="from settings">
+      </label>
+      <label class="hint" data-tip="Which exit rules to simulate. fixed = ATR stop + R target; trail = trailing stop; time = horizon exit; partial = scale out at 1R; regime = exit when the regime turns.">Exit rules
+        <span style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;text-transform:none;letter-spacing:0;font-size:12px;color:#bbb;padding-top:3px;">
+          <label class="inline" style="margin:0;"><input type="checkbox" class="exitRule" value="fixed" checked> fixed</label>
+          <label class="inline" style="margin:0;"><input type="checkbox" class="exitRule" value="trail"> trail</label>
+          <label class="inline" style="margin:0;"><input type="checkbox" class="exitRule" value="time"> time</label>
+          <label class="inline" style="margin:0;"><input type="checkbox" class="exitRule" value="partial"> partial</label>
+          <label class="inline" style="margin:0;"><input type="checkbox" class="exitRule" value="regime"> regime</label>
+        </span>
+      </label>
+    </section>
+
     <section class="controls">
-      <label class="hint" data-tip="The swing strategy to test. Momentum Rotation ranks by trend strength; Pullback buys dips to the 50-day MA in uptrends; Breakout buys new highs on volume; Mean Reversion buys RSI(2) washouts above the 200-day MA.">Strategy
+      <label class="hint" data-tip="The swing strategy to test. The dropdown is populated from the server, so new strategies appear automatically.">Strategy
         <select id="strategy">
           <option value="momentum_rotation">Momentum Rotation</option>
           <option value="pullback_50ma">Pullback to 50MA</option>
@@ -134,7 +245,7 @@
           <option value="mean_reversion">Mean Reversion (RSI-2)</option>
         </select>
       </label>
-      <label class="hint" data-tip="Choose which tickers the strategy tests. Watchlist/Portfolio use your saved tickers; Full Universe tests the whole S&P 500 + ETF set (slower, needs the 2-year backfill complete).">Universe
+      <label class="hint" data-tip="Choose which tickers the strategy tests. Watchlist/Portfolio use your saved tickers; Full Universe tests the whole S&P 500 + ETF set (slower, needs the backfill complete).">Universe
         <select id="source">
           <option value="watchlist">Watchlist</option>
           <option value="portfolio">Portfolio</option>
@@ -175,32 +286,56 @@
           <option value="50">50-day</option>
         </select>
       </label>
-      <label class="hint" data-tip="Test any historical era (e.g. 2 years a decade ago). Fetches the Start→End range from Yahoo on demand and caches it. Requires both dates; slower on first run, and best with Watchlist/Portfolio rather than Full Universe." style="flex-direction:row;align-items:center;text-transform:none;letter-spacing:0;font-size:12px;margin-bottom:7px;">
+      <label class="inline hint" data-tip="Test any historical era (e.g. 2 years a decade ago). Fetches the Start→End range from Yahoo on demand and caches it. Requires both dates; slower on first run, and best with Watchlist/Portfolio rather than Full Universe.">
         <input id="archiveMode" type="checkbox"> Fetch any era
       </label>
-      <label class="hint" data-tip="When enabled, the strategy only buys when SPY is above its trend filter. When disabled, it can hold ranked tickers in any market regime." style="flex-direction:row;align-items:center;text-transform:none;letter-spacing:0;font-size:12px;margin-bottom:7px;">
+      <label class="inline hint" data-tip="When enabled, the strategy only buys when SPY is above its trend filter. When disabled, it can hold ranked tickers in any market regime.">
         <input id="spyRegime" type="checkbox" checked> SPY regime filter
       </label>
-      <button id="runBtn" class="btn btn-primary hint" data-tip="Run the walk-forward test with the selected settings and refresh the equity curve, metrics, trades, and notes.">Run Backtest</button>
-      <button id="compareBtn" class="btn hint" data-tip="Run all four strategies with the current settings and compare CAGR, drawdown, Sharpe, Sortino, exposure, and equity curves side by side.">Compare Strategies</button>
+      <button id="runBtn" class="btn btn-primary hint" data-tip="Run the walk-forward test with the selected settings and refresh the metrics, equity curve, trade log, and caveats.">Run Backtest</button>
+      <button id="compareBtn" class="btn hint" data-tip="Run every strategy with the current settings and compare CAGR, drawdown, Sharpe, Sortino, exposure, and equity curves side by side.">Compare Strategies</button>
       <span id="status" class="note" aria-live="polite"></span>
-      <span id="cadenceHint" class="note" style="color:#f0a500;" hidden>Mean Reversion exits only register at rebalance — the Weekly (5-day) cadence is recommended for realistic results.</span>
+      <span id="cadenceHint" class="note" style="color:#f0a500;" hidden>Mean Reversion exits only register at rebalance in rotation mode — the Weekly (5-day) cadence is recommended there.</span>
+    </section>
+
+    <!-- ── 3. CAVEATS ────────────────────────────────────────────────────── -->
+    <section class="panel" id="caveatsWrap" hidden>
+      <div class="panel-title">Caveats <span class="panel-sub">why this result is more optimistic than reality</span></div>
+      <div class="panel-desc">These come from the backtest engine itself and change with the settings above. High-severity items are not footnotes — they are the reasons a headline number is wrong.</div>
+      <div id="caveats"></div>
     </section>
 
     <section id="statsWrap" hidden>
       <div class="panel-title" style="margin-bottom:10px;">Backtest Results <span id="statsStrategy" class="panel-sub"></span></div>
       <div class="panel-desc" style="margin:0 0 12px;">These numbers summarize the strategy named above over the selected window — they update each time you click Run Backtest. Compare each to the SPY benchmark shown beneath it.</div>
       <section class="grid4" id="stats"></section>
+
+      <div class="panel" id="planMetricsWrap" style="margin-top:14px;" hidden>
+        <div class="panel-title">Trade-Plan Metrics <span class="panel-sub">per-trade results, not per-period</span></div>
+        <div class="panel-desc">In trade-plan mode every entry is a real simulated trade with a stop, a target and a size. Expectancy in R is the number that matters: it is what one unit of risk returned on average.</div>
+        <section class="grid4" id="planMetrics"></section>
+        <div class="panel-desc" style="margin:14px 0 4px;"><strong style="color:#ccc;">Signals the simulation did not take</strong> — these are information, not errors. A full book means the strategy found more ideas than the plan had slots for.</div>
+        <div class="skip-grid" id="skipCounters"></div>
+      </div>
+
       <div class="panel" style="margin-top:14px;">
         <div class="panel-title">Regime Performance Breakdown <span class="panel-sub">how this strategy did in each market regime</span></div>
-        <div class="panel-desc">Markets rotate between trending and choppy, calm and volatile conditions. This strategy is tagged for the regime(s) highlighted below — use this table to check whether its actual results back up that tag, or whether its overall numbers are mostly carried by a regime it wasn't built for.</div>
+        <div class="panel-desc">Markets rotate between trending and choppy, calm and volatile conditions. This strategy is tagged for the regime(s) highlighted below — use this table to check whether its actual results back up that tag. The win rate carries its Wilson interval and a confidence label so a thin sample cannot masquerade as proof.</div>
         <div id="regimeBreakdown"></div>
       </div>
     </section>
 
+    <!-- ── 4. TRADE LOG ──────────────────────────────────────────────────── -->
+    <section class="panel" id="tradeLogWrap" hidden>
+      <div class="panel-title">Trade Log <span class="panel-sub">every simulated trade · click a column head to sort</span></div>
+      <div class="panel-desc">This is what the trade plan would actually have done. The exit-kind mix at the top is the fast read: if almost everything exits at the end of the test or on time, the stop and target rules are not doing any work.</div>
+      <div id="exitKinds" class="kind-bar"></div>
+      <div id="tradeLog"></div>
+    </section>
+
     <section class="panel" id="compareWrap" hidden>
       <div class="panel-title">Strategy Comparison <span class="panel-sub">same settings, pick which strategies to overlay</span></div>
-      <div class="panel-desc">All strategies are fetched once so toggling below is instant. Prefer the strategy that beats SPY with the smoother ride (lower max drawdown, higher Sharpe) — not just the highest total return. Checkboxes default to strategies tagged for the current market regime (or the four core strategies if that can't be determined) to keep the chart readable — check more to compare further.</div>
+      <div class="panel-desc">All strategies are fetched once so toggling below is instant. Prefer the strategy that beats SPY with the smoother ride (lower max drawdown, higher Sharpe) — not just the highest total return. Checkboxes default to strategies tagged for the current market regime.</div>
       <div id="compareChecks" style="margin-bottom:12px;"></div>
       <div class="chart-wrap"><canvas id="compareChart"></canvas></div>
       <div id="compareTable" style="margin-top:14px;"></div>
@@ -213,7 +348,7 @@
         <button id="snapshotBtn" class="btn btn-primary hint" data-tip="Save the current watchlist for this Monday's week. If a snapshot already exists for this week, it will be updated to match the current watchlist.">Snapshot Current Watchlist</button>
         <span id="snapshotStatus" class="note" aria-live="polite"></span>
       </div>
-      <div id="weeklyReplay" class="note">Loading...</div>
+      <div id="weeklyReplay" class="note">Loading…</div>
     </section>
 
     <section class="grid2">
@@ -227,7 +362,7 @@
       <div class="panel">
         <div class="panel-title">Decision Risk <span class="panel-sub">live portfolio context</span></div>
         <div class="panel-desc">Use this as a quick portfolio health check before acting on new ideas. Watch for high beta, one sector dominating the portfolio, or multiple exit flags showing that current holdings may need attention first.</div>
-        <div id="riskBox" class="note">Loading...</div>
+        <div id="riskBox" class="note">Loading…</div>
       </div>
     </section>
 
@@ -259,19 +394,19 @@
 
     <section class="panel">
       <div class="panel-title">Notes</div>
-      <div class="panel-desc">Read these caveats every time you change settings. They explain what data the test used, which rules are active, and why a result may be empty or limited.</div>
+      <div class="panel-desc">Read these every time you change settings. They explain what data the test used, which rules are active, and why a result may be empty or limited.</div>
       <div id="notes" class="note"></div>
     </section>
   </main>
 
   <div class="modal" id="strategyModal" onclick="if(event.target===this)closeStrategyModal()">
-    <div class="modal-card" style="width:min(720px, 96vw);">
+    <div class="modal-card" style="width:min(720px,96vw);">
       <div class="modal-head">
         <div>
           <div class="mono" style="font-size:16px;font-weight:800;color:#f0a500;">Strategy Details</div>
-          <div class="muted" style="font-size:11px;">All four strategies — your current selection is marked "selected".</div>
+          <div class="muted" style="font-size:11px;">Every strategy the server knows — your current selection is marked "selected".</div>
         </div>
-        <button class="icon-btn hint" data-tip="Close this strategy explanation." onclick="closeStrategyModal()">Close</button>
+        <button class="icon-btn hint" data-tip="Close this strategy explanation." onclick="closeStrategyModal()" type="button">Close</button>
       </div>
       <div style="padding:16px;">
         <div id="strategyDetail" class="note">Loading strategy detail…</div>
@@ -279,148 +414,394 @@
     </div>
   </div>
 
-  <div class="modal" id="tickerModal" onclick="if(event.target===this)closeTicker()">
-    <div class="modal-card">
-      <div class="modal-head">
-        <div>
-          <div id="modalTicker" class="mono" style="font-size:20px;font-weight:800;color:#f0a500;"></div>
-          <div id="modalName" class="muted" style="font-size:12px;"></div>
-        </div>
-        <div id="modalPrice" class="mono" style="font-size:18px;"></div>
-        <button class="icon-btn hint" data-tip="Close this ticker detail overlay and return to the backtest dashboard." onclick="closeTicker()">Close</button>
-      </div>
-      <div class="modal-body">
-        <div class="panel" style="padding:12px;">
-          <div class="panel-title">Ticker Chart</div>
-          <div class="panel-desc">Use this to verify the setup visually. Prefer rising trends, controlled pullbacks, and price above key moving averages before trusting a high score.</div>
-          <div class="chart-wrap" style="height:300px;"><canvas id="tickerChart"></canvas></div>
-        </div>
-        <div class="panel" style="padding:12px;">
-          <div class="panel-title">Detail Metrics</div>
-          <div class="panel-desc">Check whether the numbers agree with the chart. RSI shows stretch, volume ratio shows participation, Sharpe/Sortino show risk quality, and drawdown shows recent pain.</div>
-          <div id="modalMetrics"></div>
-        </div>
-      </div>
-    </div>
-  </div>
-
+<script src="/static/js/common.js"></script>
 <script>
 'use strict';
-const token = () => localStorage.getItem('st_token');
-const clearToken = () => localStorage.removeItem('st_token');
-const authHdr = () => ({ Authorization: 'Bearer ' + token() });
-let chart;
-let tickerChart;
+/* Strategy Lab. Auth, esc(), api(), fmtPct/fmtNum, tickerLink() and the
+   universal ticker-detail modal all come from /static/js/common.js — this file
+   must never redeclare them. */
 
-function esc(value) {
-  return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-}
-function fmtPct(v, d = 1) {
-  if (v == null) return '<span class="muted">--</span>';
-  return `<span class="${v >= 0 ? 'up' : 'down'}">${v >= 0 ? '+' : ''}${Number(v).toFixed(d)}%</span>`;
-}
-function fmtNum(v, d = 2) { return v == null ? '--' : Number(v).toFixed(d); }
-async function openTicker(ticker) {
-  ticker = String(ticker || '').toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 15);
-  document.getElementById('tickerModal').style.display = 'flex';
-  document.getElementById('modalTicker').textContent = ticker;
-  document.getElementById('modalName').textContent = 'Loading...';
-  document.getElementById('modalPrice').textContent = '';
-  document.getElementById('modalMetrics').innerHTML = '';
-  try {
-    const [stock, hist] = await Promise.all([
-      api('/api/stocks/' + encodeURIComponent(ticker)),
-      api('/api/stocks/' + encodeURIComponent(ticker) + '/history').catch(() => ({ bars: [] })),
-    ]);
-    document.getElementById('modalName').textContent = [stock.name, stock.sector].filter(Boolean).join(' - ');
-    document.getElementById('modalPrice').innerHTML = stock.price != null ? `$${Number(stock.price).toFixed(2)} ${fmtPct(stock.chg_pct)}` : '--';
-    const rows = [
-      ['RSI', fmtNum(stock.rsi, 1)], ['MACD', esc(stock.macd_sig || '--')], ['vs MA50', fmtPct(stock.vs_ma50)],
-      ['vs MA200', fmtPct(stock.vs_ma200)], ['Vol Ratio', fmtNum(stock.vol_r, 2)], ['Sharpe', fmtNum(stock.sharpe, 2)],
-      ['Sortino', fmtNum(stock.sortino, 2)], ['Ann Ret', fmtPct(stock.ann_ret)], ['Max DD 1M', stock.max_dd_1m == null ? '--' : `${fmtNum(stock.max_dd_1m, 1)}%`],
-      ['P/E', fmtNum(stock.pe, 1)], ['Beta', fmtNum(stock.beta, 2)], ['52W Pos', stock.p52w == null ? '--' : `${fmtNum(stock.p52w, 0)}%`],
-    ];
-    document.getElementById('modalMetrics').innerHTML = `<table><tbody>${rows.map(([k,v]) => `<tr><td class="muted">${k}</td><td class="mono">${v}</td></tr>`).join('')}</tbody></table>`;
-    tickerChart?.destroy();
-    tickerChart = new Chart(document.getElementById('tickerChart'), {
-      type: 'line',
-      data: {
-        labels: (hist.bars || []).map(b => b.date),
-        datasets: [{ label: ticker, data: (hist.bars || []).map(b => b.close), borderColor:'#f0a500', tension:.15, pointRadius:0 }],
-      },
-      options: {
-        responsive:true, maintainAspectRatio:false,
-        plugins:{ legend:{ labels:{ color:'#aaa' } } },
-        scales:{ x:{ ticks:{ color:'#777', maxTicksLimit:8 }, grid:{ color:'#1a1a1a' } }, y:{ ticks:{ color:'#777' }, grid:{ color:'#1a1a1a' } } },
-      },
-    });
-  } catch (e) {
-    document.getElementById('modalName').innerHTML = `<span class="error">${esc(e.message)}</span>`;
-  }
-}
-function closeTicker() {
-  document.getElementById('tickerModal').style.display = 'none';
-  tickerChart?.destroy();
-  tickerChart = null;
-}
-async function api(url, opts = {}) {
-  if (!token()) { window.location.href = '/login'; throw new Error('Not authenticated'); }
-  const res = await fetch(url, { ...opts, headers: { ...authHdr(), ...(opts.headers || {}) } });
-  if (res.status === 401) { clearToken(); window.location.href = '/login'; throw new Error('Session expired'); }
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
+let chart, ddChart, compareChart;
 
-async function initHeader() {
-  document.getElementById('logoutBtn').addEventListener('click', () => {
-    clearToken();
-    window.location.href = '/login';
-  });
-  try {
-    const user = await api('/auth/me');
-    document.getElementById('username').textContent = user.username || '';
-  } catch (e) {
-    return;
-  }
-  try {
-    const status = await api('/api/screener/universe/status');
-    const loaded = status.loaded || 0;
-    const total = status.total || 0;
-    const pct = total > 0 ? Math.round(loaded / total * 100) : 0;
-    const isLoading = total > 0 && loaded < total;
-    const text = document.getElementById('universeText');
-    const progress = document.getElementById('universeProgress');
-    text.classList.toggle('loading', isLoading);
-    text.textContent = isLoading ? `Loading universe... ${loaded}/${total} (${pct}%)` : `${loaded} stocks loaded`;
-    progress.hidden = !isLoading;
-    document.getElementById('universeProgressBar').style.width = `${pct}%`;
-    document.getElementById('dataTime').textContent = !isLoading && status.last_updated_time ? `Data as of ${status.last_updated_time}` : '';
-  } catch (e) {
-    document.getElementById('universeText').textContent = 'Universe status unavailable';
+/* Null-safe display helpers — never emit undefined/NaN (mirrors today.html). */
+const N = (v) => (v === null || v === undefined || (typeof v === 'number' && !isFinite(v))) ? null : v;
+function num(v, d = 2) { const x = N(v); return x === null || isNaN(Number(x)) ? '--' : Number(x).toFixed(d); }
+function pctv(v, d = 1) { const x = N(v); return x === null || isNaN(Number(x)) ? '--' : Number(x).toFixed(d) + '%'; }
+function signed(v, d = 2, suffix = '') { const x = N(v); if (x === null || isNaN(Number(x))) return '--'; const n = Number(x); return (n >= 0 ? '+' : '') + n.toFixed(d) + suffix; }
+function moneyv(v, d = 2) { const x = N(v); return x === null || isNaN(Number(x)) ? '--' : '$' + Number(x).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+const tl = (t, size) => tickerLink(t, size);
+
+/* One broken section must not take the page down with it. */
+function safeRender(fn, id) {
+  try { fn(); } catch (e) {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = `<div class="error" style="padding:10px;">Section failed to render: ${esc(e && e.message ? e.message : String(e))}</div>`;
   }
 }
 
 function statCard(label, value, sub, cls = '', help = '') {
   return `<div class="panel"><div class="stat-label">${esc(label)}</div><div class="stat-value ${cls}">${value}</div><div class="stat-sub">${esc(sub || '')}</div>${help ? `<div class="metric-help">${esc(help)}</div>` : ''}</div>`;
 }
+function table(rows, headers, mapper, empty, help = '') {
+  const intro = help ? `<div class="panel-desc">${esc(help)}</div>` : '';
+  if (!rows || !rows.length) return `${intro}<div class="note">${esc(empty)}</div>`;
+  return `${intro}<table><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${mapper(row).map(v => `<td>${v}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
 
+/* ════════════════════════════════════════════════════════════════════════════
+   EDGE MATRIX
+   A cold GET deliberately returns {status:"not_computed"} — that is the NORMAL
+   first-visit state, not an error. Only ?refresh=true does the (slow) build.
+   ════════════════════════════════════════════════════════════════════════════ */
+let EDGE = null;          // the built matrix object (payload.matrix)
+let EDGE_COLD = null;     // the not_computed payload
+let EDGE_ERR = null;
+let CUR_QUADRANT = null;  // from /api/today — highlights the live column
+let EDGE_BUILDING = false;
+
+const VERDICT_CLASS = {
+  'confirmed': 'v-confirmed',
+  'unproven': 'v-unproven',
+  'mis-tagged': 'v-mistagged',
+  'mistagged': 'v-mistagged',
+  'untagged-edge': 'v-untagged',
+};
+const FALLBACK_QUADRANTS = [
+  { id: 'trending_bull', label: 'Trending Bull' },
+  { id: 'trending_bear', label: 'Trending Bear' },
+  { id: 'choppy_calm', label: 'Choppy / Range' },
+  { id: 'choppy_volatile', label: 'Choppy / Volatile' },
+];
+
+async function loadCurrentQuadrant() {
+  try {
+    const today = await api('/api/today');
+    CUR_QUADRANT = (today && today.regime && today.regime.quadrant) || null;
+  } catch (e) { CUR_QUADRANT = null; }
+}
+
+async function loadEdge(refresh) {
+  const body = document.getElementById('edgeBody');
+  const btn = document.getElementById('edgeBuildBtn');
+  if (refresh) {
+    EDGE_BUILDING = true;
+    if (btn) btn.disabled = true;
+    body.innerHTML = '<div class="cold"><div class="cold-title"><span class="spin"></span>Building the edge matrix…</div>'
+      + '<div class="note">This runs one full walk-forward backtest for every actionable strategy over the whole '
+      + 'universe. It takes <strong>minutes</strong>, not seconds. Leave this tab open — the rest of the page still works.</div></div>';
+  } else {
+    body.innerHTML = '<div class="note">Loading edge matrix…</div>';
+  }
+  let payload = null;
+  try {
+    payload = await api('/api/edge-matrix' + (refresh ? '?refresh=true' : ''));
+    EDGE_ERR = null;
+  } catch (e) {
+    EDGE_ERR = (e && e.message) ? String(e.message).slice(0, 400) : 'unavailable';
+    payload = null;
+  } finally {
+    EDGE_BUILDING = false;
+    if (btn) btn.disabled = false;
+  }
+  if (payload && payload.matrix) { EDGE = payload.matrix; EDGE_COLD = null; }
+  else if (payload) { EDGE = null; EDGE_COLD = payload; }
+  else { EDGE = null; EDGE_COLD = null; }
+  safeRender(renderEdge, 'edgeBody');
+}
+
+function renderEdge() {
+  const body = document.getElementById('edgeBody');
+  const meta = document.getElementById('edgeMeta');
+  const cavEl = document.getElementById('edgeCaveats');
+  cavEl.innerHTML = '';
+  meta.textContent = '';
+
+  if (EDGE_ERR) {
+    body.innerHTML = `<div class="cav sev-medium"><div class="cav-title">Edge matrix unavailable</div>`
+      + `<div class="cav-detail">${esc(EDGE_ERR)}</div></div>`;
+    return;
+  }
+  if (!EDGE) {
+    // ── The cold "not computed yet" state ───────────────────────────────────
+    const cold = EDGE_COLD || {};
+    const msg = cold.message || 'The edge matrix has not been computed yet.';
+    const th = cold.thresholds || {};
+    const strategies = Array.isArray(cold.strategies) ? cold.strategies : [];
+    const quads = Array.isArray(cold.quadrants) && cold.quadrants.length ? cold.quadrants : FALLBACK_QUADRANTS;
+    body.innerHTML = `
+      <div class="cold">
+        <div class="cold-title">Not computed yet</div>
+        <div class="note" style="color:#c4a86a;">${esc(msg)}</div>
+        <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <button class="btn btn-primary" type="button" onclick="loadEdge(true)">Build the matrix (slow)</button>
+          <span class="note" style="font-size:11px;">One full walk-forward per actionable strategy — expect minutes, not seconds.</span>
+        </div>
+        <div class="note" style="margin-top:10px;font-size:11px;">
+          Will cover ${strategies.length || '—'} actionable ${strategies.length === 1 ? 'strategy' : 'strategies'}
+          across ${quads.length} regimes.${N(th.min_periods_judge) !== null
+            ? ` A cell needs at least ${esc(th.min_periods_judge)} tested periods before it is judged at all, and ${esc(th.min_periods_high_confidence ?? '—')} for high confidence.`
+            : ''}
+        </div>
+      </div>`;
+    return;
+  }
+
+  // ── Built matrix ──────────────────────────────────────────────────────────
+  const quads = (Array.isArray(EDGE.quadrants) && EDGE.quadrants.length) ? EDGE.quadrants : FALLBACK_QUADRANTS;
+  const strats = EDGE.strategies || {};
+  const ids = Object.keys(strats);
+  if (!ids.length) {
+    body.innerHTML = '<div class="note">The matrix was built but contains no strategies.</div>';
+    return;
+  }
+
+  const bits = [];
+  if (EDGE.generated_at) { try { bits.push('built ' + new Date(EDGE.generated_at).toLocaleString()); } catch (e) { /* ignore */ } }
+  if (EDGE.mode) bits.push('mode ' + EDGE.mode);
+  if (EDGE.source) bits.push('source ' + EDGE.source);
+  if (N(EDGE.build_seconds) !== null) bits.push(num(EDGE.build_seconds, 1) + 's');
+  meta.textContent = bits.join(' · ');
+
+  // Colour scale reference: the largest absolute average return in the grid.
+  let maxAbs = 0;
+  ids.forEach(id => quads.forEach(q => {
+    const c = cellFor(id, q.id);
+    const v = c ? N(c.avg_period_return) : null;
+    if (v !== null) maxAbs = Math.max(maxAbs, Math.abs(Number(v)));
+  }));
+
+  const head = `<tr><th class="rowhead">Strategy</th>${quads.map(q => {
+    const isNow = q.id === CUR_QUADRANT;
+    return `<th class="${isNow ? 'col-current' : ''} hint" data-tip="${esc(q.description || q.label || q.id)}">`
+      + `${esc(q.label || q.id)}${isNow ? '<span class="now-tag">◂ right now ▸</span>' : ''}</th>`;
+  }).join('')}</tr>`;
+
+  const rows = ids.map(id => {
+    const s = strats[id] || {};
+    const overall = s.overall || {};
+    const ovBits = [
+      N(overall.cagr) !== null ? `CAGR ${signed(overall.cagr, 1, '%')}` : null,
+      N(overall.sharpe) !== null ? `Sharpe ${num(overall.sharpe, 2)}` : null,
+      N(overall.expectancy_r) !== null ? `exp ${signed(overall.expectancy_r, 2)}R` : null,
+      N(overall.avg_r) !== null ? `avg ${signed(overall.avg_r, 2)}R` : null,
+      N(overall.trades_taken) !== null ? `${overall.trades_taken} trades` : null,
+    ].filter(Boolean).join(' · ');   // numeric only; escaped once at insertion below
+    const err = s.error ? `<div class="error" style="font-size:10.5px;">${esc(s.error)}</div>` : '';
+    return `<tr>
+      <td class="rowhead" style="padding:8px 9px;">
+        <div style="color:#eee;font-weight:700;font-size:12.5px;">${esc(s.name || id)}</div>
+        <div class="muted mono" style="font-size:10px;">${esc(id)}</div>
+        ${ovBits ? `<div class="muted" style="font-size:10.5px;margin-top:3px;">${esc(ovBits)}</div>` : ''}
+        ${err}
+      </td>
+      ${quads.map(q => edgeCellHtml(id, q, maxAbs)).join('')}
+    </tr>`;
+  }).join('');
+
+  body.innerHTML = `<div style="overflow-x:auto;"><table class="matrix"><thead>${head}</thead><tbody>${rows}</tbody></table></div>`
+    + edgeEvidenceNote();
+
+  cavEl.innerHTML = renderCaveatList(EDGE.caveats, 'Matrix caveats');
+}
+
+function cellFor(strategyId, quadrant) {
+  try {
+    const s = (EDGE && EDGE.strategies) ? EDGE.strategies[strategyId] : null;
+    const c = s && s.cells ? s.cells[quadrant] : null;
+    return (c && typeof c === 'object') ? c : null;
+  } catch (e) { return null; }
+}
+
+function edgeCellHtml(strategyId, q, maxAbs) {
+  const isNow = q.id === CUR_QUADRANT;
+  const c = cellFor(strategyId, q.id);
+  if (!c) {
+    return `<td class="${isNow ? 'col-current' : ''}"><div class="cell"><div class="c-ret muted">--</div>`
+      + `<div class="c-n">no cell returned</div></div></td>`;
+  }
+  const conf = c.confidence || 'insufficient';
+  const ret = N(c.avg_period_return);
+  const n = N(c.n);
+  const verdict = c.verdict || null;
+  const vcls = VERDICT_CLASS[verdict] || '';
+
+  // Colour scale — intensity by |return|, but ONLY for samples worth colouring.
+  let bg = '', fg = '#888';
+  if (ret !== null && conf !== 'insufficient') {
+    const a = maxAbs > 0 ? Math.min(0.42, 0.08 + Math.abs(Number(ret)) / maxAbs * 0.34) : 0.08;
+    const dim = conf === 'low' ? 0.5 : 1;
+    bg = Number(ret) >= 0
+      ? `background:rgba(63,191,127,${(a * dim).toFixed(3)});`
+      : `background:rgba(229,72,77,${(a * dim).toFixed(3)});`;
+    fg = Number(ret) >= 0 ? '#3fbf7f' : '#e5484d';
+  }
+
+  const ciLow = N(c.win_rate_ci_low), ciHigh = N(c.win_rate_ci_high);
+  const win = N(c.win_rate) === null ? '--'
+    : `${pctv(c.win_rate, 0)}${ciLow !== null && ciHigh !== null ? ` [${num(ciLow, 0)}–${num(ciHigh, 0)}]` : ''}`;
+
+  let flag = '';
+  if (conf === 'insufficient') {
+    flag = `<div class="thin-flag" title="Too few tested periods to judge">n=${n === null ? '?' : esc(n)} — too thin to judge</div>`;
+  } else if (conf === 'low') {
+    flag = `<div class="low-flag" title="Wide confidence interval — do not lean on this">low confidence</div>`;
+  }
+
+  const badges = [
+    verdict ? `<span class="vbadge ${vcls} hint" data-tip="${esc(c.verdict_detail || verdict)}">${esc(verdict)}</span>` : '',
+    c.tagged ? `<span class="vbadge hint" data-tip="This strategy is declared for this regime in services/strategies.py.">tagged</span>` : '',
+  ].join('');
+
+  const tip = [
+    q.label || q.id,
+    c.verdict_detail ? String(c.verdict_detail) : '',
+    `avg/period ${signed(c.avg_period_return, 2, '%')} · cumulative ${signed(c.cum_return, 2, '%')} · n=${n === null ? '--' : n} · confidence ${conf}`,
+  ].filter(Boolean).join(' — ');
+
+  return `<td class="${isNow ? 'col-current' : ''}" style="${bg}">
+    <div class="cell conf-${esc(conf)} hint" data-tip="${esc(tip)}">
+      <div class="c-ret" style="color:${fg};">${signed(c.avg_period_return, 2, '%')}</div>
+      <div class="c-win">win ${esc(win)}</div>
+      <div class="c-n">n=${n === null ? '--' : esc(n)} · cum ${signed(c.cum_return, 1, '%')}</div>
+      ${flag}
+      <div class="c-badges">${badges}</div>
+    </div></td>`;
+}
+
+function edgeEvidenceNote() {
+  const ev = EDGE && EDGE.evidence_regimes;
+  if (!ev || typeof ev !== 'object') return '';
+  const items = Object.keys(ev).map(sid => {
+    const list = Array.isArray(ev[sid]) ? ev[sid] : [];
+    const strat = (EDGE.strategies || {})[sid] || {};
+    return `<div style="font-size:11.5px;margin:2px 0;"><span style="color:#ccc;font-weight:600;">${esc(strat.name || sid)}</span>: `
+      + (list.length ? list.map(q => `<span class="pill">${esc(q)}</span>`).join('') : '<span class="muted">no regime earned yet</span>')
+      + '</div>';
+  }).join('');
+  if (!items) return '';
+  return `<div class="panel-desc" style="margin:14px 0 4px;"><strong style="color:#ccc;">Regimes earned from the data</strong> — only "confirmed" and "untagged-edge" cells count. This is what the evidence shows, not what the code declares.</div>${items}`;
+}
+
+/* ── Caveats (shared renderer: backtest run + matrix) ───────────────────── */
+const SEV_ORDER = { high: 0, medium: 1, low: 2, info: 3 };
+function renderCaveatList(caveats, heading) {
+  const list = Array.isArray(caveats) ? caveats.slice() : [];
+  if (!list.length) return '';
+  list.sort((a, b) => (SEV_ORDER[(a && a.severity) || 'info'] ?? 9) - (SEV_ORDER[(b && b.severity) || 'info'] ?? 9));
+  const head = heading ? `<div class="stat-label" style="margin-bottom:8px;">${esc(heading)}</div>` : '';
+  return head + list.map(c => {
+    const sev = String((c && c.severity) || 'info').toLowerCase();
+    const cls = ['high', 'medium', 'info'].includes(sev) ? sev : (sev === 'low' ? 'info' : 'info');
+    return `<div class="cav sev-${cls}">
+      <div class="cav-title"><span class="sev-tag">${esc(sev)}</span>${esc((c && c.title) || 'Caveat')}</div>
+      <div class="cav-detail">${esc((c && c.detail) || '')}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderCaveats(bt) {
+  const wrap = document.getElementById('caveatsWrap');
+  const el = document.getElementById('caveats');
+  const html = renderCaveatList(bt && bt.caveats, '');
+  if (!html) {
+    wrap.hidden = false;
+    el.innerHTML = '<div class="note">The engine returned no caveats for this run. That does not mean there are none — see the Notes panel.</div>';
+    return;
+  }
+  wrap.hidden = false;
+  el.innerHTML = html;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   SINGLE-STRATEGY BACKTEST
+   ════════════════════════════════════════════════════════════════════════════ */
+const STRATEGY_LABELS = { momentum_rotation: 'Momentum Rotation', pullback_50ma: 'Pullback to 50MA', breakout_volume: 'Breakout + Volume', mean_reversion: 'Mean Reversion (RSI-2)' };
+const CORE_STRATEGY_IDS = ['momentum_rotation', 'pullback_50ma', 'breakout_volume', 'mean_reversion'];
+
+function currentMode() {
+  const el = document.getElementById('modeTradePlan');
+  return (el && el.checked) ? 'trade_plan' : 'rotation';
+}
 function currentStrategyName() {
-  return STRATEGY_LABELS[document.getElementById('strategy').value] || 'Strategy';
+  const el = document.getElementById('strategy');
+  return (el && STRATEGY_LABELS[el.value]) || 'Strategy';
+}
+function val(id) { const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; }
+
+function buildParams(strategyId) {
+  const p = new URLSearchParams({
+    strategy: strategyId || val('strategy'),
+    source: val('source'),
+    top_n: val('topN'),
+    rebalance_days: val('rebalance'),
+    cost_bps: val('costBps'),
+    spy_regime: document.getElementById('spyRegime').checked ? 'true' : 'false',
+    regime_ma: val('regimeMa'),
+    period: val('period'),
+    mode: currentMode(),
+  });
+  const sd = val('startDate'); if (sd) p.set('start_date', sd);
+  const ed = val('endDate'); if (ed) p.set('end_date', ed);
+  if (document.getElementById('archiveMode').checked) p.set('archive', 'true');
+  if (currentMode() === 'trade_plan') {
+    [['accountSize', 'account_size'], ['riskPct', 'risk_pct'], ['maxPositions', 'max_positions'],
+     ['atrStopMult', 'atr_stop_mult'], ['rMultiple', 'r_multiple']].forEach(([id, key]) => {
+      const v = val(id);
+      if (v !== '') p.set(key, v);
+    });
+    const rules = [...document.querySelectorAll('.exitRule')].filter(c => c.checked).map(c => c.value);
+    if (rules.length) p.set('exit_rules', rules.join(','));
+  }
+  return p;
 }
 
 function renderStats(bt) {
   const m = bt.metrics || {}, b = bt.benchmark_metrics || {};
   document.getElementById('statsWrap').hidden = false;
-  document.getElementById('statsStrategy').textContent = currentStrategyName();
+  document.getElementById('statsStrategy').textContent = `${currentStrategyName()} · ${bt.mode || currentMode()} mode`;
   document.getElementById('equityStrategy').textContent = `${currentStrategyName()} vs SPY benchmark`;
   document.getElementById('stats').innerHTML = [
-    statCard('Strategy CAGR', fmtPct(m.cagr), `SPY ${b.cagr ?? '--'}%`, (m.cagr ?? 0) >= (b.cagr ?? 0) ? 'up' : 'down', 'Annualized growth rate. Prefer positive CAGR that beats SPY without requiring extreme drawdown.'),
-    statCard('Total Return', fmtPct(m.total_return), `SPY ${b.total_return ?? '--'}%`, (m.total_return ?? 0) >= 0 ? 'up' : 'down', 'End-to-end return over cached history. Useful, but less important than consistency and drawdown.'),
-    statCard('Max Drawdown', `${fmtNum(m.max_drawdown, 1)}%`, `SPY ${b.max_drawdown ?? '--'}%`, (m.max_drawdown ?? 0) <= (b.max_drawdown ?? 999) ? 'up' : 'warn', 'Largest peak-to-trough decline. Lower is better because it shows how painful the strategy could feel.'),
-    statCard('Sharpe', fmtNum(m.sharpe), `Win rate ${m.win_rate ?? '--'}%`, (m.sharpe ?? 0) > 1 ? 'up' : 'warn', 'Risk-adjusted return. Above 1 is decent, above 2 is strong, negative means returns did not justify volatility.'),
-    statCard('Sortino', fmtNum(m.sortino), `SPY ${b.sortino ?? '--'}`, (m.sortino ?? 0) > 1 ? 'up' : 'warn', 'Like Sharpe, but only downside volatility counts as risk. Better for asymmetric strategies (e.g. mean reversion) whose many small wins inflate plain volatility.'),
-    statCard('Exposure', `${fmtNum(m.exposure, 1)}%`, m.avg_invested_return != null ? `avg ${fmtPct(m.avg_invested_return)} per invested period` : 'time in the market', '', 'Share of rebalance periods the strategy actually held positions. Low exposure with a solid average per-period return means the strategy earned its results while mostly sitting safely in cash.'),
+    statCard('Strategy CAGR', fmtPct(m.cagr), `SPY ${N(b.cagr) === null ? '--' : num(b.cagr, 2) + '%'}`, (m.cagr ?? 0) >= (b.cagr ?? 0) ? 'up' : 'down', 'Annualized growth rate. Prefer positive CAGR that beats SPY without requiring extreme drawdown.'),
+    statCard('Total Return', fmtPct(m.total_return), `SPY ${N(b.total_return) === null ? '--' : num(b.total_return, 2) + '%'}`, (m.total_return ?? 0) >= 0 ? 'up' : 'down', 'End-to-end return over cached history. Useful, but less important than consistency and drawdown.'),
+    statCard('Max Drawdown', pctv(m.max_drawdown, 1), `SPY ${pctv(b.max_drawdown, 1)}`, (m.max_drawdown ?? 0) <= (b.max_drawdown ?? 999) ? 'up' : 'warn', 'Largest peak-to-trough decline. Lower is better because it shows how painful the strategy could feel.'),
+    statCard('Sharpe', num(m.sharpe, 2), `Win rate ${pctv(m.win_rate, 1)}`, (m.sharpe ?? 0) > 1 ? 'up' : 'warn', 'Risk-adjusted return. Above 1 is decent, above 2 is strong, negative means returns did not justify volatility.'),
+    statCard('Sortino', num(m.sortino, 2), `SPY ${num(b.sortino, 2)}`, (m.sortino ?? 0) > 1 ? 'up' : 'warn', 'Like Sharpe, but only downside volatility counts as risk. Better for asymmetric strategies whose many small wins inflate plain volatility.'),
+    statCard('Exposure', pctv(m.exposure, 1), N(m.avg_invested_return) !== null ? `avg ${signed(m.avg_invested_return, 2, '%')} per invested period` : 'time in the market', '', 'Share of rebalance periods the strategy actually held positions. Low exposure with a solid average per-period return means the strategy earned its results while mostly sitting safely in cash.'),
   ].join('');
+}
+
+function renderPlanMetrics(bt) {
+  const wrap = document.getElementById('planMetricsWrap');
+  const m = bt.metrics || {};
+  if ((bt.mode || currentMode()) !== 'trade_plan') { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  document.getElementById('planMetrics').innerHTML = [
+    statCard('Expectancy', N(m.expectancy_r) === null ? '--' : signed(m.expectancy_r, 3) + 'R', 'per trade taken', (m.expectancy_r ?? 0) > 0 ? 'up' : 'down', 'Average R returned per trade. Positive expectancy is the whole game; a high win rate with negative expectancy is a losing system.'),
+    statCard('Avg R', N(m.avg_r) === null ? '--' : signed(m.avg_r, 3) + 'R', 'mean R-multiple', (m.avg_r ?? 0) > 0 ? 'up' : 'down', 'Mean R-multiple across closed simulated trades.'),
+    statCard('Win Rate', pctv(m.win_rate_trades, 1), 'of trades, not periods', (m.win_rate_trades ?? 0) >= 50 ? 'up' : 'warn', 'Share of simulated trades that closed profitable. Judge it together with avg R, never alone.'),
+    statCard('Trades Taken', N(m.trades_taken) === null ? '--' : String(m.trades_taken), N(m.avg_bars_held) === null ? 'simulated entries' : `avg ${num(m.avg_bars_held, 1)} bars held`, '', 'How many entries the plan actually took. Under ~30 trades the expectancy is noise, not evidence.'),
+  ].join('');
+
+  const skips = [
+    ['Skipped — book full', m.signals_skipped_full_book, 'The plan was already holding max_positions when this signal fired. Real information: the strategy produced more ideas than you have slots.'],
+    ['Skipped — no cash', m.signals_skipped_no_cash, 'Cash was too low to take a correctly-sized position.'],
+    ['Skipped — no plan', m.signals_skipped_no_plan, 'No valid trade plan could be built (missing ATR, stop above entry, or size rounded to zero shares).'],
+    ['Ending cash', m.ending_cash_pct, 'Share of the account still in cash at the end of the test.'],
+    ['Avg bars held', m.avg_bars_held, 'Average number of daily bars a simulated trade stayed open.'],
+  ];
+  document.getElementById('skipCounters').innerHTML = skips.map(([k, v, tip]) => {
+    const isPct = k === 'Ending cash';
+    const shown = N(v) === null ? '--' : (isPct ? pctv(v, 1) : (k === 'Avg bars held' ? num(v, 1) : String(v)));
+    return `<div class="skip hint" data-tip="${esc(tip)}"><div class="k">${esc(k)}</div><div class="v">${esc(shown)}</div></div>`;
+  }).join('');
+}
+
+function confidenceChip(conf) {
+  const c = String(conf || '').toLowerCase();
+  if (c === 'high') return '<span class="vbadge v-confirmed">high</span>';
+  if (c === 'low') return '<span class="vbadge v-unproven">low</span>';
+  if (c === 'insufficient') return '<span class="vbadge v-mistagged">insufficient</span>';
+  return '<span class="vbadge">--</span>';
 }
 
 function renderRegimeBreakdown(bt) {
@@ -429,19 +810,112 @@ function renderRegimeBreakdown(bt) {
   const rows = bt.regime_breakdown || [];
   if (!rows.length) { el.innerHTML = '<div class="note">No regime breakdown available for this window.</div>'; return; }
   const tagged = new Set(bt.strategy_regimes || []);
-  el.innerHTML = `<table><thead><tr><th>Regime</th><th>% of Periods</th><th>Avg Period Return</th><th>Win Rate</th><th>Cumulative Return</th></tr></thead><tbody>${rows.map(r => {
+  el.innerHTML = `<table><thead><tr><th>Regime</th><th>% of Periods</th><th>n</th><th>Avg Period Return</th><th>Win Rate (Wilson 95% CI)</th><th>Cumulative Return</th><th>Confidence</th></tr></thead><tbody>${rows.map(r => {
     const isTagged = tagged.has(r.quadrant);
-    const rowStyle = isTagged ? 'border-left:3px solid #f0a500;background:#1c1810;' : '';
+    const isNow = r.quadrant === CUR_QUADRANT;
+    const rowStyle = isTagged ? 'border-left:3px solid #f0a500;background:#1c1810;' : (isNow ? 'border-left:3px solid #7aa2f7;' : '');
+    const lo = N(r.win_rate_ci_low), hi = N(r.win_rate_ci_high);
+    const wr = N(r.win_rate) === null ? '--'
+      : `${num(r.win_rate, 1)}%${lo !== null && hi !== null ? ` <span class="muted mono">[${num(lo, 0)}–${num(hi, 0)}]</span>` : ''}`;
+    const thin = String(r.confidence || '').toLowerCase() === 'insufficient';
     return `<tr style="${rowStyle}">
-      <td>${isTagged ? `<strong style="color:#f0a500;">${esc(r.label)}</strong>` : esc(r.label)}</td>
-      <td>${fmtNum(r.pct_of_periods, 1)}%</td>
-      <td>${fmtPct(r.avg_period_return)}</td>
-      <td>${r.win_rate != null ? fmtNum(r.win_rate, 1) + '%' : '--'}</td>
-      <td>${fmtPct(r.cum_return)}</td>
+      <td>${isTagged ? `<strong style="color:#f0a500;">${esc(r.label)}</strong>` : esc(r.label)}${isNow ? ' <span class="pill" style="border-color:#22304f;color:#7aa2f7;">now</span>' : ''}</td>
+      <td class="mono">${pctv(r.pct_of_periods, 1)}</td>
+      <td class="mono">${N(r.periods) === null ? '--' : esc(r.periods)}</td>
+      <td class="mono" ${thin ? 'style="color:#6d6d73;text-decoration:line-through;"' : ''}>${signed(r.avg_period_return, 2, '%')}</td>
+      <td>${thin ? `<span class="muted">${wr}</span>` : wr}</td>
+      <td class="mono" ${thin ? 'style="color:#6d6d73;text-decoration:line-through;"' : ''}>${signed(r.cum_return, 2, '%')}</td>
+      <td>${confidenceChip(r.confidence)}${thin ? '<div class="thin-flag">not evidence</div>' : ''}</td>
     </tr>`;
   }).join('')}</tbody></table>`;
 }
 
+/* ── Trade log ───────────────────────────────────────────────────────────── */
+let TRADE_LOG = [];
+let TL_SORT = { key: 'r_multiple', dir: -1 };
+
+const TL_COLS = [
+  ['ticker', 'Ticker', false],
+  ['strategy', 'Strategy', false],
+  ['entry_date', 'Entry', true],
+  ['entry_price', 'Entry $', true],
+  ['exit_date', 'Exit', true],
+  ['exit_price', 'Exit $', true],
+  ['shares', 'Shares', true],
+  ['stop', 'Stop', true],
+  ['target', 'Target', true],
+  ['bars_held', 'Bars', true],
+  ['r_multiple', 'R', true],
+  ['pnl', 'P&L', true],
+  ['exit_reason', 'Exit reason', false],
+];
+
+function renderTradeLog(bt) {
+  const wrap = document.getElementById('tradeLogWrap');
+  TRADE_LOG = Array.isArray(bt && bt.trade_log) ? bt.trade_log : [];
+  if ((bt && bt.mode) !== 'trade_plan' && currentMode() !== 'trade_plan') { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  if (!TRADE_LOG.length) {
+    document.getElementById('exitKinds').innerHTML = '';
+    document.getElementById('tradeLog').innerHTML = '<div class="note">No trades were taken in this window. Check the skipped-signal counters above — a full book or an unbuildable plan is a result, not a failure.</div>';
+    return;
+  }
+  const kinds = {};
+  TRADE_LOG.forEach(t => { const k = t && t.exit_kind ? String(t.exit_kind) : 'unknown'; kinds[k] = (kinds[k] || 0) + 1; });
+  const total = TRADE_LOG.length;
+  document.getElementById('exitKinds').innerHTML = Object.keys(kinds).sort((a, b) => kinds[b] - kinds[a]).map(k =>
+    `<span class="pill hint" data-tip="How many simulated trades ended this way.">${esc(k)} <strong style="color:#ddd;margin-left:4px;">${kinds[k]}</strong> <span class="muted">(${(kinds[k] / total * 100).toFixed(0)}%)</span></span>`
+  ).join('') + `<span class="pill" style="border-color:#3a2f10;color:#f0a500;">${total} trades</span>`;
+  paintTradeLog();
+}
+
+function sortTradeLog(key) {
+  if (TL_SORT.key === key) TL_SORT.dir = -TL_SORT.dir;
+  else TL_SORT = { key, dir: -1 };
+  safeRender(paintTradeLog, 'tradeLog');
+}
+
+function paintTradeLog() {
+  const rows = TRADE_LOG.slice().sort((a, b) => {
+    const k = TL_SORT.key;
+    const av = a ? a[k] : null, bv = b ? b[k] : null;
+    const an = N(av), bn = N(bv);
+    if (an === null && bn === null) return 0;
+    if (an === null) return 1;      // nulls always sink
+    if (bn === null) return -1;
+    if (typeof an === 'number' && typeof bn === 'number') return (an - bn) * TL_SORT.dir;
+    return String(an).localeCompare(String(bn)) * TL_SORT.dir;
+  });
+  const head = TL_COLS.map(([key, label, sortable]) =>
+    sortable || key === 'ticker' || key === 'strategy'
+      ? `<th class="sortable" onclick="sortTradeLog('${esc(key)}')">${esc(label)}${TL_SORT.key === key ? (TL_SORT.dir < 0 ? ' ▾' : ' ▴') : ''}</th>`
+      : `<th>${esc(label)}</th>`
+  ).join('');
+  const body = rows.map(t => {
+    const r = N(t.r_multiple);
+    const rCls = r === null ? 'muted' : (Number(r) >= 0 ? 'up' : 'down');
+    const pnl = N(t.pnl);
+    return `<tr>
+      <td>${tl(t.ticker)}${t.scaled_out ? ' <span class="pill" style="font-size:9.5px;">scaled</span>' : ''}</td>
+      <td class="muted" style="font-size:11px;">${esc(t.strategy || '--')}</td>
+      <td class="mono">${esc(t.entry_date || '--')}</td>
+      <td class="mono">${moneyv(t.entry_price)}</td>
+      <td class="mono">${esc(t.exit_date || '--')}</td>
+      <td class="mono">${moneyv(t.exit_price)}</td>
+      <td class="mono">${N(t.shares) === null ? '--' : esc(t.shares)}</td>
+      <td class="mono">${moneyv(t.stop)}</td>
+      <td class="mono">${moneyv(t.target)}</td>
+      <td class="mono">${N(t.bars_held) === null ? '--' : esc(t.bars_held)}</td>
+      <td class="mono ${rCls}" style="font-weight:700;">${r === null ? '--' : signed(r, 2) + 'R'}</td>
+      <td class="mono ${pnl === null ? 'muted' : (Number(pnl) >= 0 ? 'up' : 'down')}">${pnl === null ? '--' : signed(pnl, 2)}</td>
+      <td style="font-size:11px;color:#9a9a9a;">${esc(t.exit_reason || '--')}${t.exit_kind ? ` <span class="pill" style="font-size:9.5px;">${esc(t.exit_kind)}</span>` : ''}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('tradeLog').innerHTML =
+    `<div style="overflow-x:auto;"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+/* ── Charts ──────────────────────────────────────────────────────────────── */
 function drawdownSeries(points) {
   let peak = -Infinity;
   return (points || []).map(p => {
@@ -449,57 +923,48 @@ function drawdownSeries(points) {
     return peak > 0 ? +((p.value / peak - 1) * 100).toFixed(2) : 0;
   });
 }
-
-let ddChart;
 function renderDrawdownChart(bt) {
-  const ctx = document.getElementById('drawdownChart');
   ddChart?.destroy();
-  ddChart = new Chart(ctx, {
+  ddChart = new Chart(document.getElementById('drawdownChart'), {
     type: 'line',
     data: {
       labels: (bt.equity || []).map(p => p.date),
       datasets: [
-        { label: 'Strategy', data: drawdownSeries(bt.equity), borderColor: '#ff4d4d', backgroundColor: 'rgba(255,77,77,.12)', fill: true, tension: .2, pointRadius: 0 },
+        { label: 'Strategy', data: drawdownSeries(bt.equity), borderColor: '#e5484d', backgroundColor: 'rgba(229,72,77,.12)', fill: true, tension: .2, pointRadius: 0 },
         { label: 'SPY', data: drawdownSeries(bt.benchmark), borderColor: '#555', borderDash: [5, 4], tension: .2, pointRadius: 0 },
       ],
     },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { labels: { color: '#aaa' } } },
-      scales: {
-        x: { ticks: { color: '#777', maxTicksLimit: 8 }, grid: { color: '#1a1a1a' } },
-        y: { max: 0, ticks: { color: '#777', callback: v => v + '%' }, grid: { color: '#1a1a1a' } },
-      },
+      scales: { x: { ticks: { color: '#777', maxTicksLimit: 8 }, grid: { color: '#1a1a1a' } },
+                y: { max: 0, ticks: { color: '#777', callback: v => v + '%' }, grid: { color: '#1a1a1a' } } },
     },
   });
 }
-
 function renderChart(bt) {
-  const ctx = document.getElementById('equityChart');
   chart?.destroy();
-  chart = new Chart(ctx, {
+  chart = new Chart(document.getElementById('equityChart'), {
     type: 'line',
     data: {
       labels: (bt.equity || []).map(p => p.date),
       datasets: [
-        { label: 'Strategy', data: (bt.equity || []).map(p => p.value), borderColor: '#f0a500', backgroundColor: 'rgba(240,165,0,.08)', tension: .2 },
-        { label: 'SPY', data: (bt.benchmark || []).map(p => p.value), borderColor: '#7eb8f5', backgroundColor: 'rgba(126,184,245,.06)', tension: .2 },
+        { label: 'Strategy', data: (bt.equity || []).map(p => p.value), borderColor: '#f0a500', backgroundColor: 'rgba(240,165,0,.08)', tension: .2, pointRadius: 0 },
+        { label: 'SPY', data: (bt.benchmark || []).map(p => p.value), borderColor: '#7eb8f5', backgroundColor: 'rgba(126,184,245,.06)', tension: .2, pointRadius: 0 },
       ],
     },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { labels: { color: '#aaa' } } },
-      scales: {
-        x: { ticks: { color: '#777', maxTicksLimit: 8 }, grid: { color: '#1a1a1a' } },
-        y: { ticks: { color: '#777' }, grid: { color: '#1a1a1a' } },
-      },
+      scales: { x: { ticks: { color: '#777', maxTicksLimit: 8 }, grid: { color: '#1a1a1a' } },
+                y: { ticks: { color: '#777' }, grid: { color: '#1a1a1a' } } },
     },
   });
 }
 
+/* ── Rebalances / replay / cockpit ───────────────────────────────────────── */
 function renderTrades(bt) {
   const all = bt.trades || [];
-  // Keep the last ~6 months ending at the most recent rebalance date.
   let trades = all;
   if (all.length) {
     const cutoff = new Date(all[all.length - 1].date);
@@ -510,32 +975,34 @@ function renderTrades(bt) {
   const sName = currentStrategyName();
   const sub = document.getElementById('rebalSub');
   if (sub) sub.textContent = `${sName} · last 6 months`;
-  const help = `<div class="panel-desc">Showing <strong>${esc(sName)}</strong> rebalances over the last 6 months. Date is the rebalance day and Regime shows whether the SPY trend filter allowed risk. <b>Return</b> is how this strategy's selected holdings did over that holding period (their own absolute return after costs — <i>not</i> measured against SPY). <b>SPY</b> is what the market did over the same dates, and <b>vs SPY</b> is the difference (green means the picks beat the market that week). Holdings are the tickers the strategy selected; repeated tickers are stronger watch candidates than one-off appearances.</div>`;
-  document.getElementById('trades').innerHTML = trades.length ? `${help}<table><thead><tr><th>Date</th><th>Regime</th><th>Return</th><th>SPY</th><th>vs SPY</th><th>Holdings</th></tr></thead><tbody>${trades.map(t => `
-    <tr>
-      <td class="mono">${esc(t.date)}</td>
-      <td>${t.regime === 'risk_on' ? '<span class="up">Risk on</span>' : '<span class="warn">Cash</span>'}</td>
-      <td>${fmtPct(t.period_return)}</td>
-      <td>${fmtPct(t.spy_return)}</td>
-      <td>${fmtPct(t.excess_return)}</td>
-      <td>${(t.holdings || []).map(h => `<span class="pill"><span class="ticker-link hint" data-tip="Open price chart and detailed metrics for this ticker." tabindex="0" onclick="openTicker('${esc(h.ticker)}')">${esc(h.ticker)}</span> ${h.ret_63}%</span>`).join('') || '<span class="muted">No holdings</span>'}</td>
-    </tr>`).join('')}</tbody></table>` : `${help}<div class="note">No rebalance history available yet.</div>`;
+  const help = `<div class="panel-desc">Showing <strong>${esc(sName)}</strong> rebalances over the last 6 months. Date is the rebalance day and Regime shows whether the SPY trend filter allowed risk. <b>Return</b> is how this strategy's selected holdings did over that holding period (their own absolute return after costs — <i>not</i> measured against SPY). <b>SPY</b> is what the market did over the same dates, and <b>vs SPY</b> is the difference. Holdings are the tickers the strategy selected; repeated tickers are stronger watch candidates than one-off appearances.</div>`;
+  document.getElementById('trades').innerHTML = trades.length
+    ? `${help}<table><thead><tr><th>Date</th><th>Regime</th><th>Return</th><th>SPY</th><th>vs SPY</th><th>Holdings</th></tr></thead><tbody>${trades.map(t => `
+      <tr>
+        <td class="mono">${esc(t.date)}</td>
+        <td>${t.regime === 'risk_on' ? '<span class="up">Risk on</span>' : '<span class="warn">Cash</span>'}</td>
+        <td>${fmtPct(t.period_return)}</td>
+        <td>${fmtPct(t.spy_return)}</td>
+        <td>${fmtPct(t.excess_return)}</td>
+        <td>${(t.holdings || []).map(h => `<span class="pill">${tl(h.ticker)} ${pctv(h.ret_63, 1)}</span>`).join('') || '<span class="muted">No holdings</span>'}</td>
+      </tr>`).join('')}</tbody></table>`
+    : `${help}<div class="note">No rebalance history available yet.</div>`;
 }
 
 function renderReplay(replay) {
-  const rows = replay.snapshots || [];
-  const help = '<div class="panel-desc">Model Return is the average return of the tickers a <strong>fixed momentum ranking</strong> selected from your saved snapshot (this panel does not use the Strategy dropdown). SPY Return is the market comparison for the same dates. Status is in progress when the current week has not finished yet.</div>';
+  const rows = (replay && replay.snapshots) || [];
+  const help = '<div class="panel-desc">Model Return is the average return of the tickers a <strong>fixed momentum ranking</strong> selected from your saved snapshot (this panel does not use the Strategy dropdown). SPY Return is the market comparison for the same dates. Status is "in progress" when the current week has not finished yet.</div>';
   if (!rows.length) {
     document.getElementById('weeklyReplay').innerHTML = `${help}<div class="note">No weekly snapshots yet. Click Snapshot Current Watchlist after you finish choosing this week&apos;s saved tickers.</div>`;
     return;
   }
   document.getElementById('weeklyReplay').innerHTML = `${help}<table><thead><tr><th>Week</th><th>Status</th><th>Saved</th><th>Model Return</th><th>SPY</th><th>Selected</th><th>Top Saved Movers</th></tr></thead><tbody>${rows.map(row => {
-    const selected = (row.selected || []).map(s => `<span class="pill"><span class="ticker-link hint" data-tip="Open price chart and detailed metrics for this ticker." tabindex="0" onclick="openTicker('${esc(s.ticker)}')">${esc(s.ticker)}</span> ${fmtPct(s.return)}</span>`).join('') || '<span class="muted">Cash / no qualifying picks</span>';
-    const movers = (row.all_returns || []).slice(0, 5).map(s => `<span class="pill"><span class="ticker-link hint" data-tip="Open price chart and detailed metrics for this ticker." tabindex="0" onclick="openTicker('${esc(s.ticker)}')">${esc(s.ticker)}</span> ${fmtPct(s.return)}</span>`).join('') || '<span class="muted">No return data</span>';
+    const selected = (row.selected || []).map(s => `<span class="pill">${tl(s.ticker)} ${fmtPct(s.return)}</span>`).join('') || '<span class="muted">Cash / no qualifying picks</span>';
+    const movers = (row.all_returns || []).slice(0, 5).map(s => `<span class="pill">${tl(s.ticker)} ${fmtPct(s.return)}</span>`).join('') || '<span class="muted">No return data</span>';
     return `<tr>
       <td class="mono">${esc(row.week_start)}<div class="muted">${esc(row.actual_start || '')} to ${esc(row.actual_end || row.week_end || '')}</div></td>
-      <td><span class="status-pill">${esc((row.status || '').replaceAll('_', ' '))}</span><div class="muted">${esc(row.regime || '')}</div></td>
-      <td>${row.ticker_count || 0}<div class="muted">${(row.available_tickers || []).length} usable</div></td>
+      <td><span class="status-pill">${esc(String(row.status || '').replace(/_/g, ' '))}</span><div class="muted">${esc(row.regime || '')}</div></td>
+      <td>${esc(row.ticker_count || 0)}<div class="muted">${(row.available_tickers || []).length} usable</div></td>
       <td>${fmtPct(row.model_return)}</td>
       <td>${fmtPct(row.spy_return)}</td>
       <td>${selected}</td>
@@ -545,149 +1012,98 @@ function renderReplay(replay) {
 }
 
 function renderCockpit(c) {
-  const r = c.risk || {};
+  const r = (c && c.risk) || {};
   const topSector = r.top_sector ? `${r.top_sector.sector} ${r.top_sector.weight}%` : '--';
   document.getElementById('riskBox').innerHTML = `
     <div class="grid4" style="grid-template-columns:repeat(2,1fr);">
-      ${statCard('Positions', r.positions ?? 0, 'current portfolio', '', 'Count of holdings in your portfolio. More names can diversify, but only if they are not highly correlated.')}
-      ${statCard('Weighted Beta', fmtNum(r.weighted_beta), 'market sensitivity', (r.weighted_beta ?? 1) <= 1 ? 'up' : 'warn', 'Portfolio sensitivity to market moves. Above 1 means it may move more than SPY in both directions.')}
+      ${statCard('Positions', esc(r.positions ?? 0), 'current portfolio', '', 'Count of holdings in your portfolio. More names can diversify, but only if they are not highly correlated.')}
+      ${statCard('Weighted Beta', num(r.weighted_beta, 2), 'market sensitivity', (r.weighted_beta ?? 1) <= 1 ? 'up' : 'warn', 'Portfolio sensitivity to market moves. Above 1 means it may move more than SPY in both directions.')}
       ${statCard('Top Sector', esc(topSector), 'concentration', '', 'Largest sector weight. A very high number means one theme could dominate your results.')}
-      ${statCard('Exit Flags', r.exit_flags ?? 0, 'positions needing review', r.exit_flags ? 'warn' : 'up', 'Number of holdings with risk warnings. Review these before adding new watchlist candidates.')}
+      ${statCard('Exit Flags', esc(r.exit_flags ?? 0), 'positions needing review', r.exit_flags ? 'warn' : 'up', 'Number of holdings with risk warnings. Review these before adding new watchlist candidates.')}
     </div>
     <div class="panel-desc" style="margin:12px 0 8px;">Sector concentration shows where your current risk is clustered. If one sector dominates, prefer new candidates from different sectors unless you intentionally want that exposure.</div>
-    <div>${(r.sector_concentration || []).map(s => `<span class="pill">${esc(s.sector)} ${s.weight}%</span>`).join('')}</div>`;
+    <div>${(r.sector_concentration || []).map(s => `<span class="pill">${esc(s.sector)} ${esc(s.weight)}%</span>`).join('')}</div>`;
 
-  document.getElementById('opportunities').innerHTML = table(c.opportunities || [], ['Ticker','Setup','RSI','Vol','Why'], row => [
-    `<span class="ticker-link hint" data-tip="Open price chart and detailed metrics for this ticker." tabindex="0" onclick="openTicker('${esc(row.ticker)}')">${esc(row.ticker)}</span>`,
-    fmtNum(row.setup_score, 1), fmtNum(row.rsi, 1), fmtNum(row.vol_r, 2), (row.why || []).map(esc).join(', ')
+  document.getElementById('opportunities').innerHTML = table((c && c.opportunities) || [], ['Ticker', 'Setup', 'RSI', 'Vol', 'Why'], row => [
+    tl(row.ticker), num(row.setup_score, 1), num(row.rsi, 1), num(row.vol_r, 2), (row.why || []).map(esc).join(', '),
   ], 'No watchlist opportunities scored yet.', 'Setup is the ranking score; RSI helps avoid chasing overheated names; Vol shows confirmation; Why explains the signals that earned the rank.');
 
-  document.getElementById('exits').innerHTML = table(c.exit_pressure || [], ['Ticker','Flags','RSI','Ann Ret','Sharpe'], row => [
-    `<span class="ticker-link hint" data-tip="Open price chart and detailed metrics for this ticker." tabindex="0" onclick="openTicker('${esc(row.ticker)}')">${esc(row.ticker)}</span>`,
-    (row.reasons || []).map(x => `<span class="pill">${esc(x)}</span>`).join(''),
-    fmtNum(row.rsi, 1), fmtPct(row.ann_ret), fmtNum(row.sharpe, 2)
+  document.getElementById('exits').innerHTML = table((c && c.exit_pressure) || [], ['Ticker', 'Flags', 'RSI', 'Ann Ret', 'Sharpe'], row => [
+    tl(row.ticker), (row.reasons || []).map(x => `<span class="pill">${esc(x)}</span>`).join(''),
+    num(row.rsi, 1), fmtPct(row.ann_ret), num(row.sharpe, 2),
   ], 'No current portfolio exit flags.', 'Flags are the reason to inspect the holding. Weak annualized return plus low Sharpe or broken trend is more serious than one isolated warning.');
 
-  document.getElementById('changes').innerHTML = table(c.changes || [], ['Ticker','Type','Signal'], row => [
-    `<span class="ticker-link hint" data-tip="Open price chart and detailed metrics for this ticker." tabindex="0" onclick="openTicker('${esc(row.ticker)}')">${esc(row.ticker)}</span>`,
-    esc(row.type), esc(row.message)
+  document.getElementById('changes').innerHTML = table((c && c.changes) || [], ['Ticker', 'Type', 'Signal'], row => [
+    tl(row.ticker), esc(row.type), esc(row.message),
   ], 'No notable cached signal changes.', 'Trend changes are slower but more important; volume changes are early alerts; RSI extremes can mean either exhaustion or a possible reversal setup.');
 }
 
-function table(rows, headers, mapper, empty, help = '') {
-  const intro = help ? `<div class="panel-desc">${esc(help)}</div>` : '';
-  if (!rows.length) return `${intro}<div class="note">${esc(empty)}</div>`;
-  return `${intro}<table><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${mapper(row).map(v => `<td>${v}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
-}
-
+/* ── Run ─────────────────────────────────────────────────────────────────── */
 async function load() {
   const status = document.getElementById('status');
-  status.textContent = 'Running...';
-  const params = new URLSearchParams({
-    strategy: document.getElementById('strategy').value,
-    source: document.getElementById('source').value,
-    top_n: document.getElementById('topN').value,
-    rebalance_days: document.getElementById('rebalance').value,
-    cost_bps: document.getElementById('costBps').value,
-    spy_regime: document.getElementById('spyRegime').checked ? 'true' : 'false',
-    regime_ma: document.getElementById('regimeMa').value,
-    period: document.getElementById('period').value,
-  });
-  const sd = document.getElementById('startDate').value;
-  if (sd) params.set('start_date', sd);
-  const ed = document.getElementById('endDate').value;
-  if (ed) params.set('end_date', ed);
-  if (document.getElementById('archiveMode').checked) params.set('archive', 'true');
+  status.textContent = 'Running…';
+  const params = buildParams();
+  let bt;
   try {
-    const [bt, cockpit] = await Promise.all([
-      api('/api/backtest/walk-forward?' + params.toString()),
-      api('/api/backtest/cockpit'),
-    ]);
-    const replay = await api('/api/backtest/watchlist-replay?top_n=' + encodeURIComponent(document.getElementById('topN').value) + '&spy_regime=' + (document.getElementById('spyRegime').checked ? 'true' : 'false'));
-    renderStats(bt);
-    renderRegimeBreakdown(bt);
-    renderChart(bt);
-    renderDrawdownChart(bt);
-    renderTrades(bt);
-    renderCockpit(cockpit);
-    renderReplay(replay);
-    document.getElementById('notes').innerHTML = [...(bt.notes || []), cockpit.disclaimer].map(n => `<div>${esc(n)}</div>`).join('');
-    status.textContent = `${bt.available_tickers?.length || 0} tickers tested`;
+    bt = await api('/api/backtest/walk-forward?' + params.toString());
   } catch (e) {
-    status.innerHTML = `<span class="error">${esc(e.message)}</span>`;
+    status.innerHTML = `<span class="error">${esc(e && e.message ? e.message : 'Backtest failed')}</span>`;
+    return;
   }
+  safeRender(() => renderStats(bt), 'stats');
+  safeRender(() => renderPlanMetrics(bt), 'planMetrics');
+  safeRender(() => renderRegimeBreakdown(bt), 'regimeBreakdown');
+  safeRender(() => renderCaveats(bt), 'caveats');
+  safeRender(() => renderTradeLog(bt), 'tradeLog');
+  safeRender(() => renderChart(bt), 'equityChart');
+  safeRender(() => renderDrawdownChart(bt), 'drawdownChart');
+  safeRender(() => renderTrades(bt), 'trades');
+  document.getElementById('notes').innerHTML = (bt.notes || []).map(n => `<div>${esc(n)}</div>`).join('');
+  status.textContent = `${(bt.available_tickers || []).length} tickers tested · ${esc(bt.mode || currentMode())} mode`;
+
+  // Side panels are independent — a failure in either must not blank the run.
+  api('/api/backtest/cockpit')
+    .then(c => { safeRender(() => renderCockpit(c), 'riskBox'); if (c && c.disclaimer) { const el = document.getElementById('notes'); el.innerHTML += `<div>${esc(c.disclaimer)}</div>`; } })
+    .catch(e => { document.getElementById('riskBox').innerHTML = `<span class="error">${esc(e && e.message ? e.message : 'unavailable')}</span>`; });
+
+  api('/api/backtest/watchlist-replay?top_n=' + encodeURIComponent(val('topN')) + '&spy_regime=' + (document.getElementById('spyRegime').checked ? 'true' : 'false'))
+    .then(r => safeRender(() => renderReplay(r), 'weeklyReplay'))
+    .catch(e => { document.getElementById('weeklyReplay').innerHTML = `<span class="error">${esc(e && e.message ? e.message : 'unavailable')}</span>`; });
 }
 
-const STRATEGY_LABELS = { momentum_rotation: 'Momentum Rotation', pullback_50ma: 'Pullback to 50MA', breakout_volume: 'Breakout + Volume', mean_reversion: 'Mean Reversion (RSI-2)' };
-const CORE_STRATEGY_IDS = ['momentum_rotation', 'pullback_50ma', 'breakout_volume', 'mean_reversion'];
+/* ── Compare ─────────────────────────────────────────────────────────────── */
 const COMPARE_COLORS = ['#f0a500', '#7eb8f5', '#9b8cff', '#4fd1a5', '#ff6b9d', '#ffd166', '#06d6a0', '#ef476f', '#118ab2'];
-function colorForIndex(i) {
-  if (COMPARE_COLORS[i]) return COMPARE_COLORS[i];
-  // Beyond the hand-picked palette, generate additional distinct hues.
-  return `hsl(${(i * 47) % 360}, 70%, 60%)`;
-}
-let compareChart;
-let compareResults = [];
-let compareIds = [];
-let compareChecked = {};
+function colorForIndex(i) { return COMPARE_COLORS[i] || `hsl(${(i * 47) % 360}, 70%, 60%)`; }
+let compareResults = [], compareIds = [], compareChecked = {};
 
 async function compareStrategies() {
   const status = document.getElementById('status');
-  status.textContent = 'Comparing strategies...';
-  const base = {
-    source: document.getElementById('source').value,
-    top_n: document.getElementById('topN').value,
-    rebalance_days: document.getElementById('rebalance').value,
-    cost_bps: document.getElementById('costBps').value,
-    spy_regime: document.getElementById('spyRegime').checked ? 'true' : 'false',
-    regime_ma: document.getElementById('regimeMa').value,
-    period: document.getElementById('period').value,
-  };
-  const sd = document.getElementById('startDate').value;
-  const ed = document.getElementById('endDate').value;
-  const arch = document.getElementById('archiveMode').checked;
+  status.textContent = 'Comparing strategies…';
   const ids = Object.keys(STRATEGY_LABELS);
   try {
     const results = [];
     for (const sid of ids) {
-      const p = new URLSearchParams({ ...base, strategy: sid });
-      if (sd) p.set('start_date', sd);
-      if (ed) p.set('end_date', ed);
-      if (arch) p.set('archive', 'true');
-      results.push(await api('/api/backtest/walk-forward?' + p.toString()));
+      results.push(await api('/api/backtest/walk-forward?' + buildParams(sid).toString()));
     }
     compareResults = results;
     compareIds = ids;
-
-    // Try to default-check the strategies tagged for the current market regime.
-    let currentRegime = null;
-    try {
-      const today = await api('/api/today');
-      currentRegime = today?.regime?.quadrant || null;
-    } catch (e) { /* fall back below */ }
-
     compareChecked = {};
     ids.forEach(id => {
       const detail = STRATEGY_DETAILS[id];
-      if (currentRegime && detail && Array.isArray(detail.regimes)) {
-        compareChecked[id] = detail.regimes.includes(currentRegime);
-      } else {
-        compareChecked[id] = CORE_STRATEGY_IDS.includes(id);
-      }
+      if (CUR_QUADRANT && detail && Array.isArray(detail.regimes)) compareChecked[id] = detail.regimes.includes(CUR_QUADRANT);
+      else compareChecked[id] = CORE_STRATEGY_IDS.includes(id);
     });
-    if (!Object.values(compareChecked).some(Boolean)) {
-      ids.forEach(id => { if (CORE_STRATEGY_IDS.includes(id)) compareChecked[id] = true; });
-    }
+    if (!Object.values(compareChecked).some(Boolean)) ids.forEach(id => { if (CORE_STRATEGY_IDS.includes(id)) compareChecked[id] = true; });
 
     const wrap = document.getElementById('compareWrap');
     wrap.hidden = false;
-    renderCompareChecks();
-    renderCompareChart();
-    renderCompareTable();
+    safeRender(renderCompareChecks, 'compareChecks');
+    safeRender(renderCompareChart, 'compareTable');
+    safeRender(renderCompareTable, 'compareTable');
     wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
     status.textContent = 'Comparison complete';
   } catch (e) {
-    status.innerHTML = `<span class="error">${esc(e.message)}</span>`;
+    status.innerHTML = `<span class="error">${esc(e && e.message ? e.message : 'Comparison failed')}</span>`;
   }
 }
 
@@ -695,10 +1111,10 @@ function renderCompareChecks() {
   const el = document.getElementById('compareChecks');
   if (!el) return;
   const boxes = compareIds.map((id, i) => `
-    <label class="hint" data-tip="Toggle ${esc(STRATEGY_LABELS[id])} on the chart and table below (already fetched, no re-run needed)." style="flex-direction:row;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-size:12px;background:#151515;border:1px solid #222;border-radius:4px;padding:5px 9px;">
+    <label class="hint" data-tip="Toggle ${esc(STRATEGY_LABELS[id] || id)} on the chart and table below (already fetched, no re-run needed)." style="flex-direction:row;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-size:12px;background:#151518;border:1px solid #232327;border-radius:4px;padding:5px 9px;">
       <input type="checkbox" data-sid="${esc(id)}" ${compareChecked[id] ? 'checked' : ''} onchange="toggleCompareStrategy('${esc(id)}', this.checked)">
       <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${colorForIndex(i)};flex-shrink:0;"></span>
-      ${esc(STRATEGY_LABELS[id])}
+      ${esc(STRATEGY_LABELS[id] || id)}
     </label>`).join('');
   el.innerHTML = `
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;">
@@ -707,20 +1123,17 @@ function renderCompareChecks() {
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;">${boxes}</div>`;
 }
-
 function toggleCompareStrategy(id, checked) {
   compareChecked[id] = checked;
-  renderCompareChart();
-  renderCompareTable();
+  safeRender(renderCompareChart, 'compareTable');
+  safeRender(renderCompareTable, 'compareTable');
 }
-
-function setAllCompareChecked(val) {
-  compareIds.forEach(id => { compareChecked[id] = val; });
-  renderCompareChecks();
-  renderCompareChart();
-  renderCompareTable();
+function setAllCompareChecked(v) {
+  compareIds.forEach(id => { compareChecked[id] = v; });
+  safeRender(renderCompareChecks, 'compareChecks');
+  safeRender(renderCompareChart, 'compareTable');
+  safeRender(renderCompareTable, 'compareTable');
 }
-
 function renderCompareChart() {
   const selectedIdx = compareIds.map((id, i) => i).filter(i => compareChecked[compareIds[i]]);
   const selectedResults = selectedIdx.map(i => compareResults[i]);
@@ -729,7 +1142,8 @@ function renderCompareChart() {
     : (compareResults[0] || {});
   const labels = (longest.equity || []).map(p => p.date);
   const datasets = selectedIdx.map(i => ({
-    label: STRATEGY_LABELS[compareIds[i]], data: (compareResults[i].equity || []).map(p => p.value),
+    label: STRATEGY_LABELS[compareIds[i]] || compareIds[i],
+    data: (compareResults[i].equity || []).map(p => p.value),
     borderColor: colorForIndex(i), tension: .2, pointRadius: 0,
   }));
   datasets.push({ label: 'SPY', data: (longest.benchmark || []).map(p => p.value), borderColor: '#555', borderDash: [5, 4], tension: .2, pointRadius: 0 });
@@ -740,7 +1154,6 @@ function renderCompareChart() {
       scales: { x: { ticks: { color: '#777', maxTicksLimit: 8 }, grid: { color: '#1a1a1a' } }, y: { ticks: { color: '#777' }, grid: { color: '#1a1a1a' } } } },
   });
 }
-
 function renderCompareTable() {
   const spy = (compareResults[0] && compareResults[0].benchmark_metrics) || {};
   const selectedIdx = compareIds.map((id, i) => i).filter(i => compareChecked[compareIds[i]]);
@@ -748,54 +1161,53 @@ function renderCompareTable() {
     const bt = compareResults[i];
     const m = bt.metrics || {};
     const detail = STRATEGY_DETAILS[compareIds[i]];
-    const regimePills = (detail?.regime_labels || []).map(l => `<span class="pill">${esc(l)}</span>`).join('') || '<span class="muted">--</span>';
+    const regimePills = ((detail && detail.regime_labels) || []).map(l => `<span class="pill">${esc(l)}</span>`).join('') || '<span class="muted">--</span>';
     return `<tr>
-      <td><span class="pill" style="border-color:${colorForIndex(i)};color:${colorForIndex(i)};">${esc(STRATEGY_LABELS[compareIds[i]])}</span></td>
+      <td><span class="pill" style="border-color:${colorForIndex(i)};color:${colorForIndex(i)};">${esc(STRATEGY_LABELS[compareIds[i]] || compareIds[i])}</span></td>
       <td>${fmtPct(m.cagr)}</td><td>${fmtPct(m.total_return)}</td>
-      <td>${fmtNum(m.max_drawdown, 1)}%</td><td>${fmtNum(m.sharpe, 2)}</td><td>${fmtNum(m.sortino, 2)}</td>
-      <td>${m.win_rate ?? '--'}%</td><td>${m.exposure != null ? fmtNum(m.exposure, 1) + '%' : '--'}</td><td class="mono">${bt.available_tickers?.length || 0}</td>
+      <td class="mono">${pctv(m.max_drawdown, 1)}</td><td class="mono">${num(m.sharpe, 2)}</td><td class="mono">${num(m.sortino, 2)}</td>
+      <td class="mono">${pctv(m.win_rate, 1)}</td><td class="mono">${pctv(m.exposure, 1)}</td>
+      <td class="mono">${N(m.expectancy_r) === null ? '<span class="muted">n/a in rotation</span>' : signed(m.expectancy_r, 2) + 'R'}</td>
+      <td class="mono">${(bt.available_tickers || []).length}</td>
       <td>${regimePills}</td></tr>`;
   }).join('');
   const el = document.getElementById('compareTable');
   if (!rows) { el.innerHTML = '<div class="note">No strategies selected — check at least one above to see the comparison.</div>'; return; }
-  el.innerHTML = `<table><thead><tr><th>Strategy</th><th>CAGR</th><th>Total</th><th>Max DD</th><th>Sharpe</th><th>Sortino</th><th>Win Rate</th><th>Exposure</th><th>Tested</th><th>Regime fit</th></tr></thead>
-    <tbody>${rows}<tr><td><span class="pill" style="border-color:#555;color:#888;">SPY benchmark</span></td><td>${fmtPct(spy.cagr)}</td><td>${fmtPct(spy.total_return)}</td><td>${fmtNum(spy.max_drawdown, 1)}%</td><td>${fmtNum(spy.sharpe, 2)}</td><td>${fmtNum(spy.sortino, 2)}</td><td>--</td><td>${spy.exposure != null ? fmtNum(spy.exposure, 1) + '%' : '--'}</td><td>--</td><td>--</td></tr></tbody></table>`;
+  el.innerHTML = `<table><thead><tr><th>Strategy</th><th>CAGR</th><th>Total</th><th>Max DD</th><th>Sharpe</th><th>Sortino</th><th>Win Rate</th><th>Exposure</th><th>Expectancy</th><th>Tested</th><th>Regime fit</th></tr></thead>
+    <tbody>${rows}<tr><td><span class="pill" style="border-color:#555;color:#888;">SPY benchmark</span></td><td>${fmtPct(spy.cagr)}</td><td>${fmtPct(spy.total_return)}</td><td class="mono">${pctv(spy.max_drawdown, 1)}</td><td class="mono">${num(spy.sharpe, 2)}</td><td class="mono">${num(spy.sortino, 2)}</td><td>--</td><td class="mono">${pctv(spy.exposure, 1)}</td><td>--</td><td>--</td><td>--</td></tr></tbody></table>`;
 }
 
-// ── Strategy detail ───────────────────────────────────────────────────────
+/* ── Strategy detail modal ───────────────────────────────────────────────── */
 let STRATEGY_DETAILS = {};
 async function loadStrategyDetails() {
   try {
     const d = await api('/api/backtest/strategies');
     STRATEGY_DETAILS = {};
     (d.strategies || []).forEach(s => { STRATEGY_DETAILS[s.id] = s; });
-    // Self-sync: any strategy the server knows but this page doesn't gets
-    // added to the labels map and the dropdown, so new strategies work
-    // without editing this file.
     const sel = document.getElementById('strategy');
     (d.strategies || []).forEach(s => {
       if (!STRATEGY_LABELS[s.id]) STRATEGY_LABELS[s.id] = s.name;
       if (![...sel.options].some(o => o.value === s.id)) {
         const opt = document.createElement('option');
         opt.value = s.id; opt.textContent = s.name;
+        if (s.backtestable === false) { opt.disabled = true; opt.textContent = s.name + ' (watchlist only)'; }
         sel.appendChild(opt);
       }
     });
     renderStrategyDetail();
   } catch (e) {
-    document.getElementById('strategyDetail').innerHTML = `<span class="error">${esc(e.message)}</span>`;
+    document.getElementById('strategyDetail').innerHTML = `<span class="error">${esc(e && e.message ? e.message : 'unavailable')}</span>`;
   }
 }
 function strategyDetailBlock(s, isSelected) {
   const d = s.details || {};
   const rules = (d.rules || []).map(r => `<li>${esc(r)}</li>`).join('');
-  const params = (d.parameters || []).map(([k, v]) =>
-    `<span class="pill"><span class="muted">${esc(k)}:</span>&nbsp;${esc(v)}</span>`).join('');
-  const badge = isSelected ? ` <span class="pill" style="border-color:#3a2f10;color:#f0a500;background:#1c1810;">selected</span>` : '';
+  const params = (d.parameters || []).map(p => Array.isArray(p)
+    ? `<span class="pill"><span class="muted">${esc(p[0])}:</span>&nbsp;${esc(p[1])}</span>` : `<span class="pill">${esc(p)}</span>`).join('');
+  const badge = isSelected ? ' <span class="pill" style="border-color:#3a2f10;color:#f0a500;background:#1c1810;">selected</span>' : '';
   const regimePills = (s.regime_labels || []).map(l => `<span class="pill">${esc(l)}</span>`).join('') || '<span class="muted">Any regime</span>';
   const watchlistNote = s.actionable === false
-    ? `<div class="warn" style="font-size:12px;font-weight:700;margin-bottom:10px;">Watchlist only — no trade plan</div>`
-    : '';
+    ? '<div class="warn" style="font-size:12px;font-weight:700;margin-bottom:10px;">Watchlist only — no trade plan, not backtestable.</div>' : '';
   return `
     <div style="font-size:15px;font-weight:800;color:#f0a500;margin-bottom:6px;">${esc(s.name)}${badge}</div>
     <div class="panel-desc">${esc(s.description)}</div>
@@ -806,48 +1218,60 @@ function strategyDetailBlock(s, isSelected) {
     ${rules ? `<div style="margin-bottom:6px;"><strong style="color:#ccc;font-size:12px;">Rules &amp; calculation</strong></div>
       <ol style="margin:0 0 12px 18px;color:#bbb;font-size:12px;line-height:1.6;">${rules}</ol>` : ''}
     ${d.scoring ? `<div style="margin-bottom:4px;"><strong style="color:#ccc;font-size:12px;">How it's scored</strong></div>
-      <div class="mono" style="background:#0f0f0f;border:1px solid #1d1d1d;border-radius:5px;padding:10px;font-size:11px;color:#ddd;line-height:1.5;margin-bottom:12px;">${esc(d.scoring)}</div>` : ''}
+      <div class="mono" style="background:#0f0f11;border:1px solid #1d1d21;border-radius:5px;padding:10px;font-size:11px;color:#ddd;line-height:1.5;margin-bottom:12px;">${esc(d.scoring)}</div>` : ''}
     ${params ? `<div style="margin-bottom:6px;"><strong style="color:#ccc;font-size:12px;">Parameters</strong></div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;">${params}</div>` : ''}`;
 }
 function renderStrategyDetail() {
-  const selectedId = document.getElementById('strategy').value;
+  const selectedId = val('strategy');
   const el = document.getElementById('strategyDetail');
-  // Show every strategy in the dropdown's order so the popup is a full reference.
   const ids = Object.keys(STRATEGY_LABELS).filter(id => STRATEGY_DETAILS[id]);
   if (!ids.length) { el.textContent = 'No strategy detail available.'; return; }
-  el.innerHTML = ids
-    .map(id => strategyDetailBlock(STRATEGY_DETAILS[id], id === selectedId))
-    .join('<hr style="border:none;border-top:1px solid #1e1e1e;margin:18px 0;">');
+  el.innerHTML = ids.map(id => strategyDetailBlock(STRATEGY_DETAILS[id], id === selectedId))
+    .join('<hr style="border:none;border-top:1px solid #232327;margin:18px 0;">');
 }
-function openStrategyModal() {
-  renderStrategyDetail();
-  document.getElementById('strategyModal').style.display = 'flex';
-}
-function closeStrategyModal() {
-  document.getElementById('strategyModal').style.display = 'none';
-}
+function openStrategyModal() { safeRender(renderStrategyDetail, 'strategyDetail'); document.getElementById('strategyModal').style.display = 'flex'; }
+function closeStrategyModal() { document.getElementById('strategyModal').style.display = 'none'; }
+
 function updateCadenceHint() {
-  const isMeanReversion = document.getElementById('strategy').value === 'mean_reversion';
-  const cadence = document.getElementById('rebalance').value;
-  document.getElementById('cadenceHint').hidden = !(isMeanReversion && cadence !== '5');
+  const isMeanReversion = val('strategy') === 'mean_reversion';
+  const cadence = val('rebalance');
+  document.getElementById('cadenceHint').hidden = !(isMeanReversion && cadence !== '5' && currentMode() === 'rotation');
 }
-document.getElementById('strategy').addEventListener('change', renderStrategyDetail);
-document.getElementById('strategy').addEventListener('change', updateCadenceHint);
+function updateModeUi() {
+  document.getElementById('planParams').hidden = currentMode() !== 'trade_plan';
+  document.getElementById('tradeLogWrap').hidden = currentMode() !== 'trade_plan';
+  updateCadenceHint();
+}
+
+/* ── Wiring ──────────────────────────────────────────────────────────────── */
+document.getElementById('strategy').addEventListener('change', () => { safeRender(renderStrategyDetail, 'strategyDetail'); updateCadenceHint(); });
 document.getElementById('rebalance').addEventListener('change', updateCadenceHint);
 document.getElementById('strategyDetailBtn').addEventListener('click', openStrategyModal);
-
+document.getElementById('modeRotation').addEventListener('change', updateModeUi);
+document.getElementById('modeTradePlan').addEventListener('change', updateModeUi);
 document.getElementById('runBtn').addEventListener('click', load);
 document.getElementById('compareBtn').addEventListener('click', compareStrategies);
+document.getElementById('edgeBuildBtn').addEventListener('click', () => loadEdge(true));
+document.getElementById('edgeInvalidateBtn').addEventListener('click', async () => {
+  const meta = document.getElementById('edgeMeta');
+  try {
+    await api('/api/edge-matrix/invalidate', { method: 'POST' });
+    EDGE = null; EDGE_COLD = null; EDGE_ERR = null;
+    await loadEdge(false);
+  } catch (e) {
+    if (meta) meta.innerHTML = `<span class="error">${esc(e && e.message ? e.message : 'invalidate failed')}</span>`;
+  }
+});
 document.getElementById('snapshotBtn').addEventListener('click', async () => {
   const status = document.getElementById('snapshotStatus');
-  status.textContent = 'Saving snapshot...';
+  status.textContent = 'Saving snapshot…';
   try {
     const snap = await api('/api/backtest/watchlist-replay/snapshot', { method: 'POST' });
     status.textContent = `Saved ${snap.ticker_count} tickers for week of ${snap.week_start}`;
     load();
   } catch (e) {
-    status.innerHTML = `<span class="error">${esc(e.message)}</span>`;
+    status.innerHTML = `<span class="error">${esc(e && e.message ? e.message : 'snapshot failed')}</span>`;
   }
 });
 document.getElementById('weeklyPresetBtn').addEventListener('click', () => {
@@ -859,9 +1283,15 @@ document.getElementById('weeklyPresetBtn').addEventListener('click', () => {
   updateCadenceHint();
   load();
 });
-initHeader();
-loadStrategyDetails();
-load();
+
+(async function boot() {
+  updateModeUi();
+  initHeader('/backtest').catch(() => { /* header is non-fatal */ });
+  loadStrategyDetails().catch(() => { /* handled inside */ });
+  await loadCurrentQuadrant();
+  loadEdge(false).catch(() => { /* handled inside */ });
+  load();
+})();
 </script>
 </body>
 </html>

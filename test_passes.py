@@ -850,21 +850,30 @@ def test_r_multiple_known_cases():
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Top-bar navigation consistency
+# Shared page chrome
 #
-# `static/js/common.js` owns NAV_LINKS, but charts.html, report.html and
-# index.html CANNOT load common.js — each defines its own `api`/`token`/`esc`,
-# and a duplicate `const token` is a SyntaxError that kills the whole script.
-# So those three mirror the nav by hand, and a hand mirror drifts silently:
-# they kept saying "Today" and "Backtest" with no Scorecard link long after
-# the rest of the app was renamed, so clicking Charts visibly jumped back to
-# the old header. These tests are the tripwire for that.
+# The top bar used to be hand-copied into charts.html, report.html and
+# index.html. Both the markup AND its CSS drifted: those pages still said
+# "Today" and "Backtest", had no Scorecard link at all, and sat on an older
+# palette — so clicking Charts visibly jumped to a different-looking app with
+# a stale menu. journal.html/admin.html drifted too, invisibly: they took
+# their LINKS from common.js but kept their own green/red, so P&L was
+# literally a different green there than on the Playbook.
+#
+# Everything now comes from static/js/common.js + static/css/common.css.
+# These tests keep it that way.
 # ──────────────────────────────────────────────────────────────────────────
 
 import os as _os
 import re as _re
+import subprocess as _sp
 
 _STATIC = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "static")
+_ROOT = _os.path.dirname(_STATIC)
+
+# Pages that load common.js and therefore share its global scope.
+_SHARED_PAGES = ("today.html", "backtest.html", "scorecard.html", "journal.html",
+                 "admin.html", "charts.html", "report.html", "index.html")
 
 
 def _read_static(*parts):
@@ -872,63 +881,129 @@ def _read_static(*parts):
         return fh.read()
 
 
-def _canonical_nav():
-    """[(href, label), ...] from NAV_LINKS in common.js — the single source."""
+def _common_js_top_level_names():
+    """Names declared at column 0 in common.js — the shared global surface."""
     js = _read_static("js", "common.js")
-    body = js.split("const NAV_LINKS = [", 1)[1].split("];", 1)[0]
-    return _re.findall(r"\['(/[a-z]*)',\s*'([^']+)'", body)
+    pat = r"^(?:const|let|var|async function|function|class)\s+([A-Za-z_$][\w$]*)"
+    return set(_re.findall(pat, js, _re.M))
 
 
 @test
-def test_hand_mirrored_navs_match_common_js():
-    canonical = _canonical_nav()
-    assert len(canonical) >= 6, canonical
-    for page in ("charts.html", "report.html"):
+def test_every_page_uses_the_shared_chrome():
+    """No page may hand-write the nav again; all must load the shared files."""
+    for page in _SHARED_PAGES:
         html = _read_static(page)
-        mirrored = _re.findall(
-            r'href="(/[a-z]*)"\s+class="navlink[^"]*"\s*>([^<]+)<', html
-        )
-        assert mirrored == canonical, (
-            page + " nav drifted from common.js NAV_LINKS. "
-            "common.js=" + repr(canonical) + " page=" + repr(mirrored)
-        )
+        assert _re.search(r'<script[^>]+src="[^"]*common\.js"', html), \
+            page + " does not load /static/js/common.js"
+        assert 'href="/static/css/common.css"' in html, \
+            page + " does not link /static/css/common.css"
+        assert 'class="navlink"' not in html, \
+            page + " still has hand-written .navlink nav markup"
 
 
 @test
-def test_index_html_nav_matches_common_js():
-    """index.html is React/JSX, so its mirror is a JS array, not markup."""
-    canonical = _canonical_nav()
-    html = _read_static("index.html")
-    body = html.split("Keep in sync with NAV_LINKS", 1)[1].split(".map(", 1)[0]
-    mirrored = _re.findall(r"\['(/[a-z]*)',\s*'([^']+)'\]", body)
-    assert mirrored == canonical, (
-        "index.html nav drifted from common.js NAV_LINKS. "
-        "common.js=" + repr(canonical) + " index.html=" + repr(mirrored)
-    )
+def test_nav_is_rendered_from_nav_links_only():
+    """NAV_LINKS is the single source: pages call initHeader, or (index.html,
+    which is React and must not let initHeader touch its DOM) read the array."""
+    # Match an actual CALL — `initHeader('/charts', …)` — not a prose mention of
+    # the name, which index.html legitimately contains in an explanatory comment.
+    call = _re.compile(r"initHeader\(\s*['\"]")
+    for page in ("today.html", "backtest.html", "scorecard.html", "journal.html",
+                 "admin.html", "charts.html", "report.html"):
+        html = _read_static(page)
+        assert call.search(html), page + " never calls initHeader('<path>')"
+    idx = _read_static("index.html")
+    assert "NAV_LINKS" in idx, "index.html no longer reads NAV_LINKS"
+    assert not call.search(idx), \
+        "index.html must NOT call initHeader — it uses innerHTML and fights React"
+    # The old hand-mirrored array must be gone for good.
+    assert not _re.search(r"\['/'\s*,\s*'Today'\]", idx), \
+        "index.html still carries the old hand-mirrored nav array"
 
 
 @test
 def test_every_nav_target_has_a_route():
     """A nav entry pointing at a route main.py does not serve is a dead link."""
-    main_src = open(
-        _os.path.join(_os.path.dirname(_STATIC), "main.py"), encoding="utf-8"
-    ).read()
-    for href, label in _canonical_nav():
-        assert ('@app.get("' + href + '")') in main_src, (
+    js = _read_static("js", "common.js")
+    body = js.split("const NAV_LINKS = [", 1)[1].split("];", 1)[0]
+    links = _re.findall(r"\['(/[a-z]*)',\s*'([^']+)'", body)
+    assert len(links) >= 6, links
+    with open(_os.path.join(_ROOT, "main.py"), encoding="utf-8") as fh:
+        main_src = fh.read()
+    for href, label in links:
+        assert ('@app.get("' + href + '")') in main_src, \
             "no route in main.py for " + href + " (" + label + ")"
-        )
 
 
 @test
-def test_all_topbars_share_one_palette():
-    """Clicking between pages must not change the header's look."""
-    bg, border = "#121215", "#232327"
-    for page in ("today.html", "backtest.html", "scorecard.html", "journal.html",
-                 "admin.html", "charts.html", "report.html", "index.html"):
+def test_palette_lives_only_in_common_css():
+    """The header palette must be defined once. Pages asserting the hexes
+    themselves is what let journal/admin drift to their own colours."""
+    css = _read_static("css", "common.css")
+    for token in ("#121215", "#232327", "#3fbf7f", "#e5484d"):
+        assert token in css, "common.css lost " + token
+    # No page may re-declare a .topbar background/border of its own.
+    for page in _SHARED_PAGES:
         html = _read_static(page)
-        assert bg in html, page + " topbar background is not " + bg
-        assert border in html, page + " topbar border is not " + border
+        block = html.split("<style>", 1)[-1].split("</style>", 1)[0]
+        for rule in _re.findall(r"\.topbar\s*\{([^}]*)\}", block):
+            assert "background" not in rule, \
+                page + " re-declares .topbar background; common.css owns it"
 
+
+@test
+def test_no_js_binding_collides_with_common_js():
+    """A page `const`/`let` that reuses ANY common.js top-level name is a fatal
+    SyntaxError — including over one of its `function`s, because a global
+    function declaration creates a non-configurable global property. This cost
+    two real outages during the refactor (`_tdChart`, `fmtPct`)."""
+    names = _common_js_top_level_names()
+    assert {"token", "authHdr", "NAV_LINKS", "_tdChart", "fmtPct"} <= names, names
+    for page in _SHARED_PAGES:
+        html = _read_static(page)
+        for blk in _re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>",
+                               html, _re.S):
+            # Column-0 / low-indent declarations are the ones sharing global scope.
+            for kw, name in _re.findall(
+                    r"^\s{0,6}(const|let)\s+([A-Za-z_$][\w$]*)", blk, _re.M):
+                assert name not in names, (
+                    page + " declares `" + kw + " " + name + "` which collides "
+                    "with a common.js top-level binding — this is a SyntaxError "
+                    "that blanks the page"
+                )
+
+
+@test
+def test_pages_compile_together_with_common_js():
+    """Definitive check: compile common.js + each page's inline script in one
+    scope, exactly as the browser does. Skips cleanly when node is absent."""
+    try:
+        _sp.run(["node", "--version"], capture_output=True, check=True, timeout=20)
+    except Exception:
+        return  # node not available in this environment; the static guards above still ran
+    common = _read_static("js", "common.js")
+    for page in _SHARED_PAGES:
+        html = _read_static(page)
+        blocks = _re.findall(
+            r"<script(?![^>]*\bsrc=)([^>]*)>(.*?)</script>", html, _re.S)
+        if any("text/babel" in attrs for attrs, _ in blocks):
+            continue  # JSX needs Babel; covered by the static guard above
+        combined = common + "\n;\n" + "\n".join(body for _, body in blocks)
+        # Must go through a UTF-8 file: the sources contain non-cp1252
+        # characters, and piping via stdin fails on Windows' default codec.
+        import tempfile
+        fd, tmp = tempfile.mkstemp(suffix=".js")
+        try:
+            with _os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(combined)
+            proc = _sp.run(["node", "--check", tmp],
+                           capture_output=True, text=True, timeout=60)
+        finally:
+            _os.unlink(tmp)
+        assert proc.returncode == 0, (
+            page + " does not compile alongside common.js:\n"
+            + (proc.stderr or "")[:600]
+        )
 
 # ──────────────────────────────────────────────────────────────────────────
 # Runner

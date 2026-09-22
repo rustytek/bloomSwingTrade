@@ -7,35 +7,31 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
+  <!-- Shared chrome: top-bar/nav/button styling + the nav builder. Both are the
+       single source of truth — do NOT re-inline their rules here. -->
+  <link rel="stylesheet" href="/static/css/common.css">
+  <script src="/static/js/common.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; background: #0d0d0d; color: #c8c8c8; font-family: 'Inter', sans-serif; font-size: 14px; }
 
     .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
-    /* ── Topbar ── */
-    .topbar { display: flex; align-items: center; gap: 10px; padding: 4px 16px; min-height: 44px; background: #121215; border-bottom: 1px solid #232327; flex-shrink: 0; flex-wrap: wrap; }
-    .logo { display: flex; align-items: center; gap: 8px; text-decoration: none; }
-    .logo-icon { width: 26px; height: 26px; background: #f0a500; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 800; color: #000; font-family: 'JetBrains Mono', monospace; }
-    .logo-text { font-weight: 700; font-size: 13px; letter-spacing: .08em; color: #fff; font-family: 'JetBrains Mono', monospace; }
-    .topbar-sep { width: 1px; height: 20px; background: #222; }
+    /* ── Topbar ──
+       The bar itself (.topbar .brand .topbar-sep .universe-status .topbar-left
+       .topbar-actions .username .btn .btn-primary .btn-active .hint) lives in
+       /static/css/common.css and is built by common.js::initHeader().
+       Kept here on purpose: this page is a fixed-height flex column
+       (.app { height:100vh; overflow:hidden }), so the bar must not shrink.
+       common.css has no flex-shrink rule because the other pages scroll. */
+    .topbar { flex-shrink: 0; }
     .topbar-title { font-size: 12px; color: #555; }
     .spacer { flex: 1; }
 
-    .btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 3px; border: none; font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; transition: opacity .15s, background .15s; white-space: nowrap; }
-    .btn:disabled { opacity: .4; cursor: not-allowed; }
-    .btn-primary { background: #f0a500; color: #000; }
-    .btn-primary:hover:not(:disabled) { opacity: .85; }
+    /* Page-specific button variants layered on common.css's .btn */
     .btn-ghost { background: #1a1a1a; color: #aaa; border: 1px solid #2a2a2a; }
-    .btn-ghost:hover:not(:disabled) { background: #222; }
+    .btn-ghost:hover:not(:disabled) { background: #222; color: #ddd; }
     .btn-chat { background: #1a2a3a; color: #4a9eff; border: 1px solid #1e3a5a; }
-    /* Canonical SwingTrader top-bar nav (shared look across all pages) */
-    .brand { font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 700; color: #fff; letter-spacing: 1px; text-decoration: none; white-space: nowrap; }
-    .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .navlink { display: inline-flex; align-items: center; padding: 5px 10px; border-radius: 3px; border: 1px solid #2a2a2f; background: #1a1a1e; color: #999; font-size: 11px; font-weight: 600; cursor: pointer; text-decoration: none; font-family: 'Inter', sans-serif; white-space: nowrap; }
-    .navlink:hover { color: #ddd; background: #222; }
-    .navlink.active { color: #f0a500; border-color: #3a2f10; background: #1c1810; }
-    .username { font-size: 11px; color: #555; }
     .btn-chat.active { background: #1e3a5a; border-color: #4a9eff; }
 
     /* ── Model selector dropdown ── */
@@ -163,39 +159,10 @@
 <body>
 <div class="app">
 
-  <!-- Topbar -->
-  <div class="topbar">
-    <a href="/" class="brand">▲ SWING TRADER</a>
-    <div class="topbar-sep"></div>
-    <!-- Page-specific controls (left, next to brand) -->
-    <span class="topbar-title">Daily Report</span>
-    <div class="model-select-wrap">
-      <span class="model-label">Report</span>
-      <select class="model-select" id="reportModelSelect" title="Model used to generate the report">
-        <option value="">Loading…</option>
-      </select>
-    </div>
-    <button class="btn btn-ghost" id="btnCopy" disabled>Copy MD</button>
-    <button class="btn btn-ghost" id="btnSave" disabled>Save .md</button>
-    <button class="btn btn-ghost" id="btnPrompts" title="Edit your own AI report &amp; chat prompts">&#x270E; Prompts</button>
-    <button class="btn btn-chat" id="btnToggleChat">&#x1F4AC; Chat</button>
-    <button class="btn btn-primary" id="btnGenerate">Generate Report</button>
-
-    <!-- Standard SwingTrader nav (right) -->
-    <div class="topbar-actions">
-      <!-- Keep in sync with NAV_LINKS in static/js/common.js. This page defines
-           its own `token`, so loading common.js would redeclare it; mirrored here. -->
-      <a href="/" class="navlink">Playbook</a>
-      <a href="/screener" class="navlink">Screener</a>
-      <a href="/charts" class="navlink">Charts</a>
-      <a href="/backtest" class="navlink">Strategy Lab</a>
-      <a href="/scorecard" class="navlink">Scorecard</a>
-      <a href="/report" class="navlink active">Report</a>
-      <a href="/journal" class="navlink">Journal</a>
-      <span id="username" class="username"></span>
-      <button id="logoutBtn" class="navlink" type="button">Logout</button>
-    </div>
-  </div>
+  <!-- Topbar — built entirely by common.js::initHeader('/report', TOPBAR_EXTRA):
+       brand, universe status, this page's controls, the shared nav, and Logout.
+       Do NOT hand-write nav links here; edit NAV_LINKS in static/js/common.js. -->
+  <div id="topbar" class="topbar"></div>
 
   <div class="body">
 
@@ -311,19 +278,29 @@
 
 <script>
   // ── Auth ──────────────────────────────────────────────────────────────────
-  const token = localStorage.getItem('st_token');
-  if (!token) window.location.href = '/login';
-  const authHdr = () => ({ 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' });
+  // token(), authHdr() and clearToken() come from /static/js/common.js.
+  // NOTE: common.js's `token` is a FUNCTION, not a string — always call it.
+  // NOTE: common.js's authHdr() returns ONLY { Authorization }. Requests that
+  // send a JSON body must add Content-Type themselves — use jsonHdr() below.
+  if (!token()) window.location.href = '/login';
+  function jsonHdr() { return { ...authHdr(), 'Content-Type': 'application/json' }; }
 
-  // ── Top-bar nav (logout + username) ────────────────────────────────────────
-  document.getElementById('logoutBtn').addEventListener('click', () => {
-    localStorage.removeItem('st_token');
-    window.location.href = '/login';
-  });
-  fetch('/auth/me', { headers: { 'Authorization': 'Bearer ' + token } })
-    .then(r => r.ok ? r.json() : null)
-    .then(u => { if (u) document.getElementById('username').textContent = u.username || ''; })
-    .catch(() => {});
+  // ── Page-specific top-bar controls ────────────────────────────────────────
+  // initHeader() injects this via innerHTML, so the elements below only exist
+  // (and can only be wired) once it resolves — see wireTopbar() / the init IIFE.
+  const TOPBAR_EXTRA = `
+    <span class="topbar-title">Daily Report</span>
+    <div class="model-select-wrap">
+      <span class="model-label">Report</span>
+      <select class="model-select" id="reportModelSelect" title="Model used to generate the report">
+        <option value="">Loading…</option>
+      </select>
+    </div>
+    <button class="btn btn-ghost" id="btnCopy" disabled>Copy MD</button>
+    <button class="btn btn-ghost" id="btnSave" disabled>Save .md</button>
+    <button class="btn btn-ghost" id="btnPrompts" title="Edit your own AI report &amp; chat prompts">&#x270E; Prompts</button>
+    <button class="btn btn-chat" id="btnToggleChat">&#x1F4AC; Chat</button>
+    <button class="btn btn-primary" id="btnGenerate">Generate Report</button>`;
 
   // ── State ─────────────────────────────────────────────────────────────────
   let currentMarkdown = '';
@@ -334,10 +311,7 @@
   let useReportCtx    = false;
 
   // ── Elements ──────────────────────────────────────────────────────────────
-  const btnGenerate       = document.getElementById('btnGenerate');
-  const btnSave           = document.getElementById('btnSave');
-  const btnCopy           = document.getElementById('btnCopy');
-  const btnToggleChat     = document.getElementById('btnToggleChat');
+  // Page body — present in the static markup, safe to resolve immediately.
   const btnClearChat      = document.getElementById('btnClearChat');
   const genStatus         = document.getElementById('genStatus');
   const emptyState        = document.getElementById('emptyState');
@@ -348,8 +322,10 @@
   const chatInput         = document.getElementById('chatInput');
   const chatSend          = document.getElementById('chatSend');
   const ctxReport         = document.getElementById('ctxReport');
-  const reportModelSelect = document.getElementById('reportModelSelect');
   const chatModelSelect   = document.getElementById('chatModelSelect');
+
+  // Top bar — injected by initHeader(); assigned in wireTopbar().
+  let btnGenerate, btnSave, btnCopy, btnToggleChat, reportModelSelect;
 
   // ── marked: links open in new tab ─────────────────────────────────────────
   const renderer = new marked.Renderer();
@@ -423,15 +399,7 @@
     }
   }
 
-  reportModelSelect.addEventListener('change', () => localStorage.setItem('st_report_model', reportModelSelect.value));
-  chatModelSelect.addEventListener('change',   () => localStorage.setItem('st_chat_model',   chatModelSelect.value));
-
-  // ── Chat panel toggle ─────────────────────────────────────────────────────
-  btnToggleChat.addEventListener('click', () => {
-    chatOpen = !chatOpen;
-    chatPanel.classList.toggle('hidden', !chatOpen);
-    btnToggleChat.classList.toggle('active', chatOpen);
-  });
+  chatModelSelect.addEventListener('change', () => localStorage.setItem('st_chat_model', chatModelSelect.value));
 
   // ── Context toggles ───────────────────────────────────────────────────────
   ctxReport.addEventListener('click', () => {
@@ -493,7 +461,7 @@
 
     try {
       const res = await fetch('/api/ai/market-chat', {
-        method: 'POST', headers: authHdr(),
+        method: 'POST', headers: jsonHdr(),
         body: JSON.stringify({
           question,
           report_context: useReportCtx && currentMarkdown ? currentMarkdown : null,
@@ -569,7 +537,7 @@
   }
 
   // ── Generate ──────────────────────────────────────────────────────────────
-  btnGenerate.addEventListener('click', async () => {
+  async function generateReport() {
     if (generating) return;
     generating = true;
     btnGenerate.disabled = true;
@@ -586,7 +554,7 @@
 
     try {
       const res = await fetch('/api/ai/daily-report', {
-        method: 'POST', headers: authHdr(),
+        method: 'POST', headers: jsonHdr(),
         body: JSON.stringify({ model: reportModelSelect.value || undefined }),
       });
       if (!res.ok) {
@@ -608,19 +576,19 @@
       btnGenerate.disabled = false;
       btnGenerate.innerHTML = 'Generate Report';
     }
-  });
+  }
 
   // ── Save / Copy ───────────────────────────────────────────────────────────
-  btnSave.addEventListener('click', () => {
+  function saveMarkdown() {
     if (!currentMarkdown) return;
     const a = Object.assign(document.createElement('a'), {
       href: URL.createObjectURL(new Blob([currentMarkdown], { type: 'text/markdown' })),
       download: (currentDate || 'report') + '_market_analysis.md',
     });
     a.click(); URL.revokeObjectURL(a.href);
-  });
+  }
 
-  btnCopy.addEventListener('click', async () => {
+  async function copyMarkdown() {
     if (!currentMarkdown) return;
     try {
       await navigator.clipboard.writeText(currentMarkdown);
@@ -628,7 +596,7 @@
       btnCopy.textContent = 'Copied!';
       setTimeout(() => btnCopy.textContent = orig, 1500);
     } catch {}
-  });
+  }
 
   // ── AI Prompts editor ───────────────────────────────────────────────────
   const promptsModal  = document.getElementById('promptsModal');
@@ -671,7 +639,7 @@
     };
     promptsMsg.textContent = 'Saving…'; promptsMsg.style.color = '#888';
     try {
-      const res = await fetch('/api/ai/prompts', { method: 'PUT', headers: authHdr(), body: JSON.stringify(body) });
+      const res = await fetch('/api/ai/prompts', { method: 'PUT', headers: jsonHdr(), body: JSON.stringify(body) });
       if (!res.ok) throw new Error(await res.text());
       const d = await res.json();
       setPromptState(reportStateEl, d.report.custom != null);
@@ -683,7 +651,6 @@
     }
   }
 
-  document.getElementById('btnPrompts').addEventListener('click', openPrompts);
   document.getElementById('promptsClose').addEventListener('click', closePrompts);
   document.getElementById('promptsCancel').addEventListener('click', closePrompts);
   document.getElementById('promptsSave').addEventListener('click', savePrompts);
@@ -691,12 +658,42 @@
   document.getElementById('chatReset').addEventListener('click', () => { chatPromptEl.value = PROMPT_DEFAULTS.chat; });
   promptsModal.addEventListener('click', (e) => { if (e.target === promptsModal) closePrompts(); });
 
+  // ── Top-bar wiring ────────────────────────────────────────────────────────
+  // Resolves the controls initHeader() injected and attaches their listeners.
+  // Must run AFTER initHeader(), and before loadModels() (which fills
+  // #reportModelSelect) or renderMarkdown() (which enables Save/Copy).
+  function wireTopbar() {
+    btnGenerate       = document.getElementById('btnGenerate');
+    btnSave           = document.getElementById('btnSave');
+    btnCopy           = document.getElementById('btnCopy');
+    btnToggleChat     = document.getElementById('btnToggleChat');
+    reportModelSelect = document.getElementById('reportModelSelect');
+
+    btnGenerate.addEventListener('click', generateReport);
+    btnSave.addEventListener('click', saveMarkdown);
+    btnCopy.addEventListener('click', copyMarkdown);
+    document.getElementById('btnPrompts').addEventListener('click', openPrompts);
+    reportModelSelect.addEventListener('change', () => localStorage.setItem('st_report_model', reportModelSelect.value));
+
+    // Chat panel toggle
+    btnToggleChat.addEventListener('click', () => {
+      chatOpen = !chatOpen;
+      chatPanel.classList.toggle('hidden', !chatOpen);
+      btnToggleChat.classList.toggle('active', chatOpen);
+    });
+  }
+
   // ── Init ──────────────────────────────────────────────────────────────────
-  (async () => {
-    await loadModels();
-    await loadHistory();
-    await loadLatest();
-  })();
+  // initHeader() never rejects (it swallows its own fetch errors); the .catch()
+  // just guarantees the page still boots if that ever changes.
+  initHeader('/report', TOPBAR_EXTRA)
+    .catch(() => {})
+    .then(async () => {
+      wireTopbar();
+      await loadModels();
+      await loadHistory();
+      await loadLatest();
+    });
 </script>
 </body>
 </html>

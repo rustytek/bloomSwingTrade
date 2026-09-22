@@ -1,0 +1,73 @@
+/* SwingTrader — shared chrome.
+ *
+ * The single source of truth for the top bar, nav buttons, tooltips, the
+ * ticker-detail modal and a few text primitives. Every page links this, so a
+ * header change lands everywhere at once.
+ *
+ * WHY THIS FILE EXISTS: charts.html, report.html and index.html used to carry
+ * hand-written copies of the nav markup AND its CSS. Both drifted — the pages
+ * still said "Today" and "Backtest", had no Scorecard link, and sat on an
+ * older palette (#111/#1a1a1a), so moving between tabs visibly jumped between
+ * two different-looking apps. Markup is now shared via static/js/common.js and
+ * styling via this file. Do not re-inline these rules into a page.
+ *
+ * Pairs with static/js/common.js — `buildTopbar()` and `_ensureModal()` emit
+ * exactly the classes defined here. test_passes.py guards the pairing.
+ */
+
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
+.topbar { min-height:44px; background:#121215; border-bottom:1px solid #232327; display:flex; align-items:center; padding:0 16px; gap:12px; position:sticky; top:0; z-index:10; flex-wrap:wrap; }
+.brand { font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:700; color:#fff; letter-spacing:1px; text-decoration:none; white-space:nowrap; }
+.topbar-sep { width:1px; height:20px; background:#232327; flex-shrink:0; }
+.universe-status { display:flex; align-items:center; gap:6px; min-width:0; }
+.universe-text { font-size:11px; color:#444; white-space:nowrap; }
+.universe-text.loading { color:#f0a500; }
+.data-time { font-size:10px; color:#555; margin-left:8px; white-space:nowrap; }
+.topbar-left { display:flex; align-items:center; gap:8px; }
+.topbar-actions { margin-left:auto; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.username { font-size:11px; color:#555; }
+
+/* ── Buttons / nav links ─────────────────────────────────────────────────── */
+.btn { display:inline-flex; align-items:center; gap:5px; padding:5px 10px; border-radius:3px; border:1px solid #2a2a2f; background:#1a1a1e; color:#999; font-size:11px; font-weight:600; cursor:pointer; text-decoration:none; font-family:'Inter',sans-serif; white-space:nowrap; }
+.btn:hover { color:#ddd; background:#232327; }
+.btn-active { color:#f0a500; border-color:#3a2f10; background:#1c1810; }
+.btn-primary { background:#f0a500; color:#000; border-color:#f0a500; }
+.btn-primary:hover { background:#ffb71a; color:#000; }
+.btn[disabled], .btn:disabled { opacity:.42; cursor:not-allowed; }
+.btn-sm { padding:3px 8px; font-size:10px; }
+
+/* ── Tooltips (data-tip) ─────────────────────────────────────────────────── */
+.hint { position:relative; }
+/* Base tooltip sits ABOVE its trigger. */
+/* letter-spacing/text-transform are reset because triggers are often uppercase,
+   letter-spaced labels and the tooltip must not inherit that. */
+.hint::after { content:attr(data-tip); position:absolute; left:50%; bottom:calc(100% + 9px); transform:translateX(-50%); display:none; width:min(300px,70vw); padding:8px 10px; background:#1e1e22; border:1px solid #333; border-radius:4px; color:#d8d8d8; font-size:11px; font-weight:400; line-height:1.45; letter-spacing:0; text-transform:none; white-space:normal; box-shadow:0 6px 18px #000c; z-index:200; pointer-events:none; text-align:left; }
+/* ...except in the top bar, where "above" would render off-screen. */
+.topbar .hint::after { top:calc(100% + 9px); bottom:auto; }
+.hint:hover::after, .hint:focus-within::after { display:block; }
+
+/* ── Ticker links (CLAUDE.md "Ticker Symbols — Universal Rule") ───────────── */
+.ticker-link { color:#f0a500; cursor:pointer; font-family:'JetBrains Mono',monospace; font-weight:700; }
+.ticker-link:hover { text-decoration:underline; }
+
+/* ── Shared ticker-detail modal (emitted by common.js::_ensureModal) ─────── */
+.modal { position:fixed; inset:0; background:rgba(0,0,0,.76); display:none; align-items:center; justify-content:center; z-index:100; padding:20px; }
+.modal-card { width:min(980px,96vw); max-height:88vh; overflow:auto; background:#121215; border:1px solid #2a2a2f; border-radius:6px; box-shadow:0 18px 60px #000; }
+.modal-head { display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid #232327; position:sticky; top:0; background:#121215; z-index:2; }
+.modal-body { padding:16px; display:grid; grid-template-columns:1.2fr .8fr; gap:16px; }
+.modal-body table { width:100%; border-collapse:collapse; }
+.modal-body td { padding:4px 6px; border-bottom:1px solid #1e1e22; font-size:12px; }
+.chart-wrap { height:300px; }
+.icon-btn { margin-left:auto; background:#1a1a1e; color:#888; border:1px solid #2a2a2f; border-radius:4px; padding:4px 10px; cursor:pointer; }
+
+/* ── Text primitives ─────────────────────────────────────────────────────── */
+.muted { color:#777; }
+.mono { font-family:'JetBrains Mono',monospace; }
+.up { color:#3fbf7f; }
+.down { color:#e5484d; }
+.error { color:#e5484d; font-size:12px; }
+
+@media (max-width:760px) {
+  .modal-body { grid-template-columns:1fr; }
+  .universe-status { display:none; }
+}

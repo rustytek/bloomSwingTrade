@@ -6,33 +6,13 @@
   <title>SwingTrader — Users</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/common.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { background:#0d0d0d; color:#d8d8d8; font-family:'Inter',sans-serif; font-size:14px; line-height:1.5; }
-    .topbar { min-height:44px; background:#121215; border-bottom:1px solid #232327; display:flex; align-items:center; padding:0 16px; gap:12px; position:sticky; top:0; z-index:10; flex-wrap:wrap; }
-    .brand { font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:700; color:#fff; letter-spacing:1px; text-decoration:none; white-space:nowrap; }
-    .topbar-sep { width:1px; height:20px; background:#222; flex-shrink:0; }
-    .universe-status { display:flex; align-items:center; gap:6px; min-width:0; }
-    .universe-text { font-size:11px; color:#444; white-space:nowrap; }
-    .universe-text.loading { color:#f0a500; }
-    .data-time { font-size:10px; color:#555; margin-left:8px; white-space:nowrap; }
-    .topbar-actions { margin-left:auto; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-    .topbar-left { display:flex; align-items:center; gap:8px; }
-    .username { font-size:11px; color:#555; }
-    .btn { display:inline-flex; align-items:center; gap:5px; padding:5px 10px; border-radius:3px; border:1px solid #2a2a2a; background:#1a1a1a; color:#999; font-size:11px; font-weight:600; cursor:pointer; text-decoration:none; font-family:'Inter',sans-serif; }
-    .btn:hover { color:#ddd; background:#222; }
-    .btn-active { color:#f0a500; border-color:#3a2f10; background:#1c1810; }
-    .btn-primary { background:#f0a500; color:#000; border-color:#f0a500; }
     .btn-danger { color:#ff6b6b; border-color:#4a1414; }
     .btn-danger:hover { background:#2a0d0d; color:#ff8a8a; }
-    .btn-sm { padding:3px 8px; font-size:10px; }
-    .hint { position:relative; }
-    .hint::after { content:attr(data-tip); position:absolute; left:50%; bottom:calc(100% + 9px); transform:translateX(-50%); display:none; width:min(280px,70vw); padding:8px 10px; background:#1e1e1e; border:1px solid #333; border-radius:4px; color:#d8d8d8; font-size:11px; font-weight:400; line-height:1.45; white-space:normal; box-shadow:0 6px 18px #000c; z-index:200; pointer-events:none; }
-    .hint:hover::after, .hint:focus-within::after { display:block; }
-    .topbar .hint::after { top:calc(100% + 9px); bottom:auto; }
-    .page { max-width:1100px; margin:0 auto; padding:18px; display:flex; flex-direction:column; gap:16px; }
-    .mono { font-family:'JetBrains Mono',monospace; }
-    .muted { color:#777; } .up { color:#26a65b; } .down { color:#e05252; } .warn { color:#f0a500; }
+    .page { max-width:1100px; margin:0 auto; padding:18px; display:flex; flex-direction:column; gap:16px; } .warn { color:#f0a500; }
     .panel { background:#111; border:1px solid #1e1e1e; border-radius:6px; padding:16px; }
     .panel-title { font-size:13px; color:#ccc; font-weight:700; margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em; }
     .panel-desc { color:#777; font-size:12px; margin-bottom:12px; }
@@ -43,7 +23,7 @@
     .badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:3px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
     .badge.admin { background:#1c1810; color:#f0a500; border:1px solid #3a3110; }
     .badge.keyset { background:#0e1b0e; color:#4ec27a; border:1px solid #1d3a1d; }
-    .badge.nokey { background:#1a1a1a; color:#888; border:1px solid #2a2a2a; }
+    .badge.nokey { background:#1a1a1e; color:#888; border:1px solid #2a2a2f; }
     .row-actions { display:flex; gap:6px; justify-content:flex-end; }
     /* Forms */
     .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
@@ -53,12 +33,11 @@
     .check-row { display:flex; align-items:center; gap:8px; margin-bottom:12px; font-size:12px; color:#bbb; }
     .check-row input { width:16px; height:16px; accent-color:#f0a500; }
     .form-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:6px; }
-    .error { color:#e05252; font-size:12px; min-height:16px; }
+    .error { color:#e5484d; font-size:12px; min-height:16px; }
     .ok-msg { color:#4ec27a; font-size:12px; min-height:16px; }
     .empty { color:#666; font-size:12px; padding:14px; text-align:center; }
     /* Modal */
-    .modal { position:fixed; inset:0; background:rgba(0,0,0,.72); display:none; align-items:center; justify-content:center; z-index:100; padding:20px; }
-    .form-card { width:min(460px,96vw); background:#111; border:1px solid #2a2a2a; border-radius:6px; padding:18px; }
+    .form-card { width:min(460px,96vw); background:#121215; border:1px solid #2a2a2f; border-radius:6px; padding:18px; }
     @media (max-width:700px){ .grid2{ grid-template-columns:1fr; } }
   </style>
 </head>

@@ -8,32 +8,20 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <!-- Shared chrome: top-bar/nav/button/ticker-link styling + the nav builder.
+       Both are the single source of truth — do NOT re-inline their rules here. -->
+  <link rel="stylesheet" href="/static/css/common.css">
+  <script src="/static/js/common.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { background: #0d0d0d; color: #d8d8d8; font-family: 'Inter', sans-serif; font-size: 14px; line-height: 1.5; }
 
-    /* ── Topbar ── */
-    .topbar { display: flex; align-items: center; gap: 10px; padding: 4px 16px; min-height: 44px; background: #121215; border-bottom: 1px solid #232327; flex-shrink: 0; position: sticky; top: 0; z-index: 50; flex-wrap: wrap; }
-    .logo { display: flex; align-items: center; gap: 8px; text-decoration: none; }
-    .logo-icon { width: 28px; height: 28px; background: #f0a500; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 800; color: #000; font-family: 'JetBrains Mono', monospace; }
-    .logo-text { font-weight: 700; font-size: 14px; letter-spacing: .08em; color: #fff; font-family: 'JetBrains Mono', monospace; }
-    .topbar-sep { width: 1px; height: 22px; background: #282828; }
+    /* ── Topbar ──
+       The top bar itself (.topbar .brand .topbar-sep .universe-status
+       .topbar-left .topbar-actions .username .btn .btn-primary .btn-active
+       .hint) lives in /static/css/common.css and is built by
+       common.js::initHeader(). Only page-specific bar controls are styled here. */
     .topbar-title { font-size: 13px; color: #777; }
-    .spacer { flex: 1; }
-
-    .btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 3px; border: none; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; text-decoration: none; white-space: nowrap; transition: opacity .15s; }
-    .btn-ghost { background: transparent; color: #999; border: 1px solid #2a2a2a; }
-    .btn-ghost:hover { background: #1a1a1a; color: #ddd; }
-    /* Canonical SwingTrader top-bar nav (shared look across all pages) */
-    .brand { font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 700; color: #fff; letter-spacing: 1px; text-decoration: none; white-space: nowrap; }
-    .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .navlink { display: inline-flex; align-items: center; padding: 5px 10px; border-radius: 3px; border: 1px solid #2a2a2f; background: #1a1a1e; color: #999; font-size: 11px; font-weight: 600; cursor: pointer; text-decoration: none; font-family: 'Inter', sans-serif; white-space: nowrap; }
-    .navlink:hover { color: #ddd; background: #222; }
-    .navlink.active { color: #f0a500; border-color: #3a2f10; background: #1c1810; }
-    .username { font-size: 11px; color: #555; }
-    .btn-primary { background: #f0a500; color: #000; }
-    .btn-primary:hover { opacity: .85; }
-    .btn-active { background: #f0a500 !important; color: #000 !important; }
     .period-group { display: flex; gap: 2px; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 4px; padding: 2px; }
     .period-btn { padding: 3px 10px; border-radius: 3px; border: none; font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; background: transparent; color: #888; transition: all .15s; }
     .period-btn.active { background: #f0a500; color: #000; }
@@ -55,10 +43,8 @@
     .stat-value { font-size: 22px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #e0e0e0; }
     .stat-sub { font-size: 12px; color: #888; margin-top: 4px; }
     .stat-help { font-size: 11px; color: #666; line-height: 1.45; margin-top: 9px; padding-top: 9px; border-top: 1px solid #1a1a1a; }
-    .up { color: #26a65b; }
-    .down { color: #e05252; }
+    /* .up / .down / .muted / .mono now come from /static/css/common.css */
     .warn { color: #f0a500; }
-    .muted { color: #888; }
 
     /* ── Chart panels ── */
     .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -88,7 +74,6 @@
     .etf-table th { padding: 5px 8px; text-align: left; font-size: 11px; color: #666; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid #1e1e1e; }
     .etf-table td { padding: 6px 8px; border-bottom: 1px solid #141414; }
     .etf-table tr:hover td { background: #161616; }
-    .mono { font-family: 'JetBrains Mono', monospace; }
     .ret-cell { font-family: 'JetBrains Mono', monospace; font-size: 11px; }
 
     /* ── Wyckoff phase card ── */
@@ -129,9 +114,7 @@
     .tag-warn  { background: #2a1a00; color: #f0a500; }
     .tag-info  { background: #0a1a2a; color: #7eb8f5; }
 
-    /* ── Ticker link ── */
-    .ticker-link { color: #f0a500; text-decoration: none; font-weight: 600; cursor: pointer; font-family: 'JetBrains Mono', monospace; }
-    .ticker-link:hover { text-decoration: underline; color: #ffc233; }
+    /* .ticker-link lives in /static/css/common.css (CLAUDE.md universal rule) */
 
     /* ── Info icon ── */
     .info-icon { display: inline-block; width: 14px; height: 14px; background: #222; border: 1px solid #333; border-radius: 50%; font-size: 9px; text-align: center; line-height: 14px; color: #666; cursor: help; margin-left: 5px; vertical-align: middle; }
@@ -154,42 +137,11 @@
 </head>
 <body>
 
-<!-- ── Topbar ─────────────────────────────────────────────────────────────── -->
-<div class="topbar">
-  <a href="/" class="brand">▲ SWING TRADER</a>
-  <div class="topbar-sep"></div>
-  <!-- Page-specific controls (left, next to brand) -->
-  <span class="topbar-title">Market Charts</span>
-  <!-- Period buttons (apply to all LW Charts) -->
-  <div class="period-group" id="periodGroup">
-    <button class="period-btn" data-days="7">7D</button>
-    <button class="period-btn" data-days="14">14D</button>
-    <button class="period-btn active" data-days="30">30D</button>
-    <button class="period-btn" data-days="90">90D</button>
-    <button class="period-btn" data-days="182">6M</button>
-    <button class="period-btn" data-days="365">1Y</button>
-    <button class="period-btn" data-days="0">All</button>
-  </div>
-  <!-- SPY Toggle -->
-  <button class="spy-toggle on" id="spyToggle">SPY Benchmark</button>
-  <span id="lastUpdatedBadge" style="font-size:10px;color:#555;display:none;">Updated: <span id="lastUpdatedTime"></span></span>
-  <button class="btn btn-primary" id="btnRefresh">↻ Refresh</button>
-  <!-- Standard SwingTrader nav (right) -->
-  <div class="topbar-actions">
-    <!-- Keep in sync with NAV_LINKS in static/js/common.js. This page cannot load
-         common.js (it defines its own api/esc/token/safeTicker/openTickerDetail,
-         which would redeclare and break the script), so the list is mirrored. -->
-    <a href="/" class="navlink">Playbook</a>
-    <a href="/screener" class="navlink">Screener</a>
-    <a href="/charts" class="navlink active">Charts</a>
-    <a href="/backtest" class="navlink">Strategy Lab</a>
-    <a href="/scorecard" class="navlink">Scorecard</a>
-    <a href="/report" class="navlink">Report</a>
-    <a href="/journal" class="navlink">Journal</a>
-    <span id="username" class="username"></span>
-    <button id="logoutBtn" class="navlink" type="button">Logout</button>
-  </div>
-</div>
+<!-- ── Topbar ───────────────────────────────────────────────────────────────
+     Built entirely by common.js::initHeader('/charts', TOPBAR_EXTRA) — brand,
+     universe status, this page's own controls, the shared nav, and Logout.
+     Do NOT hand-write nav links here; edit NAV_LINKS in static/js/common.js. -->
+<div id="topbar" class="topbar"></div>
 
 <!-- ── Page ───────────────────────────────────────────────────────────────── -->
 <div class="page" id="page">
@@ -590,21 +542,34 @@
 'use strict';
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
+// Kept instead of common.js's api(): this page surfaces the HTTP status in the
+// error message ("404: ...") and several catch blocks render that text, so the
+// error semantics differ. 401 handling matches common.js (redirect to /login).
 async function apiFetch(url) {
-  const token = localStorage.getItem('st_token');
-  if (!token) { window.location.href = '/login'; throw new Error('Not authenticated'); }
-  const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (resp.status === 401) { window.location.href = '/login'; throw new Error('Session expired'); }
+  if (!token()) { window.location.href = '/login'; throw new Error('Not authenticated'); }
+  const resp = await fetch(url, { headers: authHdr() });
+  if (resp.status === 401) { clearToken(); window.location.href = '/login'; throw new Error('Session expired'); }
   if (!resp.ok) { const t = await resp.text(); throw new Error(`${resp.status}: ${t}`); }
   return resp.json();
 }
 
-// ── Top-bar nav (logout + username) ───────────────────────────────────────────
-document.getElementById('logoutBtn').addEventListener('click', () => {
-  localStorage.removeItem('st_token');
-  window.location.href = '/login';
-});
-apiFetch('/auth/me').then(u => { document.getElementById('username').textContent = u.username || ''; }).catch(() => {});
+// ── Page-specific top-bar controls ───────────────────────────────────────────
+// initHeader() injects this via innerHTML, so every listener below is attached
+// only AFTER it resolves (see the init block at the bottom of this script).
+const TOPBAR_EXTRA = `
+  <span class="topbar-title">Market Charts</span>
+  <div class="period-group" id="periodGroup">
+    <button class="period-btn" data-days="7">7D</button>
+    <button class="period-btn" data-days="14">14D</button>
+    <button class="period-btn active" data-days="30">30D</button>
+    <button class="period-btn" data-days="90">90D</button>
+    <button class="period-btn" data-days="182">6M</button>
+    <button class="period-btn" data-days="365">1Y</button>
+    <button class="period-btn" data-days="0">All</button>
+  </div>
+  <button class="spy-toggle on" id="spyToggle">SPY Benchmark</button>
+  <span id="lastUpdatedBadge" style="font-size:10px;color:#555;display:none;">Updated: <span id="lastUpdatedTime"></span></span>
+  <button class="btn btn-primary" id="btnRefresh">↻ Refresh</button>`;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let globalPeriodDays = 30;    // current LW chart visible period
@@ -662,22 +627,35 @@ function applyPeriodToAll(days) {
   });
 }
 
-document.getElementById('periodGroup').addEventListener('click', e => {
-  const btn = e.target.closest('.period-btn');
-  if (!btn) return;
-  document.querySelectorAll('#periodGroup .period-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  globalPeriodDays = parseInt(btn.dataset.days);
-  applyPeriodToAll(globalPeriodDays);
-});
+// Wires every control that initHeader() injected into the top bar.
+// Called once, after initHeader() resolves.
+function wireTopbarControls() {
+  // Period buttons (apply to all LW charts)
+  document.getElementById('periodGroup').addEventListener('click', e => {
+    const btn = e.target.closest('.period-btn');
+    if (!btn) return;
+    document.querySelectorAll('#periodGroup .period-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    globalPeriodDays = parseInt(btn.dataset.days);
+    applyPeriodToAll(globalPeriodDays);
+  });
 
-// ── SPY Toggle ────────────────────────────────────────────────────────────────
-document.getElementById('spyToggle').addEventListener('click', function() {
-  showSPY = !showSPY;
-  this.textContent = 'SPY Benchmark';
-  this.className = 'spy-toggle ' + (showSPY ? 'on' : 'off');
-  renderPerfChart();
-});
+  // SPY benchmark toggle
+  document.getElementById('spyToggle').addEventListener('click', function() {
+    showSPY = !showSPY;
+    this.textContent = 'SPY Benchmark';
+    this.className = 'spy-toggle ' + (showSPY ? 'on' : 'off');
+    renderPerfChart();
+  });
+
+  // Refresh
+  document.getElementById('btnRefresh').addEventListener('click', () => {
+    allLWCharts = [];
+    histories = {};
+    document.querySelectorAll('.lw-chart').forEach(el => { el.innerHTML = ''; });
+    init();
+  });
+}
 
 // ── Source selector ───────────────────────────────────────────────────────────
 function setSource(src) {
@@ -705,11 +683,7 @@ function fmtRet(v, digits = 2) {
   const cls = v > 0 ? 'up' : v < 0 ? 'down' : 'muted';
   return `<span class="${cls}">${v > 0 ? '+' : ''}${v.toFixed(digits)}%</span>`;
 }
-function esc(value) {
-  return String(value ?? '').replace(/[&<>"']/g, ch => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[ch]));
-}
+// esc() and safeTicker() come from /static/js/common.js — identical implementations.
 function renderStatCards(cards) {
   return cards.map(c => `<div class="stat-card" title="${esc(c.tip || c.help || '')}">
     <div class="stat-label">${esc(c.label)}</div>
@@ -717,9 +691,6 @@ function renderStatCards(cards) {
     <div class="stat-sub">${c.sub}</div>
     ${c.help ? `<div class="stat-help">${c.help}</div>` : ''}
   </div>`).join('');
-}
-function safeTicker(value) {
-  return String(value ?? '').toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 15);
 }
 function retColor(v) {
   if (v == null) return '#1a1a1a';
@@ -1350,9 +1321,10 @@ async function renderWyckoffSignals(tickers) {
   // Fetch screener data to get vol_r (today's volume ÷ prior 20-day average) and chg_pct
   try {
     const body = JSON.stringify({ tickers });
-    const token = localStorage.getItem('st_token');
+    // authHdr() (common.js) supplies only Authorization — this POST sends JSON,
+    // so Content-Type has to be set explicitly here.
     const resp = await fetch('/api/screener', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      method: 'POST', headers: { ...authHdr(), 'Content-Type': 'application/json' },
       body,
     });
     if (!resp.ok) throw new Error(`${resp.status}`);
@@ -1432,11 +1404,18 @@ function buildWyckoffCharts() {
 let _tdStock = null;
 let _tdHistory = null;
 let _tdTab = 'chart';
-let _tdChart = null;   // LightweightCharts instance inside the modal
+// NOTE: named _tdLwChart, not _tdChart — common.js already declares a top-level
+// `let _tdChart` for its own (Chart.js) modal, and a second `let` of the same
+// name in this script block would be a SyntaxError that kills the whole page.
+let _tdLwChart = null;   // LightweightCharts instance inside the modal
 
+/* This page deliberately overrides common.js's openTickerDetail/closeTickerModal
+   with its own richer tabbed modal (Chart / Metrics / Signals) documented in
+   CLAUDE.md. Legal and intentional: these are function declarations in a script
+   block evaluated after common.js, so the last definition wins. */
 function closeTickerModal() {
   document.getElementById('tdModal').style.display = 'none';
-  if (_tdChart) { try { _tdChart.remove(); } catch(e){} _tdChart = null; }
+  if (_tdLwChart) { try { _tdLwChart.remove(); } catch(e){} _tdLwChart = null; }
   _tdStock = null; _tdHistory = null;
 }
 
@@ -1461,7 +1440,7 @@ async function openTickerDetail(ticker) {
   _tdStock = null; _tdHistory = null; _tdTab = 'chart';
   document.querySelectorAll('.td-tab').forEach(b => b.classList.remove('active-tab'));
   document.getElementById('tdTab-chart')?.classList.add('active-tab');
-  if (_tdChart) { try { _tdChart.remove(); } catch(e){} _tdChart = null; }
+  if (_tdLwChart) { try { _tdLwChart.remove(); } catch(e){} _tdLwChart = null; }
 
   try {
     const [stock, hist] = await Promise.all([
@@ -1510,8 +1489,8 @@ function _renderTdBody() {
       // Price / candle chart
       const chartEl = document.getElementById('tdPriceChart');
       if (chartEl && _tdHistory?.length) {
-        if (_tdChart) { try { _tdChart.remove(); } catch(e){} }
-        _tdChart = LightweightCharts.createChart(chartEl, {
+        if (_tdLwChart) { try { _tdLwChart.remove(); } catch(e){} }
+        _tdLwChart = LightweightCharts.createChart(chartEl, {
           width: chartEl.clientWidth, height: 280,
           layout: { background: { color: '#111' }, textColor: '#999' },
           grid: { vertLines: { color: '#1a1a1a' }, horzLines: { color: '#1a1a1a' } },
@@ -1519,7 +1498,7 @@ function _renderTdBody() {
           timeScale: { borderColor: '#1e1e1e' },
           crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
         });
-        const candle = _tdChart.addCandlestickSeries({
+        const candle = _tdLwChart.addCandlestickSeries({
           upColor: '#26a65b', downColor: '#e05252',
           borderUpColor: '#26a65b', borderDownColor: '#e05252',
           wickUpColor: '#26a65b', wickDownColor: '#e05252',
@@ -1530,15 +1509,15 @@ function _renderTdBody() {
         const ma50vals = _tdIndicators?.ma50;
         const ma200vals = _tdIndicators?.ma200;
         if (ma50vals?.length) {
-          const ma50s = _tdChart.addLineSeries({ color: '#7eb8f5', lineWidth: 1, title: 'MA50' });
+          const ma50s = _tdLwChart.addLineSeries({ color: '#7eb8f5', lineWidth: 1, title: 'MA50' });
           ma50s.setData(_tdHistory.map((b,i) => ({ time: b.date, value: ma50vals[i] })).filter(d => d.value != null));
         }
         if (ma200vals?.length) {
-          const ma200s = _tdChart.addLineSeries({ color: '#f0a500', lineWidth: 1, title: 'MA200' });
+          const ma200s = _tdLwChart.addLineSeries({ color: '#f0a500', lineWidth: 1, title: 'MA200' });
           ma200s.setData(_tdHistory.map((b,i) => ({ time: b.date, value: ma200vals[i] })).filter(d => d.value != null));
         }
-        _tdChart.timeScale().fitContent();
-        new ResizeObserver(() => _tdChart?.applyOptions({ width: chartEl.clientWidth })).observe(chartEl);
+        _tdLwChart.timeScale().fitContent();
+        new ResizeObserver(() => _tdLwChart?.applyOptions({ width: chartEl.clientWidth })).observe(chartEl);
       }
 
       // RSI mini chart (canvas)
@@ -1719,14 +1698,14 @@ async function init() {
   buildWyckoffCharts();
 }
 
-document.getElementById('btnRefresh').addEventListener('click', () => {
-  allLWCharts = [];
-  histories = {};
-  document.querySelectorAll('.lw-chart').forEach(el => { el.innerHTML = ''; });
-  init();
-});
-
-init();
+// initHeader() injects the top bar (brand + nav + this page's controls) via
+// innerHTML, so the controls must be wired — and init() must run, since
+// loadMacro() writes into #lastUpdatedBadge — only after it settles.
+// initHeader never rejects (it swallows its own fetch errors), but .catch()
+// keeps a future change from stranding the page.
+initHeader('/charts', TOPBAR_EXTRA)
+  .catch(() => {})
+  .then(() => { wireTopbarControls(); init(); });
 </script>
 </body>
 </html>

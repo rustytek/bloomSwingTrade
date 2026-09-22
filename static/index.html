@@ -15,6 +15,12 @@
   <link
     href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap"
     rel="stylesheet">
+  <!-- Shared chrome: top-bar/button/tooltip styling and NAV_LINKS. common.js
+       must load BEFORE the text/babel block below, which reads NAV_LINKS as
+       data. See the "Auth" note in that block for the name collisions this
+       file creates and how they are resolved. -->
+  <link rel="stylesheet" href="/static/css/common.css">
+  <script src="/static/js/common.js"></script>
   <style>
     *,
     *::before,
@@ -196,12 +202,24 @@
     const { useState, useEffect, useRef, useCallback, useMemo } = React;
     const { createPortal } = ReactDOM;
 
-    /* ── Auth ── */
+    /* ── Auth ──
+       This page loads /static/js/common.js (for NAV_LINKS + shared chrome).
+       Babel standalone appends the transpiled code as a real <script>, so its
+       top-level `const`s share global lexical scope with common.js — a name
+       declared in both is a SyntaxError that blanks the whole app. Resolution:
+         • `clearToken`  — identical semantics, so the local copy is DELETED and
+                           common.js's is used.
+         • `authHdr`     — NOT identical: common.js's returns only
+                           { Authorization }. This page POSTs JSON, so it keeps
+                           its own helper under the distinct name `jsonAuthHdr`.
+         • `fmtPct`      — common.js's returns an HTML string (for innerHTML
+                           pages); this page needs plain text for JSX, so the
+                           local one is named `fmtPctText`.
+       `getToken` is unique to this page and stays as-is. */
     const getToken = () => localStorage.getItem('st_token');
-    const clearToken = () => localStorage.removeItem('st_token');
-    const authHdr = () => ({ 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() });
+    const jsonAuthHdr = () => ({ 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() });
     async function apiFetch(url, opts = {}) {
-      const r = await fetch(url, { headers: authHdr(), ...opts });
+      const r = await fetch(url, { headers: jsonAuthHdr(), ...opts });
       if (r.status === 401) { clearToken(); location.reload(); }
       return r;
     }
@@ -210,7 +228,7 @@
     const fmt2 = v => v == null ? '—' : v.toFixed(2);
     const fmt1 = v => v == null ? '—' : v.toFixed(1);
     const fmt0 = v => v == null ? '—' : Math.round(v).toLocaleString();
-    const fmtPct = (v, d = 1) => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(d) + '%';
+    const fmtPctText = (v, d = 1) => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(d) + '%';
     const fmtB = v => v == null ? '—' : v >= 1000 ? '$' + (v / 1000).toFixed(1) + 'T' : v >= 1 ? '$' + v.toFixed(1) + 'B' : '$' + (v * 1000).toFixed(0) + 'M';
     const clr = (v) => { if (v == null) return '#888'; return v > 0 ? '#00d26a' : '#ff4d4d'; };
     const heatColor = v => {
@@ -752,7 +770,7 @@
           {stock && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 16 }}>
             {[
               { lbl: 'RSI(14)', val: stock.rsi != null ? fmt1(stock.rsi) : '—', tip: 'Relative Strength Index. Best swing entry: 40-65 zone. <30 = oversold, >70 = overbought.', col: stock.rsi != null && stock.rsi >= 40 && stock.rsi <= 65 ? '#00d26a' : stock.rsi != null && stock.rsi > 70 ? '#ff4d4d' : '#f0a500' },
-              { lbl: 'vs MA200', val: stock.vs_ma200 != null ? fmtPct(stock.vs_ma200) : '—', tip: '% above/below 200-day MA. Positive = uptrend. Best for swing longs: >0%.', col: (stock.vs_ma200 || 0) > 0 ? '#00d26a' : '#ff4d4d' },
+              { lbl: 'vs MA200', val: stock.vs_ma200 != null ? fmtPctText(stock.vs_ma200) : '—', tip: '% above/below 200-day MA. Positive = uptrend. Best for swing longs: >0%.', col: (stock.vs_ma200 || 0) > 0 ? '#00d26a' : '#ff4d4d' },
               { lbl: 'Sharpe', val: stock.sharpe != null ? fmt2(stock.sharpe) : '—', tip: 'Risk-adjusted return. >1 = good, >2 = excellent.', col: (stock.sharpe || 0) > 1 ? '#00d26a' : (stock.sharpe || 0) > 0 ? '#f0a500' : '#ff4d4d' },
               { lbl: 'Swing', val: stock.swing_score != null ? `${stock.swing_score}/100` : '—', tip: COL_TIPS.swing_score, col: stock.swing_score != null ? scoreGradient(stock.swing_score, 100) : '#555' },
             ].map(({ lbl, val, tip, col }) => (
@@ -835,36 +853,36 @@
         ['Sector', s.sector], ['Industry', s.industry], ['Market Cap', fmtB(s.mkt_cap)],
         ['Last Updated', s.last_updated],
         ['Swing Score', s.swing_score != null ? `${s.swing_score}/100 ${s.swing_grade || ''}` : null],
-        ['Price', s.price != null ? '$' + fmt2(s.price) : null], ['Change', s.chg_pct != null ? fmtPct(s.chg_pct) : null],
+        ['Price', s.price != null ? '$' + fmt2(s.price) : null], ['Change', s.chg_pct != null ? fmtPctText(s.chg_pct) : null],
         ['Beta', fmt2(s.beta)], ['Dividend Yield', s.div != null ? s.div + '%' : null],
         ['P/E', fmt2(s.pe)], ['Forward P/E', fmt2(s.fwd_pe)],
-        ['EPS Growth', s.eps_grw != null ? fmtPct(s.eps_grw) : null],
-        ['Rev Growth', s.rev_grw != null ? fmtPct(s.rev_grw) : null],
+        ['EPS Growth', s.eps_grw != null ? fmtPctText(s.eps_grw) : null],
+        ['Rev Growth', s.rev_grw != null ? fmtPctText(s.rev_grw) : null],
         ['Profit Margin', s.pm != null ? s.pm + '%' : null],
         ['Debt/Equity', fmt2(s.debt_eq)],
         ['Free Cash Flow', s.fcf_pos != null ? (s.fcf_pos ? 'Positive' : 'Negative') : null],
         ['RSI(14)', fmt1(s.rsi)], ['MACD Signal', s.macd_sig],
-        ['vs MA50', s.vs_ma50 != null ? fmtPct(s.vs_ma50) : null],
-        ['vs MA200', s.vs_ma200 != null ? fmtPct(s.vs_ma200) : null],
+        ['vs MA50', s.vs_ma50 != null ? fmtPctText(s.vs_ma50) : null],
+        ['vs MA200', s.vs_ma200 != null ? fmtPctText(s.vs_ma200) : null],
         ['52W Position', s.p52w != null ? s.p52w + '%' : null],
         ['MA Trend', s.ma_state === 'bull' ? 'Bullish (MA50 > MA200)' : s.ma_state === 'bear' ? 'Bearish (MA50 < MA200)' : null],
         ['MA Cross (last 5d)', (s.gc_event ?? s.gc) ? 'Golden cross' : (s.dc_event ?? s.dc) ? 'Death cross' : 'None'],
         ['Vol Ratio (today vs 20D avg)', fmt2(s.vol_r)],
         ['Vol Ratio (5D vs 20D avg)', fmt2(s.vol_r_5d)],
-        ['5D Return', s.ret_5d != null ? fmtPct(s.ret_5d) : null],
-        ['21D Return', s.ret_21d != null ? fmtPct(s.ret_21d) : null],
-        ['63D Return', s.ret_63d != null ? fmtPct(s.ret_63d) : null],
-        ['21D vs SPY', s.rel_spy_21d != null ? fmtPct(s.rel_spy_21d) : null],
+        ['5D Return', s.ret_5d != null ? fmtPctText(s.ret_5d) : null],
+        ['21D Return', s.ret_21d != null ? fmtPctText(s.ret_21d) : null],
+        ['63D Return', s.ret_63d != null ? fmtPctText(s.ret_63d) : null],
+        ['21D vs SPY', s.rel_spy_21d != null ? fmtPctText(s.rel_spy_21d) : null],
         ['Avg $ Volume', s.avg_dollar_vol_m != null ? '$' + fmt1(s.avg_dollar_vol_m) + 'M' : null],
-        ['Ann Return (full history)', s.ann_ret != null ? fmtPct(s.ann_ret) : null],
-        ['Ann Return (1M)', s.ann_ret_1m != null ? fmtPct(s.ann_ret_1m) : null],
-        ['Volatility', s.vol != null ? fmtPct(s.vol) : null],
+        ['Ann Return (full history)', s.ann_ret != null ? fmtPctText(s.ann_ret) : null],
+        ['Ann Return (1M)', s.ann_ret_1m != null ? fmtPctText(s.ann_ret_1m) : null],
+        ['Volatility', s.vol != null ? fmtPctText(s.vol) : null],
         ['Sharpe', fmt2(s.sharpe)],
         ['Sortino', fmt2(s.sortino)],
         ['Calmar', fmt2(s.calmar)],
         ['Info Ratio', fmt2(s.info_ratio)],
         ['Treynor', fmt2(s.treynor)],
-        ['Vol 1M', s.vol_1m != null ? fmtPct(s.vol_1m) : null],
+        ['Vol 1M', s.vol_1m != null ? fmtPctText(s.vol_1m) : null],
         ['MaxDD 1M', s.max_dd_1m != null ? '-' + fmt1(s.max_dd_1m) + '%' : null],
       ].filter(([, v]) => v != null && v !== '—');
       return <div style={{
@@ -892,7 +910,7 @@
               {isWatchlisted ? '★ Watching' : '☆ Watch'}
             </button>
             {s.price != null && <span className="mono" style={{ fontSize: 16, fontWeight: 600 }}>${fmt2(s.price)}</span>}
-            {s.chg_pct != null && <span className="mono" style={{ color: clr(s.chg_pct), fontSize: 13 }}>{fmtPct(s.chg_pct)}</span>}
+            {s.chg_pct != null && <span className="mono" style={{ color: clr(s.chg_pct), fontSize: 13 }}>{fmtPctText(s.chg_pct)}</span>}
             <div style={{ display: 'flex', gap: 4, marginLeft: 4 }}>
               <a href={`https://finance.yahoo.com/quote/${s.ticker}`} target="_blank" rel="noopener noreferrer"
                 title="View on Yahoo Finance — news, financials, options"
@@ -1252,7 +1270,7 @@
             <div className="mono" style={{ fontSize: 14, fontWeight: 600 }}>${fmt0(summary.total_mv)}</div></div>
           <div><div style={{ fontSize: 10, color: '#555' }}>P&L</div>
             <div className="mono" style={{ fontSize: 14, fontWeight: 600, color: clr(summary.total_pnl) }}>
-              {(summary.total_pnl || 0) >= 0 ? '+' : ''}{fmtPct(summary.total_pnl_pct || 0)}</div></div>
+              {(summary.total_pnl || 0) >= 0 ? '+' : ''}{fmtPctText(summary.total_pnl_pct || 0)}</div></div>
           <div><div style={{ fontSize: 10, color: '#555' }}>Positions</div>
             <div className="mono" style={{ fontSize: 14, fontWeight: 600 }}>{positions.length}</div></div>
         </div>
@@ -1286,7 +1304,7 @@
               <div style={{ textAlign: 'right' }}>
                 <div className="mono" style={{ fontSize: 12 }}>${fmt0(p.market_value)}</div>
                 <div className="mono" style={{ fontSize: 10, color: clr(p.pnl) }}>
-                  {p.pnl >= 0 ? '+' : ''}{fmtPct(p.pnl_pct)} · ${p.pnl >= 0 ? '+' : ''}{fmt0(p.pnl)}</div>
+                  {p.pnl >= 0 ? '+' : ''}{fmtPctText(p.pnl_pct)} · ${p.pnl >= 0 ? '+' : ''}{fmt0(p.pnl)}</div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                 <button onClick={(e) => { e.stopPropagation(); openClose(p); }} style={{ background: '#1a1a1a', color: '#00d26a', fontSize: 10, padding: '2px 6px', borderRadius: 3 }}>Close</button>
@@ -2042,7 +2060,7 @@
         display: 'flex', alignItems: 'center', padding: '0 16px', gap: 12, flexShrink: 0
       }}>
         <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 14, fontWeight: 700, color: '#ffffff', letterSpacing: 1 }}>▲ SWING TRADER</span>
-        <div style={{ width: 1, height: 20, background: '#222' }} />
+        <div className="topbar-sep" />
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ fontSize: 11, color: isLoading ? '#f0a500' : '#444' }}>
             {isLoading ? `Loading universe… ${loaded}/${total} (${pct}%)` :
@@ -2058,25 +2076,17 @@
           )}
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {/* Keep in sync with NAV_LINKS in static/js/common.js. This page cannot
-              load common.js (it defines its own `api`/`token`, which would
-              redeclare and break the bundle), so the list is mirrored here. */}
-          {[
-            ['/', 'Playbook'], ['/screener', 'Screener'], ['/charts', 'Charts'],
-            ['/backtest', 'Strategy Lab'], ['/scorecard', 'Scorecard'],
-            ['/report', 'Report'], ['/journal', 'Journal'],
-          ].map(([href, label]) => {
-            const active = href === '/screener';
-            return <a key={href} href={href} style={{
-              display: 'inline-flex', alignItems: 'center', padding: '5px 10px', borderRadius: 3,
-              border: '1px solid ' + (active ? '#3a2f10' : '#2a2a2f'),
-              background: active ? '#1c1810' : '#1a1a1e',
-              color: active ? '#f0a500' : '#999', fontSize: 11, fontWeight: 600,
-              textDecoration: 'none', fontFamily: "'Inter',sans-serif", whiteSpace: 'nowrap'
-            }}>{label}</a>;
-          })}
-          <span style={{ fontSize: 11, color: '#555' }}>{user?.username}</span>
-          <button onClick={onLogout} style={{ background: '#1a1a1a', color: '#999', padding: '5px 10px', borderRadius: 3, fontSize: 11, fontWeight: 600, border: '1px solid #2a2a2a', cursor: 'pointer' }}>Logout</button>
+          {/* Single source of truth: NAV_LINKS from /static/js/common.js. This is
+              React, so we read the array as DATA and render it with JSX rather
+              than calling initHeader()/buildTopbar(), which do raw innerHTML and
+              would fight React for the DOM. Styling comes from the shared
+              .btn/.btn-active/.hint classes in /static/css/common.css. */}
+          {(typeof NAV_LINKS !== 'undefined' ? NAV_LINKS : []).map(([href, label, tip]) => (
+            <a key={href} href={href} data-tip={tip || ''}
+              className={'btn hint' + (href === '/screener' ? ' btn-active' : '')}>{label}</a>
+          ))}
+          <span className="username">{user?.username || ''}</span>
+          <button type="button" className="btn hint" data-tip="End this browser session." onClick={onLogout}>Logout</button>
         </div>
       </div>;
     }
@@ -2525,12 +2535,12 @@
               background: heatMode ? heatColor(s.chg_pct) : 'transparent',
               padding: heatMode ? '1px 4px' : '0', borderRadius: 2
             }}>${fmt2(s.price)}</span> : '—';
-          case 'chg_pct': return s.chg_pct != null ? <span className="mono" style={{ color: clr(s.chg_pct) }}>{fmtPct(s.chg_pct)}</span> : '—';
+          case 'chg_pct': return s.chg_pct != null ? <span className="mono" style={{ color: clr(s.chg_pct) }}>{fmtPctText(s.chg_pct)}</span> : '—';
           case 'mkt_cap': return <span className="mono">{fmtB(s.mkt_cap)}</span>;
           case 'pe': return <span className="mono">{fmt2(s.pe)}</span>;
           case 'fwd_pe': return <span className="mono">{fmt2(s.fwd_pe)}</span>;
-          case 'eps_grw': return s.eps_grw != null ? <span className="mono" style={{ color: clr(s.eps_grw) }}>{fmtPct(s.eps_grw)}</span> : '—';
-          case 'rev_grw': return s.rev_grw != null ? <span className="mono" style={{ color: clr(s.rev_grw) }}>{fmtPct(s.rev_grw)}</span> : '—';
+          case 'eps_grw': return s.eps_grw != null ? <span className="mono" style={{ color: clr(s.eps_grw) }}>{fmtPctText(s.eps_grw)}</span> : '—';
+          case 'rev_grw': return s.rev_grw != null ? <span className="mono" style={{ color: clr(s.rev_grw) }}>{fmtPctText(s.rev_grw)}</span> : '—';
           case 'pm': return s.pm != null ? <span className="mono" style={{ color: clr(s.pm) }}>{s.pm}%</span> : '—';
           case 'debt_eq': return <span className="mono">{fmt2(s.debt_eq)}</span>;
           case 'rsi': {
@@ -2541,8 +2551,8 @@
             const c = s.macd_sig === 'bullish' ? '#00d26a' : s.macd_sig === 'bearish' ? '#ff4d4d' : '#888';
             return <span style={{ color: c, fontSize: 10 }}>{s.macd_sig || '—'}</span>;
           }
-          case 'vs_ma50': return s.vs_ma50 != null ? <span className="mono" style={{ color: clr(s.vs_ma50) }}>{fmtPct(s.vs_ma50)}</span> : '—';
-          case 'vs_ma200': return s.vs_ma200 != null ? <span className="mono" style={{ color: clr(s.vs_ma200) }}>{fmtPct(s.vs_ma200)}</span> : '—';
+          case 'vs_ma50': return s.vs_ma50 != null ? <span className="mono" style={{ color: clr(s.vs_ma50) }}>{fmtPctText(s.vs_ma50)}</span> : '—';
+          case 'vs_ma200': return s.vs_ma200 != null ? <span className="mono" style={{ color: clr(s.vs_ma200) }}>{fmtPctText(s.vs_ma200)}</span> : '—';
           case 'p52w': return s.p52w != null ? <span className="mono">{s.p52w}%</span> : '—';
           case 'vol_r': return s.vol_r != null ? <span className="mono" style={{ color: s.vol_r > 1.5 ? '#f0a500' : s.vol_r < 0.7 ? '#555' : '#c8c8c8' }}>{fmt2(s.vol_r)}×</span> : '—';
           case 'vol_r_5d': return s.vol_r_5d != null ? <span className="mono" style={{ color: s.vol_r_5d > 1.2 ? '#f0a500' : s.vol_r_5d < 0.8 ? '#555' : '#c8c8c8' }}>{fmt2(s.vol_r_5d)}×</span> : '—';
@@ -2554,12 +2564,12 @@
           case 'ret_5d':
           case 'ret_21d':
           case 'ret_63d':
-          case 'rel_spy_21d': return s[k] != null ? <span className="mono" style={{ color: clr(s[k]) }}>{fmtPct(s[k])}</span> : '—';
+          case 'rel_spy_21d': return s[k] != null ? <span className="mono" style={{ color: clr(s[k]) }}>{fmtPctText(s[k])}</span> : '—';
           case 'avg_dollar_vol_m': return s.avg_dollar_vol_m != null ? <span className="mono">${fmt1(s.avg_dollar_vol_m)}M</span> : '—';
           case 'beta': return <span className="mono">{fmt2(s.beta)}</span>;
           case 'div': return s.div != null ? <span className="mono" style={{ color: '#00d26a' }}>{s.div}%</span> : '—';
-          case 'ann_ret': return s.ann_ret != null ? <span className="mono" style={{ color: clr(s.ann_ret) }}>{fmtPct(s.ann_ret)}</span> : '—';
-          case 'ann_ret_1m': return s.ann_ret_1m != null ? <span className="mono" style={{ color: clr(s.ann_ret_1m) }}>{fmtPct(s.ann_ret_1m)}</span> : '—';
+          case 'ann_ret': return s.ann_ret != null ? <span className="mono" style={{ color: clr(s.ann_ret) }}>{fmtPctText(s.ann_ret)}</span> : '—';
+          case 'ann_ret_1m': return s.ann_ret_1m != null ? <span className="mono" style={{ color: clr(s.ann_ret_1m) }}>{fmtPctText(s.ann_ret_1m)}</span> : '—';
           case 'sharpe':
           case 'gain_sharpe':
           case 'sortino': {

@@ -451,16 +451,28 @@ async function loadCurrentQuadrant() {
   } catch (e) { CUR_QUADRANT = null; }
 }
 
+/* The build is a BACKGROUND JOB, not a long request.
+   `?refresh=true` returns a job handle in milliseconds and the build runs in a
+   separate process; we then poll /api/jobs/{id}. This is not a nicety — holding
+   the request open for the length of the build starved the server's event loop
+   until Cloudflare 502'd every endpoint and the HA watchdog restarted the
+   add-on mid-build. Never await the build here again. */
+let EDGE_JOB = null;      // the job currently being polled
+let EDGE_POLL = null;     // setTimeout handle
+
+function stopEdgePoll() {
+  if (EDGE_POLL) { clearTimeout(EDGE_POLL); EDGE_POLL = null; }
+}
+
 async function loadEdge(refresh) {
   const body = document.getElementById('edgeBody');
   const btn = document.getElementById('edgeBuildBtn');
+  stopEdgePoll();
   if (refresh) {
     EDGE_BUILDING = true;
     if (btn) btn.disabled = true;
-    body.innerHTML = '<div class="cold"><div class="cold-title"><span class="spin"></span>Building the edge matrix…</div>'
-      + '<div class="note">This runs one full walk-forward backtest for every actionable strategy over the whole '
-      + 'universe. It takes <strong>minutes</strong>, not seconds. Leave this tab open — the rest of the page still works.</div></div>';
-  } else {
+    body.innerHTML = '<div class="cold"><div class="cold-title"><span class="spin"></span>Starting the build…</div></div>';
+  } else if (!EDGE) {
     body.innerHTML = '<div class="note">Loading edge matrix…</div>';
   }
   let payload = null;
@@ -470,14 +482,86 @@ async function loadEdge(refresh) {
   } catch (e) {
     EDGE_ERR = (e && e.message) ? String(e.message).slice(0, 400) : 'unavailable';
     payload = null;
-  } finally {
-    EDGE_BUILDING = false;
-    if (btn) btn.disabled = false;
   }
+  if (btn) btn.disabled = false;
+
+  // A build is running (either we just started one, or one was already going —
+  // the server dedupes, so a second click joins the first build).
+  if (payload && payload.status === 'building' && payload.job) {
+    EDGE = null; EDGE_COLD = null; EDGE_BUILDING = true;
+    EDGE_JOB = payload.job;
+    renderEdgeBuilding(payload.message);
+    pollEdgeJob();
+    return;
+  }
+
+  EDGE_BUILDING = false;
+  EDGE_JOB = null;
   if (payload && payload.matrix) { EDGE = payload.matrix; EDGE_COLD = null; }
   else if (payload) { EDGE = null; EDGE_COLD = payload; }
   else { EDGE = null; EDGE_COLD = null; }
   safeRender(renderEdge, 'edgeBody');
+}
+
+function renderEdgeBuilding(message) {
+  const j = EDGE_JOB || {};
+  const pctRaw = Number(j.progress);
+  const pct = isFinite(pctRaw) ? Math.max(0, Math.min(100, Math.round(pctRaw * 100))) : 0;
+  const detail = j.progress_detail || 'Working…';
+  document.getElementById('edgeBody').innerHTML = `
+    <div class="cold">
+      <div class="cold-title"><span class="spin"></span>Building the edge matrix — ${pct}%</div>
+      <div class="note" style="margin-top:6px;">${esc(detail)}</div>
+      <div style="height:8px;border-radius:5px;background:#1c1c20;border:1px solid #2a2a2f;margin-top:9px;overflow:hidden;">
+        <span style="display:block;height:100%;width:${pct}%;background:#f0a500;transition:width .4s;"></span>
+      </div>
+      <div class="note" style="margin-top:10px;font-size:11px;">
+        This runs one full walk-forward per actionable strategy and takes <strong>minutes</strong>.
+        It runs in a <strong>separate process on the server</strong>, so you can close this tab, navigate
+        away, or lose your connection — the build carries on and the result is saved.
+        ${message ? '<br>' + esc(message) : ''}
+      </div>
+      <div style="margin-top:10px;"><button class="btn btn-sm" type="button" onclick="cancelEdgeJob()">Cancel build</button></div>
+    </div>`;
+}
+
+async function pollEdgeJob() {
+  stopEdgePoll();
+  if (!EDGE_JOB || !EDGE_JOB.id) return;
+  let job = null;
+  try {
+    job = await api('/api/jobs/' + encodeURIComponent(EDGE_JOB.id));
+  } catch (e) {
+    // A dropped poll is not a failed build — the worker is a separate process
+    // and keeps going. Back off and try again rather than declaring failure.
+    EDGE_POLL = setTimeout(pollEdgeJob, 6000);
+    return;
+  }
+  EDGE_JOB = job;
+  if (job.status === 'done') {
+    EDGE_BUILDING = false;
+    await loadEdge(false);        // fetch the finished matrix
+    return;
+  }
+  if (job.status === 'failed' || job.status === 'cancelled') {
+    EDGE_BUILDING = false;
+    EDGE_ERR = job.error || ('Build ' + job.status + '.');
+    EDGE_JOB = null;
+    safeRender(renderEdge, 'edgeBody');
+    return;
+  }
+  renderEdgeBuilding();
+  EDGE_POLL = setTimeout(pollEdgeJob, 2500);
+}
+
+async function cancelEdgeJob() {
+  if (!EDGE_JOB || !EDGE_JOB.id) return;
+  stopEdgePoll();
+  try { await api('/api/jobs/' + encodeURIComponent(EDGE_JOB.id) + '/cancel', { method: 'POST' }); }
+  catch (e) { /* non-fatal — the reload below reflects whatever the server says */ }
+  EDGE_JOB = null;
+  EDGE_BUILDING = false;
+  await loadEdge(false);
 }
 
 function renderEdge() {

@@ -202,3 +202,56 @@ class ReportCache(Base):
     generated_at = Column(DateTime, default=utcnow)
     triggered_by = Column(String(16), default="user")   # "user" | "schedule"
     model = Column(String(128), nullable=True)          # resolved model that generated it
+
+
+class BackgroundJob(Base):
+    """A long-running build that must NOT be an HTTP request.
+
+    WHY THIS EXISTS — a real outage, 2026-09-23. `/api/edge-matrix?refresh=true`
+    ran one full walk-forward per strategy inside the request. Offloading it to a
+    worker thread (anyio.to_thread) stopped it BLOCKING the event loop but not
+    starving it: sustained GIL-bound CPU left uvicorn too few cycles to finish a
+    TLS handshake, so cloudflared logged `net/http: TLS handshake timeout` for
+    EVERY endpoint — `/auth/me` and `/api/today` included — and Cloudflare
+    returned 502 for the whole add-on. The Supervisor watchdog then restarted the
+    container, which destroyed the in-flight build and wiped the in-memory chart
+    cache, so each retry started from zero and failed the same way.
+
+    The fix is that this work runs in a SEPARATE PROCESS (its own GIL — see
+    services/job_worker.py) and reports through this table. Two consequences
+    matter as much as the offloading itself:
+      * the result is PERSISTED, so a restart no longer throws the work away, and
+      * progress is readable, so the page can poll instead of holding a socket
+        open for minutes.
+
+    Never reintroduce a synchronous HTTP path for work measured in minutes.
+    """
+
+    __tablename__ = "background_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    kind = Column(String(48), nullable=False, index=True)   # "edge_matrix" | "strategy_compare"
+    # Canonical, sorted JSON of the build parameters. Two requests with the same
+    # key are the SAME job — the outage log shows ?refresh=true arriving twice
+    # concurrently, doubling the load, because nothing deduped them.
+    params_key = Column(String(512), nullable=False, index=True)
+    params_json = Column(Text, nullable=False, default="{}")
+
+    # queued -> running -> done | failed | cancelled
+    status = Column(String(16), nullable=False, default="queued", index=True)
+    progress = Column(Float, nullable=False, default=0.0)      # 0..1
+    progress_detail = Column(String(256), nullable=True)       # "momentum_rotation (3/8)"
+
+    result_json = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
+
+    pid = Column(Integer, nullable=True)        # worker pid, for staleness checks
+    created_at = Column(DateTime, default=utcnow, index=True)
+    started_at = Column(DateTime, nullable=True)
+    # Written by the worker on every progress tick. A running job whose heartbeat
+    # has gone cold was killed (watchdog restart, OOM) and is reaped as failed —
+    # otherwise it would sit at "running" forever and block every future refresh.
+    heartbeat_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)

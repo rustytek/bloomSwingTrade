@@ -4,11 +4,19 @@ Evidence-layer API: the strategy scorecard and the strategy x regime edge matrix
 The edge matrix is SLOW (one full walk-forward per actionable strategy over the
 whole universe). A cold GET therefore never builds it — it returns an explicit
 "not computed yet" payload so the page can render instantly and offer a button.
-Only `?refresh=true` does the work.
+
+`?refresh=true` does NOT build it either. It ENQUEUES a build in a separate
+process and returns immediately with a job id to poll. Running the build inside
+the request — even on a worker thread — starved uvicorn's event loop badly
+enough that TLS handshakes timed out and Cloudflare 502'd every endpoint in the
+app, after which the Supervisor watchdog restarted the container and threw the
+work away. See database/models.py::BackgroundJob. Do not put it back.
+
+Results are read from the job table first and the in-memory cache second, so a
+completed matrix now survives a restart.
 """
 from __future__ import annotations
 
-import anyio
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -16,8 +24,11 @@ from auth.deps import get_current_user
 from database.db import get_db
 from database.models import User
 from services import edge_matrix as em
+from services import jobs as jobsvc
 from services.regime import evidence_adjustment
 from services.scorecard import build_scorecard, execution_quality
+
+EDGE_JOB_KIND = "edge_matrix"
 
 router = APIRouter(tags=["scorecard"])
 
@@ -50,27 +61,68 @@ async def get_edge_matrix(
     kwargs = {"period": period}
     if mode:
         kwargs["mode"] = mode
+    job_params = {"source": source, **kwargs}
+    job_key = jobsvc.params_key(job_params)
 
     if refresh:
-        # Run the blocking build off the event loop so one refresh does not stall
-        # every other request on the worker.
-        matrix = await anyio.to_thread.run_sync(
-            lambda: em.build_edge_matrix(db, user.id, source=source, **kwargs)
-        )
-        status = "computed"
+        # Start (or join) a background build and return AT ONCE. The response is
+        # a job handle, never a matrix — building here is what took the add-on
+        # down. `enqueue` reuses an in-flight job, so a double-click or a
+        # double-firing page cannot run the build twice.
+        job, created = jobsvc.enqueue(db, user.id, EDGE_JOB_KIND, job_params)
+        return {
+            "status": "building",
+            "matrix": None,
+            "job": jobsvc.to_dict(job),
+            "started": created,
+            "message": (
+                "Build started — this runs one full walk-forward per strategy and takes "
+                "minutes. Poll /api/jobs/{id}; the page can be closed and the build will "
+                "carry on."
+                if created else
+                "A build with these settings is already running — following that one "
+                "instead of starting a second."
+            ),
+        }
+
+    # Cached read. The JOB TABLE is consulted first because it is the only copy
+    # that survives a restart; `em._cache` is in-memory and empties every time
+    # the container bounces.
+    matrix = None
+    status = "not_computed"
+    done = jobsvc.latest_done(db, user.id, EDGE_JOB_KIND, job_key) \
+        or jobsvc.latest_done(db, user.id, EDGE_JOB_KIND)
+    payload = jobsvc.result_of(done)
+    if payload and isinstance(payload.get("matrix"), dict):
+        matrix = payload["matrix"]
+        status = "cached"
     else:
         matrix = em.get_cached_matrix(user.id, source=source, **kwargs) \
             or em.get_cached_matrix(user.id)
         status = "cached" if matrix else "not_computed"
 
     if matrix is None:
+        # An in-flight build must not read as "nothing here" — that is what makes
+        # a user hit refresh again and pile a second build onto a loaded box.
+        active = jobsvc.find_active(db, user.id, EDGE_JOB_KIND, job_key)
+        if active is not None:
+            return {
+                "status": "building",
+                "matrix": None,
+                "job": jobsvc.to_dict(active),
+                "message": "A build is already running. Poll /api/jobs/{id} for progress.",
+                "strategies": em.actionable_strategy_ids(),
+                "quadrants": [{"id": q, "label": em.QUADRANT_INFO[q]["label"]} for q in em.QUADRANTS],
+            }
+        failed = jobsvc.latest_failed(db, user.id, EDGE_JOB_KIND)
         return {
             "status": "not_computed",
             "matrix": None,
+            "last_error": (failed.error if failed is not None else None),
             "message": (
                 "The edge matrix has not been computed yet. It runs a full walk-forward "
                 "backtest for every actionable strategy, which takes minutes — call this "
-                "endpoint again with ?refresh=true to build it."
+                "endpoint again with ?refresh=true to start a background build."
             ),
             "strategies": em.actionable_strategy_ids(),
             "quadrants": [{"id": q, "label": em.QUADRANT_INFO[q]["label"]} for q in em.QUADRANTS],

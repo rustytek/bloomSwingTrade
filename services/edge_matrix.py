@@ -221,24 +221,44 @@ def _run_one(db: Session, user_id: int, strategy_id: str, source: str, kwargs: d
     }
 
 
-def build_edge_matrix(db: Session, user_id: int, source: str = "universe", **backtest_kwargs) -> dict:
+def build_edge_matrix(db: Session, user_id: int, source: str = "universe",
+                      progress=None, **backtest_kwargs) -> dict:
     """Run every actionable strategy once and bucket its periods by regime.
 
     Extra keyword arguments are forwarded to run_walk_forward_backtest (filtered
     to parameters that actually exist in its signature today). The result is
     cached per (user, source, kwargs) — see get_cached_matrix/invalidate_cache.
+
+    `progress` is an optional `(fraction: float, detail: str) -> None` callback.
+    This build takes MINUTES, so it must never be run inside an HTTP request —
+    it is driven by services/job_worker.py, and the callback is how that worker
+    keeps its heartbeat alive and tells the polling page where it has got to. A
+    failing callback is swallowed: progress reporting must not sink a build.
     """
     kwargs = dict(backtest_kwargs)
     kwargs.setdefault("mode", DEFAULT_MODE)
     if "mode" not in _BACKTEST_PARAMS:
         kwargs.pop("mode", None)
 
+    def _tick(fraction: float, detail: str) -> None:
+        if progress is None:
+            return
+        try:
+            progress(fraction, detail)
+        except Exception:  # noqa: BLE001
+            pass
+
     started = time.time()
     strategies: dict[str, dict] = {}
     errors: list[dict] = []
 
-    for sid in actionable_strategy_ids():
+    _all = actionable_strategy_ids()
+    _total = max(1, len(_all))
+    for _i, sid in enumerate(_all):
         strat = STRATEGIES[sid]
+        # Reported BEFORE the run, so the detail names the strategy currently
+        # being worked on rather than the one just finished.
+        _tick(_i / _total, f"{getattr(strat, 'name', sid)} ({_i + 1}/{_total})")
         tagged = list(getattr(strat, "regimes", []) or [])
         run = _run_one(db, user_id, sid, source, kwargs)
         if run["error"]:

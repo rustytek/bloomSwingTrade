@@ -37,6 +37,7 @@ from api.settings import router as settings_router
 from api.journal import router as journal_router
 from api.today import router as today_router
 from api.scorecard import router as scorecard_router
+from api.jobs import router as jobs_router
 from generate_ssl import generate_ssl_cert
 from services.universe import UNIVERSE
 from services.market_data import (
@@ -104,6 +105,7 @@ def init_db():
     """Create all tables and sync the configured admin account."""
     Base.metadata.create_all(bind=engine)
     ensure_schema_migrations()
+    orphan_background_jobs()
     db = SessionLocal()
     try:
         admin = db.query(User).filter(User.username == settings.admin_user).first()
@@ -155,6 +157,41 @@ def _ensure_columns(conn, table: str, columns: dict[str, str]):
     for name, ddl in columns.items():
         if name not in existing:
             conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
+
+def orphan_background_jobs():
+    """Fail any job left mid-flight by a restart.
+
+    Workers are child processes of this container, so a container restart kills
+    every one of them. Anything still marked queued/running at startup is by
+    definition dead — waiting for the 12-minute staleness reaper to notice would
+    leave the edge-matrix build blocked (`enqueue` joins an "active" job rather
+    than starting a second) for that whole window after every restart.
+
+    This is the exact loop that produced the 2026-09-23 outage: the watchdog
+    restarted the add-on mid-build, and the stuck row then swallowed the retry.
+    """
+    from database.models import BackgroundJob
+    from datetime import datetime, timezone
+
+    db = SessionLocal()
+    try:
+        stuck = db.query(BackgroundJob).filter(
+            BackgroundJob.status.in_(("queued", "running"))).all()
+        if not stuck:
+            return
+        for job in stuck:
+            job.status = "failed"
+            job.finished_at = datetime.now(timezone.utc)
+            job.error = ("Interrupted by an add-on restart — the worker process did not "
+                         "survive it. Nothing was corrupted; start the build again.")
+        db.commit()
+        logger.info("Reset %d background job(s) orphaned by a restart", len(stuck))
+    except Exception:  # noqa: BLE001 — never block startup over bookkeeping
+        logger.exception("Could not reset orphaned background jobs")
+        db.rollback()
+    finally:
+        db.close()
 
 
 def ensure_schema_migrations():
@@ -304,6 +341,28 @@ def backfill_plan_fields_from_notes(conn) -> dict[str, int]:
     return moved
 
 
+async def _warm_chart_cache():
+    """Populate the in-memory chart cache so /charts is never cold-fetched
+    inside a user's request. Every failure is swallowed and logged: a warm-up
+    is an optimisation, and must never stop the app from starting."""
+    import asyncio
+    try:
+        from services import chart_service as cs
+        # Sequential, not gathered: the point is to fill the cache without
+        # competing with the universe refresh for yfinance bandwidth.
+        for name, fn in (("VIX", cs.get_vix_data),
+                         ("sectors", cs.get_sector_data),
+                         ("ETF groups", cs.get_etf_group_data)):
+            try:
+                await fn()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Chart cache warm-up for %s failed: %s", name, exc)
+            await asyncio.sleep(0)
+        logger.info("Chart cache warm-up complete")
+    except Exception:  # noqa: BLE001
+        logger.exception("Chart cache warm-up could not run")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("SwingTrader starting up…")
@@ -325,6 +384,17 @@ async def lifespan(app: FastAPI):
     import asyncio
     asyncio.create_task(refresh_universe(UNIVERSE, db_factory=SessionLocal))
     logger.info(f"Background universe refresh started for {len(UNIVERSE)} tickers")
+
+    # Warm the chart cache in the background.
+    #
+    # services/chart_service.py caches in MEMORY ONLY, so every container
+    # restart leaves it empty and the next visitor to /charts pays for the
+    # whole cold fetch (VIX + 11 sector ETFs + ETF groups + macro) inside their
+    # own request. Through a Cloudflare tunnel that request can exceed the
+    # proxy's patience and return 502 — which is exactly what the user saw on
+    # 2026-09-23, when a watchdog restart wiped this cache mid-incident.
+    # Warming it here moves that cost off the first request.
+    asyncio.create_task(_warm_chart_cache())
 
     # Schedule daily report at 05:30 local server time
     _scheduler.add_job(
@@ -359,7 +429,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.19.0",
+    version="1.20.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -387,6 +457,7 @@ app.include_router(settings_router)
 app.include_router(journal_router)
 app.include_router(today_router)
 app.include_router(scorecard_router)
+app.include_router(jobs_router)
 
 
 # ── Static files (React SPA) ─────────────────────────────────────────────────

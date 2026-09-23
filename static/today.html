@@ -254,6 +254,8 @@
   let EDGE_COLD = false;// true = matrix simply not built yet (the normal first visit)
   let EDGE_MSG = null;  // the backend's own explanation for the cold state
   let EDGE_ERR = null;  // the request actually failed — distinct from "not built"
+  let EDGE_BUILDING = false; // a background build is running right now
+  let EDGE_LAST_ERR = null;  // why the PREVIOUS build failed, if one did
 
   const todayISO = () => new Date().toISOString().slice(0, 10);
   const checkKey = () => 'st_checks_' + todayISO();
@@ -346,6 +348,13 @@
     EDGE_COLD = !!(edgeRes && !edgeRes.__err && !edgeRes.matrix);
     EDGE_MSG = (edgeRes && edgeRes.message) ? String(edgeRes.message).slice(0, 300) : null;
     EDGE_ERR = (edgeRes && edgeRes.__err) ? String(edgeRes.__err).slice(0, 180) : null;
+    // The matrix now builds in a background job, so "not built" has a third
+    // state between cold and ready: someone is building it right now. Showing
+    // that as "not computed yet" is what makes a user hit Build again and pile
+    // a second build onto an already-loaded box.
+    EDGE_BUILDING = !!(edgeRes && edgeRes.status === 'building');
+    EDGE_LAST_ERR = (edgeRes && edgeRes.last_error)
+      ? String(edgeRes.last_error).slice(0, 240) : null;
 
     document.getElementById('loading').hidden = true;
     document.getElementById('bandWrap').hidden = false;
@@ -556,11 +565,19 @@
     // Three distinct states. "Not built yet" is the normal first visit and must
     // not read as a failure; a real error must not read as "just press build".
     let edgeNote = '';
-    if (!EDGE && EDGE_COLD) {
+    if (!EDGE && EDGE_BUILDING) {
+      edgeNote = `<div class="chip" style="display:block;margin-bottom:12px;color:#7aa2f7;border-color:#22304f;background:#0e131f;">`
+        + `<strong>Tested-edge evidence is building right now.</strong> It runs in a separate process on the server, `
+        + `so it keeps going whether or not this page is open. Watch progress in the `
+        + `<a href="/backtest" style="color:#7aa2f7;">Strategy Lab</a>; reload here when it finishes. `
+        + `Until then the setups below carry no backtested numbers.</div>`;
+    } else if (!EDGE && EDGE_COLD) {
       edgeNote = `<div class="chip" style="display:block;margin-bottom:12px;color:#f0a500;">`
         + `<strong>Tested-edge evidence not computed yet.</strong> `
         + esc(EDGE_MSG || 'The edge matrix runs a full walk-forward per strategy, so it is built on demand.')
-        + ` Build it in the <a href="/backtest" style="color:#f0a500;">Strategy Lab</a> — until then the setups below are shown without their backtested numbers, so judge them on the reasons alone.</div>`;
+        + ` Build it in the <a href="/backtest" style="color:#f0a500;">Strategy Lab</a> — until then the setups below are shown without their backtested numbers, so judge them on the reasons alone.`
+        + (EDGE_LAST_ERR ? `<br><span style="color:#e5484d;">Last build failed: ${esc(EDGE_LAST_ERR)}</span>` : '')
+        + `</div>`;
     } else if (!EDGE) {
       edgeNote = `<div class="chip" style="display:block;margin-bottom:12px;color:#8a8a90;">`
         + `Tested-edge evidence unavailable${EDGE_ERR ? ` (${esc(EDGE_ERR)})` : ''} — setups below are shown without their backtested numbers. `

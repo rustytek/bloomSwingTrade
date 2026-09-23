@@ -24,16 +24,20 @@ python test_portfolio_risk.py    # correlation, open risk, concentration, edge-w
 python test_backtest.py          # backtest engine, exit rules, no-look-ahead, Wilson CI
 python test_edge.py              # edge matrix verdicts, evidence override safety, scorecard
 python test_plan_persistence.py  # plan-intent columns, notes backfill, entry_chasing honesty
+python test_jobs.py              # background jobs: worker subprocess, dedupe, stale reaping
 ```
 
-**170 tests across six suites**, all self-contained — no network, no DB. `test_passes.py`
+**192 tests across seven suites.** All are self-contained (no network) except
+`test_jobs.py`, which deliberately **launches a real worker subprocess** against a
+throwaway SQLite file in a temp dir — mocking the subprocess would let the very
+layer it guards break while the test still passed. `test_passes.py`
 installs permissive import stubs for `fastapi`, `jose`, `passlib` and `bcrypt` (appended to the
 **end** of `sys.meta_path`, so a real install always wins) purely so the pure helper functions
 living in `api/*.py` can be imported without the full web stack.
 
 > **Counting routes:** this FastAPI version stores `_IncludedRouter` lazy references, so
 > `len(app.routes)` UNDERCOUNTS and filtering on `hasattr(r, "path")` silently omits every
-> router-mounted endpoint. Always verify through `app.openapi()["paths"]` (currently 63).
+> router-mounted endpoint. Always verify through `app.openapi()["paths"]` (currently 66).
 
 The app runs on HTTPS at `https://localhost:8443`. Swagger docs at `/api/docs`.
 
@@ -158,11 +162,50 @@ Two independent axes classify the market into one of four quadrants (`QUADRANTS`
 
 `strategies_for_regime(quadrant)` returns the strategy ids tagged for a quadrant; `services/today.py::build_today` uses it to mark each strategy active/inactive for the live setups list, and `services/backtest.py::run_walk_forward_backtest` uses the same `classify_quadrant`/`trend_strength_label` helpers to tag every historical rebalance period, producing a `regime_breakdown` (per-quadrant CAGR/win-rate) in the walk-forward response — the Backtest page's Strategy Comparison and single-strategy results both surface this.
 
+### Long Builds Are Background Jobs — Never HTTP Requests
+
+**This rule exists because breaking it took the whole add-on down (2026-09-23).**
+`/api/edge-matrix?refresh=true` ran one full walk-forward per strategy inside the
+request. It was already offloaded to a worker thread with `anyio.to_thread`, which
+stops the build *blocking* the event loop but does nothing about **GIL contention**:
+sustained CPU left uvicorn too few cycles to complete a TLS handshake, so cloudflared
+logged `net/http: TLS handshake timeout` against **every** endpoint — `/auth/me` and
+`/api/today` included — and Cloudflare returned 502 for the entire app. The Supervisor
+watchdog then restarted the container, which killed the in-flight build, wiped the
+in-memory chart cache, and left the user retrying into the same wall.
+
+The diagnostic tell: **uvicorn's access log only prints on response completion**, so
+the requests that hung are invisible in the add-on log. An app log that looks healthy
+while cloudflared logs handshake timeouts means a starved loop, not a slow endpoint.
+
+| File | Purpose |
+|---|---|
+| `database/models.py::BackgroundJob` | `background_jobs` table: status, `progress` 0–1, `progress_detail`, `heartbeat_at`, `result_json`, `params_key` |
+| `services/jobs.py` | API-side registry. `enqueue()` **reuses an in-flight job with the same `(user, kind, params_key)`** — the outage log shows `?refresh=true` arriving twice concurrently, doubling the load. `reap_stale()` fails a job whose heartbeat is older than `STALE_AFTER` (12 min), so a killed worker can't block the feature forever. `to_dict()` deliberately omits the result payload; polls must stay cheap |
+| `services/job_worker.py` | `python -m services.job_worker <job_id>` — a **fresh interpreter with its own GIL**. Must have no import side effects (it runs per job) and must never import `main.py`. Every path ends in a terminal status. Carries a `selftest` kind that exercises the whole pipeline in seconds |
+| `api/jobs.py` | `GET /api/jobs`, `GET /api/jobs/{id}`, `POST /api/jobs/{id}/cancel`. Cancel marks the row inactive so a rebuild can start; it does **not** kill the detached worker, and says so |
+| `main.py::orphan_background_jobs()` | Runs at startup. Workers die with the container, so anything still `queued`/`running` is dead — resetting it immediately avoids a 12-minute window where no rebuild can start after every restart |
+
+`subprocess.Popen` with `-m`, not `fork` (inherits locks from a process already running
+an asyncio loop plus threads) and not `spawn` (re-imports `main.py` and would start a
+second web app). `build_edge_matrix(..., progress=cb)` drives the heartbeat; a failing
+callback is swallowed so progress reporting can never sink a finished build.
+
+`GET /api/edge-matrix?refresh=true` returns `{status:"building", job:{...}}` in
+milliseconds. **Three states, not two** — `not_computed` / `building` / `cached`; a UI
+that renders `building` as `not_computed` invites a second build onto a loaded box.
+Cached reads consult the **job table first**, because `edge_matrix._cache` is in-memory
+and empties on every restart.
+
+`services/chart_service.py`'s cache is also memory-only, so `main.py::_warm_chart_cache()`
+fills it in the background at startup rather than making the first `/charts` visitor pay
+for the cold fetch inside their own request.
+
 ### Evidence Layer (`services/edge_matrix.py`, `services/scorecard.py`, `api/scorecard.py`)
 
 `Strategy.regimes` is a hand-written literal — an opinion. The edge matrix turns the backtest into evidence about whether that opinion holds, per quadrant, and the scorecard compares what a strategy was *supposed* to deliver against what the journal says it *did*.
 
-- `GET /api/edge-matrix` — **a cold call deliberately does NOT build**: it returns `{status:"not_computed", matrix:null, message, strategies[], quadrants[], thresholds{}}` so the page paints instantly. `?refresh=true` runs the build, which is SLOW (one walk-forward per actionable strategy). **The payload is NESTED under `matrix`** — `matrix.strategies[id].cells[quadrant]` carries `{n, avg_period_return, win_rate, win_rate_ci_low/high, cum_return, confidence, tagged, verdict, verdict_detail}`, plus `matrix.strategies[id].overall`, `matrix.evidence_regimes` and `matrix.caveats`. Assigning the whole envelope to a variable and reading `.strategies` off it silently returns nothing — that exact bug once made the Playbook's evidence chips invisible even with a fully built matrix.
+- `GET /api/edge-matrix` — **a cold call deliberately does NOT build**: it returns `{status:"not_computed", matrix:null, message, last_error, strategies[], quadrants[], thresholds{}}` so the page paints instantly. `?refresh=true` **enqueues a background job and returns at once** with `{status:"building", job:{...}}` — it does not build inline (see "Long Builds Are Background Jobs" above; doing so 502'd the whole app). **The payload is NESTED under `matrix`** — `matrix.strategies[id].cells[quadrant]` carries `{n, avg_period_return, win_rate, win_rate_ci_low/high, cum_return, confidence, tagged, verdict, verdict_detail}`, plus `matrix.strategies[id].overall`, `matrix.evidence_regimes` and `matrix.caveats`. Assigning the whole envelope to a variable and reading `.strategies` off it silently returns nothing — that exact bug once made the Playbook's evidence chips invisible even with a fully built matrix.
 - Verdicts: `confirmed` / `unproven` / `mis-tagged` / `untagged-edge`. **A thin cell never produces a confident verdict** — a low-`n` losing cell is `unproven`, not `mis-tagged`. `evidence_regimes` carries only `confirmed` and `untagged-edge` cells forward: it answers "what has the data shown", not "what do we still believe".
 - `GET /api/scorecard` — `{scorecard, execution_quality}`. Only a **trade_plan-mode** matrix yields a per-trade expectancy; a rotation-mode matrix returns no `expected_r` rather than converting a period return into a pseudo-R.
 - `execution_quality` splits into `ranked[]` (computable, sorted by `r_cost` descending) and `unavailable[]` (each with `reason` + `needs`). **UI contract: an unavailable metric must never render as `0` or as a dash.** "Not measurable yet" and "measured, found nothing" have to be visually distinct — see `static/scorecard.html`. A missing field is not a clean bill of health.

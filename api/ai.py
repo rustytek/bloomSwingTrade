@@ -270,7 +270,9 @@ def ai_status(user: User = Depends(get_current_user)):
     return {
         "configured": provider != "none",
         "provider": provider,
-        "model": s.ai_model or "default",
+        # No silent placeholder: an unset model is reported as unset, because
+        # "default" reads like a working configuration and is not one.
+        "model": s.ai_model or None,
         "base_url": llm_base_url() if provider == "litellm" else None,
     }
 

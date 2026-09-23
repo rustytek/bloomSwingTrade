@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SwingTrader is a self-hosted swing trading screener — a FastAPI backend + vanilla JS frontend deployed via Docker or as a Home Assistant OS (HAOS) native add-on. It screens S&P 500 and ETF tickers with technical indicators (RSI, MACD, Bollinger Bands, MA50/200 trend state, Golden/Death Cross events), per-user watchlists/portfolios, and optional AI analysis via Anthropic Claude, OpenAI, or LiteLLM (the local/self-hosted path — see aiProxy's `CLAUDE.md`). This app never calls Ollama or any other model runtime directly; `AI_MODEL`/`REPORT_MODEL` should always be a LiteLLM tier alias (e.g. `tooling_high`), not a raw provider model name — the physical model behind an alias can change without a config edit here.
+SwingTrader is a self-hosted swing trading screener — a FastAPI backend + vanilla JS frontend deployed via Docker or as a Home Assistant OS (HAOS) native add-on. It screens S&P 500 and ETF tickers with technical indicators (RSI, MACD, Bollinger Bands, MA50/200 trend state, Golden/Death Cross events), per-user watchlists/portfolios, and optional AI analysis via Anthropic Claude, OpenAI, or LiteLLM (the local/self-hosted path — see aiProxy's `CLAUDE.md`). LiteLLM is the only AI backend this app talks to — it never calls a model runtime directly. **`AI_MODEL`/`REPORT_MODEL` must always be a LiteLLM tier alias** (e.g. `tooling_high`), never a raw provider model name, so the physical model behind an alias can change without a config edit here. No model name is hardcoded anywhere in the codebase; `services/ai_service.py::looks_like_raw_model_name()` flags a raw name at startup, and `test_passes.py` fails the build if one is reintroduced.
 
 ## Common Commands
 
@@ -27,7 +27,7 @@ python test_plan_persistence.py  # plan-intent columns, notes backfill, entry_ch
 python test_jobs.py              # background jobs: worker subprocess, dedupe, stale reaping
 ```
 
-**192 tests across seven suites.** All are self-contained (no network) except
+**196 tests across seven suites.** All are self-contained (no network) except
 `test_jobs.py`, which deliberately **launches a real worker subprocess** against a
 throwaway SQLite file in a temp dir — mocking the subprocess would let the very
 layer it guards break while the test still passed. `test_passes.py`
@@ -278,7 +278,7 @@ Sector ETF data (`get_sector_data`) uses individual `yf.Ticker().history()` call
 
 ## Configuration
 
-Copy `.env.example` to `.env`. `Settings` sets `extra = "ignore"`, so unknown keys left in a local `.env` (for example the pre-LiteLLM `OLLAMA_URL`/`OLLAMA_MODEL`) are skipped instead of raising a pydantic `ValidationError` at import time — which previously prevented the app from starting at all. Key variables:
+Copy `.env.example` to `.env`. `Settings` sets `extra = "ignore"`, so unknown keys left in a local `.env` — or in Home Assistant's **stored** add-on options after a setting is retired from `config.json` — are skipped instead of raising a pydantic `ValidationError` at import time, which previously prevented the app from starting at all. (HA keeps stored options that are no longer in the schema; they are inert, but they do linger in the add-on's config and are worth clearing.) Key variables:
 
 | Variable | Default | Notes |
 |---|---|---|

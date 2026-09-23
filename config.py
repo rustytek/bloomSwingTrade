@@ -45,9 +45,10 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
-        # Tolerate stale/unknown keys in a local .env (e.g. OLLAMA_URL /
-        # OLLAMA_MODEL left over from the pre-LiteLLM era). Without this,
-        # pydantic-settings raises a ValidationError and the app won't import.
+        # Tolerate stale/unknown keys left in a local .env or in Home
+        # Assistant's stored add-on options after a setting is retired.
+        # Without this, pydantic-settings raises a ValidationError at import
+        # time and the app will not start at all.
         extra = "ignore"
 
 

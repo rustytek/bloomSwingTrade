@@ -366,6 +366,15 @@ async def _warm_chart_cache():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("SwingTrader starting up…")
+    # Surface a raw provider model name in AI_MODEL/REPORT_MODEL. These must be
+    # LiteLLM tier aliases; a raw name pins the app to one model and fails as an
+    # opaque proxy error at request time rather than here, where it is obvious.
+    try:
+        from services.ai_service import check_model_aliases
+        for problem in check_model_aliases(settings):
+            logger.warning("CONFIG: %s", problem)
+    except Exception:  # noqa: BLE001 — a config lint must never block startup
+        logger.exception("Could not check model alias configuration")
     # Purge entries older than 180 days
     db = SessionLocal()
     try:
@@ -429,7 +438,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.20.0",
+    version="1.20.1",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

@@ -167,15 +167,76 @@ class MockAIService(AIService):
         return f"AI sector analysis for {sector} is not configured."
 
 
+# ── Model-alias hygiene ────────────────────────────────────────────────────
+# `AI_MODEL`/`REPORT_MODEL` are LiteLLM TIER ALIASES, never raw provider model
+# names. The difference is not cosmetic: an alias is remapped on the LiteLLM
+# side, so the physical model can be swapped without touching this app, while a
+# raw name pins this app to a model that may be retired underneath it — and the
+# failure shows up as an opaque 400 from the proxy at request time, long after
+# the config was edited.
+#
+# This was a real drift: a deployment was found running `ai_model: qwen3.5-mlx`  model-name-ok
+# (a raw name) instead of `tooling_high`. Nothing detected it, because nothing
+# looked. `check_model_aliases()` runs at startup and says so loudly.
+
+# Markers that a string names a specific model rather than a tier.
+_RAW_MODEL_MARKERS = (
+    "/",        # provider-prefixed: "<provider>/<model>"
+    ":",        # runtime tag: "<model>:<size>"
+)
+_RAW_MODEL_PREFIXES = (   # this IS the detector's own marker list
+    "gpt-", "claude-", "qwen", "llama", "mistral", "mixtral", "gemma",      # model-name-ok
+    "gemini", "deepseek", "phi-", "o1-", "o3-", "o4-", "grok-", "command-", # model-name-ok
+)
+
+
+def looks_like_raw_model_name(value: str | None) -> bool:
+    """True when `value` looks like a specific model rather than a tier alias.
+
+    Deliberately conservative — a false positive only produces a startup
+    warning, never a refusal, because guessing wrong must not stop the app from
+    running with whatever the user actually configured.
+    """
+    if not value:
+        return False
+    v = str(value).strip().lower()
+    if not v:
+        return False
+    if any(m in v for m in _RAW_MODEL_MARKERS):
+        return True
+    return any(v.startswith(p) for p in _RAW_MODEL_PREFIXES)
+
+
+def check_model_aliases(settings=None) -> list[str]:
+    """Return a human-readable warning per misconfigured model setting.
+
+    Returns a list rather than logging directly so it is testable and so the
+    caller decides where the message goes.
+    """
+    s = settings or get_settings()
+    problems = []
+    for field, value in (("AI_MODEL", getattr(s, "ai_model", None)),
+                         ("REPORT_MODEL", getattr(s, "report_model", None))):
+        if looks_like_raw_model_name(value):
+            problems.append(
+                f"{field} is set to {value!r}, which looks like a raw provider model "
+                f"name rather than a LiteLLM tier alias (e.g. 'tooling_high'). The app "
+                f"will still try it, but it pins you to one model and will break when "
+                f"that model is retired on the LiteLLM side."
+            )
+    return problems
+
+
 # ── LiteLLM Implementation ─────────────────────────────────────────────────
 
 class LiteLLMAIService(AIService):
     """
-    LiteLLM OpenAI-compatible proxy service. This app never calls Ollama (or
-    any other model runtime) directly — LiteLLM is the sole AI backend, and
-    `model` should always be a stable tier alias (e.g. `tooling_high`), never
-    a raw provider model name, so the physical model behind it can change
-    without a config edit here.
+    LiteLLM OpenAI-compatible proxy service. LiteLLM is the sole AI backend —
+    this app never calls a model runtime directly — and `model` must always be
+    a stable tier alias (e.g. `tooling_high`), never a raw provider model name,
+    so the physical model behind it can change without a config edit here.
+    See services/ai_service.py::looks_like_raw_model_name, which flags the
+    mistake at startup instead of letting it fail at request time.
     Set AI_PROVIDER=litellm, LITELLM_URL, and model names in config.
     """
 
@@ -326,7 +387,7 @@ class LiteLLMAIService(AIService):
 #     def __init__(self):
 #         import anthropic
 #         self.client = anthropic.AsyncAnthropic(api_key=settings.ai_api_key)
-#         self.model = settings.ai_model or "claude-opus-4-6"
+#         self.model = settings.ai_model   # configured alias; never hardcode a model
 #
 #     async def analyze_stock(self, ticker, data):
 #         prompt = f"Analyze this stock data and return JSON: {json.dumps(data)}"
@@ -345,7 +406,7 @@ class LiteLLMAIService(AIService):
 #     def __init__(self):
 #         from openai import AsyncOpenAI
 #         self.client = AsyncOpenAI(api_key=settings.ai_api_key)
-#         self.model = settings.ai_model or "gpt-4o"
+#         self.model = settings.ai_model   # configured alias; never hardcode a model
 #
 #     async def analyze_stock(self, ticker, data):
 #         ...

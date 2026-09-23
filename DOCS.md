@@ -67,7 +67,7 @@ To back up your data, include the add-on data directory in your HA backup.
 ### LiteLLM
 1. Set `ai_provider: litellm`.
 2. Set `litellm_url` to your LiteLLM proxy base URL, for example `http://192.168.0.21:4000`.
-3. Set `ai_model` and `report_model` to a LiteLLM tier alias, for example `tooling_high` — not a raw model name. This app never calls Ollama or another model runtime directly.
+3. Set `ai_model` and `report_model` to a LiteLLM tier alias, for example `tooling_high` — not a raw model name. LiteLLM is the only AI backend this app talks to; it never calls a model runtime directly.
 4. Set `litellm_api_key` to the user's restricted LiteLLM virtual key.
 5. Restart the add-on.
 

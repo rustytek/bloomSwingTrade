@@ -1005,6 +1005,104 @@ def test_pages_compile_together_with_common_js():
             + (proc.stderr or "")[:600]
         )
 
+@test
+def test_no_raw_provider_model_name_is_hardcoded_anywhere():
+    """AI_MODEL/REPORT_MODEL are LiteLLM TIER ALIASES. A raw model name baked
+    into the code pins the app to a model that can be retired underneath it,
+    and the failure surfaces as an opaque 400 from the proxy at request time.
+
+    A live deployment was found running `ai_model: qwen3.5-mlx` and nothing
+    detected it, because nothing looked."""
+    import glob
+    from services.ai_service import looks_like_raw_model_name
+
+    # Raw names that must not appear as a default/fallback in shipped code.
+    banned = ("gpt-4", "gpt-3", "claude-opus-4", "claude-sonnet-4", "qwen",
+              "llama", "mistral", "mixtral", "gemma", "deepseek")
+    targets = []
+    for pat in ("*.py", "api/*.py", "services/*.py", "auth/*.py", "database/*.py"):
+        targets.extend(glob.glob(_os.path.join(_ROOT, pat)))
+    for path in sorted(set(targets)):
+        name = _os.path.basename(path)
+        if name.startswith("test_"):
+            continue   # tests may name models to assert against them
+        with open(path, encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, 1):
+                low = line.lower()
+                # Explicit, greppable opt-out for the few places that must
+                # name a model on purpose (the detector's own marker lists, and
+                # comments recording a real misconfiguration).
+                if "model-name-ok" in low:
+                    continue
+                for b in banned:
+                    assert b not in low, (
+                        f"{name}:{lineno} hardcodes the model name {b!r} — use the "
+                        f"configured LiteLLM tier alias instead")
+
+    # config.json ships the add-on defaults; they must be aliases too.
+    import json
+    with open(_os.path.join(_ROOT, "config.json"), encoding="utf-8") as fh:
+        cfg = json.load(fh)
+    for key in ("ai_model", "report_model"):
+        val = (cfg.get("options") or {}).get(key)
+        assert val, f"config.json is missing a default for {key}"
+        assert not looks_like_raw_model_name(val), (
+            f"config.json ships {key}={val!r}, a raw provider model name")
+
+
+@test
+def test_looks_like_raw_model_name_separates_aliases_from_models():
+    """The startup check must flag real model names and leave aliases alone.
+    A false positive is only a warning, but a false NEGATIVE is the bug."""
+    from services.ai_service import looks_like_raw_model_name
+    for raw in ("qwen3.5-mlx", "ollama/qwen3.5:9-mlx", "gpt-4o", "claude-opus-4-6",
+                "llama3.1:70b", "openai/gpt-4o-mini", "deepseek-chat"):
+        assert looks_like_raw_model_name(raw), f"missed raw model name {raw!r}"
+    for alias in ("tooling_high", "tooling_low", "reasoning_high", "fast", "default"):
+        assert not looks_like_raw_model_name(alias), f"false positive on alias {alias!r}"
+    for empty in (None, "", "   "):
+        assert not looks_like_raw_model_name(empty)
+
+
+@test
+def test_check_model_aliases_reports_both_fields():
+    """Both AI_MODEL and REPORT_MODEL are checked — the drift found in the wild
+    had BOTH set to a raw name, so checking only one would have half-missed it."""
+    from services.ai_service import check_model_aliases
+
+    class _S:
+        ai_model = "qwen3.5-mlx"
+        report_model = "qwen3.5-mlx"
+    problems = check_model_aliases(_S())
+    assert len(problems) == 2, problems
+    assert any("AI_MODEL" in p for p in problems)
+    assert any("REPORT_MODEL" in p for p in problems)
+
+    class _OK:
+        ai_model = "tooling_high"
+        report_model = "tooling_high"
+    assert check_model_aliases(_OK()) == []
+
+
+@test
+def test_no_ollama_references_remain():
+    """LiteLLM is the only backend. Leftover Ollama references in config or
+    docs imply a second supported path that does not exist."""
+    import glob
+    checked = 0
+    for pat in ("*.py", "*.json", "*.md", "*.example", "api/*.py",
+                "services/*.py", "scripts/*.py"):
+        for path in glob.glob(_os.path.join(_ROOT, pat)):
+            name = _os.path.basename(path)
+            if name.startswith("test_") or name == "CLAUDE.md":
+                continue   # this test names it; CLAUDE.md records the history
+            with open(path, encoding="utf-8") as fh:
+                body = fh.read().lower()
+            checked += 1
+            assert "ollama" not in body, f"{name} still references Ollama"
+    assert checked > 10, f"only scanned {checked} files — the glob is wrong"
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Runner
 # ──────────────────────────────────────────────────────────────────────────

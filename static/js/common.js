@@ -63,10 +63,13 @@ function _maCrossLabel(stock) {
 
 /* ── Top navigation ──────────────────────────────────────────────────────── */
 const NAV_LINKS = [
+  // Order is the intended WORKFLOW, not alphabetical: the Playbook tells you
+  // which strategy the regime picked, and Strategy Lab sits right next to it
+  // because that is where you go to disagree with that pick and test your own.
   ['/', 'Playbook', 'Your daily workflow: market regime, position alerts, and setups grouped by strategy with their tested edge.'],
+  ['/backtest', 'Strategy Lab', 'Edge matrix by regime, walk-forward backtests (rotation vs trade-plan mode), and robustness checks. Go here to test your OWN forecast instead of the regime’s pick.'],
   ['/screener', 'Screener', 'Filter the full S&P 500 + ETF universe by fundamentals, technicals, and momentum.'],
   ['/charts', 'Charts', 'Market-wide dashboards: VIX, sectors, ETFs, breadth, and macro context.'],
-  ['/backtest', 'Strategy Lab', 'Edge matrix by regime, walk-forward backtests (rotation vs trade-plan mode), and robustness checks.'],
   ['/scorecard', 'Scorecard', 'Realized results vs what the backtest expected, plus execution quality ranked by what it cost.'],
   ['/report', 'Report', 'AI-assisted daily market report and saved commentary.'],
   ['/journal', 'Journal', 'Closed-trade log with realized P&L, R-multiple, and win-rate stats.'],

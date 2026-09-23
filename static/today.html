@@ -77,6 +77,26 @@
     .state-forming { color:#f0a500; } .state-triggered { color:#3fbf7f; }
     .watch-only { font-size:11px; color:#8a8a90; font-style:italic; }
 
+    /* ── Strategy running now ────────────────────────────────────────────────
+       The page used to answer "what are my setups?" without ever answering the
+       question underneath it: WHICH strategy is running, and WHY. This panel is
+       that answer, and it sits above the setups because it is the thing the
+       setups are downstream of. */
+    .run-head { display:flex; align-items:flex-start; gap:12px; background:#101013; border:1px solid #232327; border-left:3px solid #f0a500; border-radius:6px; padding:12px 14px; }
+    .run-badge { font-size:9.5px; font-weight:800; letter-spacing:.1em; color:#f0a500; background:#1c1808; border:1px solid #3a3110; border-radius:3px; padding:3px 7px; white-space:nowrap; margin-top:2px; }
+    .run-name { font-size:16px; font-weight:800; color:#fff; line-height:1.25; }
+    .run-sub { font-size:11.5px; color:#9a9a9a; margin-top:3px; }
+    .run-block { margin-top:12px; }
+    .run-why { margin:6px 0 0; padding-left:17px; font-size:11.5px; color:#b4b4b4; line-height:1.65; }
+    .run-list { border:1px solid #232327; border-radius:6px; overflow:hidden; margin-top:6px; }
+    .run-row { display:flex; align-items:center; gap:9px; padding:8px 11px; border-bottom:1px solid #1a1a1d; font-size:12px; flex-wrap:wrap; background:#101013; }
+    .run-row:last-child { border-bottom:none; }
+    .run-row .rn { font-weight:700; color:#e4e4e4; }
+    .run-row .rc { color:#777; font-size:11px; }
+    .run-row .rt { margin-left:auto; display:flex; gap:5px; flex-wrap:wrap; }
+    .run-forecast { margin-top:12px; border:1px solid #22304f; background:#0e131f; border-radius:6px; padding:11px 13px; font-size:12px; color:#a9bce0; line-height:1.6; }
+    .run-forecast a { color:#7aa2f7; font-weight:700; }
+
     /* ── Standing down ───────────────────────────────────────────────────── */
     details.standdown { background:#101013; border:1px solid #232327; border-radius:6px; padding:10px 13px; }
     details.standdown summary { cursor:pointer; font-size:11.5px; color:#999; font-weight:700; text-transform:uppercase; letter-spacing:.06em; list-style:none; }
@@ -139,6 +159,7 @@
     <section id="bandWrap" class="band" hidden></section>
     <div class="cols" id="colsWrap" hidden>
       <div class="col">
+        <section id="runningWrap" class="panel"></section>
         <section id="playbookWrap" class="panel"></section>
         <section id="standdownWrap"></section>
       </div>
@@ -334,6 +355,7 @@
 
   function renderAll() {
     safeRender(renderBand, 'bandWrap');
+    safeRender(renderRunning, 'runningWrap');
     safeRender(renderPlaybook, 'playbookWrap');
     safeRender(renderStandDown, 'standdownWrap');
     safeRender(renderDecisions, 'decisionsWrap');
@@ -417,6 +439,92 @@
         <div class="kv"><span class="k">Slots used</span><span class="v">${N(heat.slots_used) === null ? '--' : heat.slots_used}${N(heat.max_positions) === null ? '' : ' / ' + heat.max_positions}</span></div>
         ${heat.over_budget ? `<div class="loud">OVER RISK BUDGET — your open risk exceeds ${maxR === null ? 'the budget' : Number(maxR).toFixed(2) + 'R'}. Do not add new risk until something is closed or a stop is tightened.</div>` : ''}
         ${unstopped > 0 ? `<div class="loud">⚠ ${esc(open.unstopped_warning || `${unstopped} position${unstopped === 1 ? '' : 's'} have NO STOP — that risk is unbounded and is not counted in the number above.`)}</div>` : ''}
+      </div>`;
+  }
+
+  /* ── 1b. Strategy running now ──────────────────────────────────────────────
+     There is no single "strategy" the app runs — the regime selects a SET of
+     them, and every setup below is produced by one member of that set. Stating
+     that plainly is the whole point of this panel: the name of the playbook in
+     force, the evidence that put it in force, and the strategies underneath it.
+     Everything here comes from /api/today; nothing is inferred client-side. */
+  function renderRunning() {
+    const wrap = document.getElementById('runningWrap');
+    const r = (DATA && DATA.regime) || {};
+    const statuses = (DATA && DATA.strategy_regime_status) || [];
+    const active = statuses.filter((s) => s.active);
+    const sitting = statuses.length - active.length;
+    const ev = (DATA && DATA.evidence_regimes) || {};
+    const t = r.transition || {};
+
+    // Setup counts per strategy, so a running strategy with nothing to show
+    // reads as "ran, found nothing" rather than looking absent.
+    const counts = {};
+    ((DATA && DATA.setups) || []).forEach((s) => {
+      const id = s.strategy || 'unknown';
+      counts[id] = (counts[id] || 0) + 1;
+    });
+
+    const label = r.quadrant_label || 'Unclassified market';
+    const promoted = Array.isArray(ev.added) ? ev.added.length : 0;
+    const excluded = Array.isArray(ev.excluded) ? ev.excluded.length : 0;
+    // The backend states its own selection basis; show that verbatim rather
+    // than re-deriving it here, and only add the counts it does not carry.
+    const basis = (ev.reason ? esc(ev.reason) : 'Selected by each strategy’s hand-written regime tag.')
+      + ((ev.applied && (promoted || excluded))
+        ? ` <b>${promoted} promoted, ${excluded} stood down</b> by the evidence.` : '');
+
+    // "Why" = the classifier's own reasons, never a client-side retelling.
+    const why = [];
+    if (N(r.adx) !== null) why.push(`ADX(14) on SPY is <b>${num(r.adx, 1)}</b> (${esc(r.adx_trend || 'unknown')}) — this is the trend-strength axis.`);
+    if (r.above_200ma !== undefined && r.above_200ma !== null) why.push(`SPY is <b>${r.above_200ma ? 'above' : 'below'}</b> its 200-day MA — this is the direction axis.`);
+    if (N(r.vix) !== null) why.push(`VIX is <b>${num(r.vix, 1)}</b> — the crisis overlay.`);
+    (r.reasons || []).forEach((x) => why.push(esc(x)));
+    if (!why.length) why.push('The classifier returned no reasons — treat the quadrant above as provisional.');
+
+    const shift = t.changed
+      ? `<div class="transition-live" style="margin-top:10px;">⚡ This selection just changed: ${esc(t.reason || 'a regime threshold was crossed in the last few sessions.')}</div>`
+      : '';
+
+    const rows = active.length === 0
+      ? `<div class="run-row muted">No strategy is tagged for this regime. Nothing is running — that is a deliberate stand-down, not a failure.</div>`
+      : active.map((s) => {
+          const e = evidenceFor(s.id);
+          const n = counts[s.id] || 0;
+          const effect = s.evidence && s.evidence.effect === 'promoted'
+            ? `<span class="ev" style="color:#7aa2f7;" title="${esc((s.evidence && s.evidence.note) || '')}">promoted by evidence</span>` : '';
+          return `<div class="run-row">
+            <span class="rn">${esc(s.name || s.id)}</span>
+            <span class="rc">${n} setup${n === 1 ? '' : 's'} today${s.actionable === false ? ' · watchlist-only' : ''}</span>
+            <span class="rt">${effect}${e.verdict ? `<span class="ev ${verdictChipClass(e.verdict)}" title="Backtested verdict for this strategy in the current regime">${esc(String(e.verdict).toUpperCase())}</span>` : '<span class="ev" title="The edge matrix has no tested data for this strategy in this regime.">no tested data</span>'}</span>
+          </div>`;
+        }).join('');
+
+    wrap.innerHTML = `<div class="panel-title">Strategy Running Now</div>
+      <div class="panel-desc">The market regime — not you, and not a fixed preference — decides which strategies run today. This is that decision, spelled out.</div>
+      <div class="run-head">
+        <span class="run-badge">RUNNING</span>
+        <div style="min-width:0;">
+          <div class="run-name">${esc(label)} playbook</div>
+          <div class="run-sub">${esc(r.quadrant_description || '')}</div>
+        </div>
+      </div>
+      ${shift}
+      <div class="run-block">
+        <div class="section-label">Why this playbook is running</div>
+        <ul class="run-why">${why.map((w) => `<li>${w}</li>`).join('')}</ul>
+        <div class="muted" style="font-size:11.5px;margin-top:7px;line-height:1.6;">${basis}</div>
+      </div>
+      <div class="run-block">
+        <div class="section-label">Strategies running under it — ${active.length} active${sitting ? `, ${sitting} standing down` : ''}</div>
+        <div class="run-list">${rows}</div>
+        ${sitting ? `<div class="muted" style="font-size:11px;margin-top:6px;">The ${sitting} strategy${sitting === 1 ? '' : ' strategies'} sitting out ${sitting === 1 ? 'is' : 'are'} listed with ${sitting === 1 ? 'its' : 'their'} reason in <b>Standing down</b>, below the setups.</div>` : ''}
+      </div>
+      <div class="run-forecast">
+        <b>Think the market is doing something else?</b> You are not locked into this. The regime read is a default, not a verdict —
+        take your own forecast to the <a href="/backtest">Strategy Lab</a>, run any strategy in <b>trade_plan</b> mode over the era or
+        quadrant you expect, and judge it on its own walk-forward numbers. If the evidence backs you and the hand-written tag does not,
+        that is exactly what the edge matrix is for: build it there and it can override the selection above.
       </div>`;
   }
 

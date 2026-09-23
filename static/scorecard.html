@@ -61,6 +61,23 @@
     .unav-v:last-child { margin-bottom:0; }
     .honesty { border:1px solid #3a3110; background:#1c1808; color:#e0bd6a; border-radius:6px; padding:11px 13px; font-size:12px; line-height:1.5; margin-bottom:12px; }
 
+    /* ── How to read this page ─────────────────────────────────────────────────
+       The numbers here are only useful if you know which one to act on first,
+       and "monitoring" / "not measurable yet" both look like failures until
+       someone explains they are not. Collapsible, and the open/closed choice
+       is remembered per browser so it stops being in the way. */
+    details.howto { background:#101013; border:1px solid #232327; border-radius:6px; padding:12px 14px; }
+    details.howto > summary { cursor:pointer; font-size:12px; color:#ddd; font-weight:700; text-transform:uppercase; letter-spacing:.06em; list-style:none; }
+    details.howto > summary::-webkit-details-marker { display:none; }
+    details.howto > summary::before { content:'\25b8  '; color:#f0a500; }
+    details.howto[open] > summary::before { content:'\25be  '; }
+    .howto-body { margin-top:11px; font-size:12px; color:#a4a4a4; line-height:1.65; }
+    .howto-step { display:flex; gap:11px; padding:8px 0; border-bottom:1px solid #1a1a1d; }
+    .howto-step:last-of-type { border-bottom:none; }
+    .howto-n { flex-shrink:0; width:20px; height:20px; border-radius:50%; background:#1c1808; border:1px solid #3a3110; color:#f0a500; font:700 11px 'JetBrains Mono',monospace; display:flex; align-items:center; justify-content:center; }
+    .howto-step b { color:#e0e0e0; }
+    .howto-key { margin-top:11px; display:grid; grid-template-columns:auto 1fr; gap:5px 11px; align-items:baseline; }
+
     .drift-pos { color:#3fbf7f; } .drift-neg { color:#e5484d; } .drift-flat { color:#bbb; }
     .cav { border-radius:6px; padding:11px 13px; margin-bottom:8px; line-height:1.5; background:#151518; border:1px solid #26262a; color:#8d8d93; font-size:12px; }
     @media (max-width:1100px) { .tiles { grid-template-columns:repeat(2,minmax(0,1fr)); } .modal-body { grid-template-columns:1fr; } }
@@ -72,6 +89,32 @@
 
   <main class="page">
     <div id="loading" class="empty">Loading your scorecard…</div>
+
+    <details class="howto" id="howto">
+      <summary>How to read this page</summary>
+      <div class="howto-body">
+        <p style="margin-bottom:9px;">
+          This page answers one question: <b>is the way you are trading actually delivering what the backtest promised?</b>
+          It compares your <b>closed trades</b> (the Journal) against the <b>tested expectation</b> (the edge matrix built in the
+          <a href="/backtest" style="color:#7aa2f7;font-weight:700;">Strategy Lab</a>). Everything is measured in <b>R</b> — multiples of the
+          risk you took on entry — so a $200 loss on a $200 risk and a $2,000 loss on a $2,000 risk both read as −1R and can be compared.
+        </p>
+        <div class="howto-step"><span class="howto-n">1</span><span><b>Start with Execution Quality, not the strategies.</b> It is ranked by what each leak actually cost you in R. Plugging the top item there is almost always worth more than swapping strategies — it is free money you are already giving away.</span></div>
+        <div class="howto-step"><span class="howto-n">2</span><span><b>Then read the per-strategy drift.</b> Negative drift means you are getting less than the backtest said to expect. Before concluding the strategy is broken, check step 1: a good strategy executed badly looks identical to a bad strategy.</span></div>
+        <div class="howto-step"><span class="howto-n">3</span><span><b>Respect the sample size.</b> A verdict of <span class="badge grey">monitoring</span> means <i>too few closed trades to judge</i> — not "underperforming". Do not retire a strategy on four trades.</span></div>
+        <div class="howto-step"><span class="howto-n">4</span><span><b>Act on it.</b> Fix the execution leak, or take the strategy back to the Strategy Lab and re-test it in the regime you are actually trading. Changing nothing is also a decision.</span></div>
+        <div class="howto-key">
+          <span class="badge ok">measured</span><span>Computed from real closed trades. Trust it, subject to the sample size shown next to it.</span>
+          <span class="badge grey">monitoring</span><span>Not enough closed trades yet. The math is fine; the history is thin.</span>
+          <span class="badge grey" style="border-style:dashed;">unavailable</span><span>Could <i>not</i> be computed — a required field was never recorded. This is never a zero and never a clean bill of health. Each card in <b>Not Measurable Yet</b> names the exact field that has to start being saved; it will fill in as you log new trades.</span>
+        </div>
+        <p style="margin-top:11px;color:#777;">
+          Empty page? You need closed trades first — close a position from the Playbook with <b>Close &amp; journal</b>. For the
+          expected-R column you also need a <b>trade_plan-mode</b> edge matrix; a rotation-mode one deliberately reports no expected R
+          rather than converting a period return into a pseudo-R.
+        </p>
+      </div>
+    </details>
 
     <section id="tilesWrap" class="tiles" hidden></section>
 
@@ -429,6 +472,21 @@ function renderCaveats() {
   }).join('');
 }
 
+/* "How to read this page" is open on a first visit (when it is most needed)
+   and remembers the choice afterwards. localStorage can throw in private mode,
+   so every access is guarded — the panel must still work with no storage. */
+function initHowTo() {
+  const el = document.getElementById('howto');
+  if (!el) return;
+  let stored = null;
+  try { stored = localStorage.getItem('st_scorecard_howto'); } catch (e) { /* private mode */ }
+  el.open = stored !== 'closed';
+  el.addEventListener('toggle', () => {
+    try { localStorage.setItem('st_scorecard_howto', el.open ? 'open' : 'closed'); } catch (e) { /* private mode */ }
+  });
+}
+
+initHowTo();
 initHeader('/scorecard').catch(() => { /* header is non-fatal */ });
 load();
 </script>

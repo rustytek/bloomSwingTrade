@@ -63,7 +63,11 @@ _scheduler = AsyncIOScheduler()
 async def _scheduled_report_job():
     """Generate the daily report for every user at 05:30, each using their own
     LiteLLM key (falls back to the global key when a user has none)."""
-    from services.report_service import generate_daily_report
+    # Each report is built in the out-of-process job worker (see
+    # report_service.run_daily_report_job) — running it on this event loop is
+    # what got the add-on SIGKILLed by the watchdog at 05:31 on 2026-09-24.
+    # Users are done one at a time so four workers never compete at once.
+    from services.report_service import run_daily_report_job
     db = SessionLocal()
     try:
         users = db.query(User).all()
@@ -73,10 +77,7 @@ async def _scheduled_report_job():
         logger.info("Scheduler: generating daily reports for %s users", len(users))
         for user in users:
             try:
-                await generate_daily_report(
-                    db, user.id, triggered_by="schedule", api_key=user.litellm_api_key,
-                    system_prompt=user.report_system_prompt,
-                )
+                await run_daily_report_job(db, user.id, triggered_by="schedule")
             except Exception as e:
                 logger.error("Scheduler: report failed for user %s: %s", user.username, e)
         logger.info("Scheduler: daily reports complete")
@@ -440,7 +441,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.21.0",
+    version="1.21.1",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

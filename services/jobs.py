@@ -224,3 +224,35 @@ def result_of(job: BackgroundJob | None) -> dict | None:
         return json.loads(job.result_json)
     except (ValueError, TypeError):
         return None
+
+
+async def wait_for(job_id: int, timeout: float, poll: float = 3.0) -> dict:
+    """Await a job's terminal state WITHOUT doing any of its work in-process.
+
+    For callers that genuinely need the answer before responding (the daily
+    report button, the 05:30 scheduler) but must not run the build on the web
+    process's event loop. Each poll is one indexed row read in a fresh session
+    and the waits are `asyncio.sleep`, so a long wait costs the loop nothing.
+
+    Returns {"status", "result", "error"}; status "timeout" when the job has
+    not finished within `timeout` seconds (the job itself keeps running).
+    """
+    import asyncio
+    from database.db import SessionLocal
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        s = SessionLocal()
+        try:
+            job = s.query(BackgroundJob).filter(BackgroundJob.id == job_id).first()
+            if job is None:
+                return {"status": "failed", "result": None, "error": f"job {job_id} vanished"}
+            if job.status not in ACTIVE_STATUSES:
+                return {"status": job.status, "result": result_of(job), "error": job.error}
+        finally:
+            s.close()
+        if loop.time() >= deadline:
+            return {"status": "timeout", "result": None,
+                    "error": f"job {job_id} still running after {timeout:.0f}s"}
+        await asyncio.sleep(poll)

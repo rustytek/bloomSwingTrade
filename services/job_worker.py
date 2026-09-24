@@ -160,9 +160,72 @@ def _selftest(db, user_id: int, params: dict, tick) -> dict:
     return {"ok": True, "steps": steps, "user_id": user_id}
 
 
+def _daily_report(db, user_id: int, params: dict, tick) -> dict:
+    """Generate one user's daily AI report out of the web process.
+
+    Moved here after the 2026-09-24 05:31 outage: the 05:30 scheduled report
+    ran inside uvicorn's event loop — per-ticker quote enrichment and 5-year
+    history parsing run synchronously there, while an expired chart cache was
+    refilled by yfinance threads competing for the same GIL — and the add-on
+    stopped answering its health check for over a minute. The Supervisor
+    watchdog then SIGKILLed it (exit 137).
+
+    The LLM call can legitimately take up to its 900 s timeout, longer than
+    jobs.STALE_AFTER (12 min), so a heartbeat coroutine ticks every 60 s while
+    the report is generated — otherwise the reaper would fail a healthy job.
+    The report uses its OWN session; `db` (and `tick`) belong to the job row.
+    """
+    import asyncio
+    import logging
+
+    if not logging.getLogger().handlers:
+        # Fresh interpreter: without this the report's INFO/ERROR lines would be
+        # dropped instead of landing in the add-on log next to the web app's.
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s: [report worker] %(message)s")
+
+    from database.db import SessionLocal
+    from database.models import User
+    from services.report_service import generate_daily_report
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise ValueError(f"user {user_id} not found")
+    # The key and prompt are read from the user row HERE rather than passed
+    # in params, so a LiteLLM key is never copied into background_jobs.params_json.
+    api_key = user.litellm_api_key
+    system_prompt = user.report_system_prompt
+
+    async def _go():
+        report_db = SessionLocal()
+
+        async def heartbeat():
+            while True:
+                await asyncio.sleep(60)
+                tick(0.5, "Waiting for the AI model to finish the report…")
+
+        beat = asyncio.create_task(heartbeat())
+        try:
+            tick(0.1, "Gathering market context…")
+            return await generate_daily_report(
+                report_db, user_id,
+                triggered_by=str(params.get("triggered_by") or "schedule"),
+                model=params.get("model") or None,
+                api_key=api_key,
+                system_prompt=system_prompt,
+            )
+        finally:
+            beat.cancel()
+            report_db.close()
+
+    result = asyncio.run(_go())
+    tick(0.99, "Saving report…")
+    return {"markdown": result.get("markdown"), "model": result.get("model")}
+
+
 HANDLERS = {
     "edge_matrix": _edge_matrix,
     "selftest": _selftest,
+    "daily_report": _daily_report,
 }
 
 

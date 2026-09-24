@@ -487,7 +487,9 @@ async def generate_report(
     user: User = Depends(get_current_user),
 ):
     """Trigger on-demand report generation for the current user."""
-    from services.report_service import generate_daily_report
+    # Built in the out-of-process job worker; this request only awaits the job
+    # row (asyncio.sleep polls), so a slow report can't starve the event loop.
+    from services.report_service import run_daily_report_job
     try:
         logger.info(
             "Daily report requested user_id=%s username=%s model=%s",
@@ -495,9 +497,7 @@ async def generate_report(
             user.username,
             req.model or "(default)",
         )
-        result = await generate_daily_report(db, user.id, triggered_by="user", model=req.model,
-                                             api_key=user.litellm_api_key,
-                                             system_prompt=user.report_system_prompt)
+        result = await run_daily_report_job(db, user.id, triggered_by="user", model=req.model)
     except RuntimeError as e:
         logger.error("Daily report request failed user_id=%s model=%s error=%s", user.id, req.model or "(default)", e)
         raise HTTPException(status_code=503, detail=str(e))

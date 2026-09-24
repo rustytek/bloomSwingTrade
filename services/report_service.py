@@ -648,3 +648,33 @@ Do not add new sections. Return only the completed markdown — no preamble."""
         logger.warning("Could not persist report to DB: %s", e)
 
     return {"markdown": markdown, "model": resolved_model}
+
+
+# ── Out-of-process entry point ────────────────────────────────────────────────
+# The 05:30 scheduled report ran `generate_daily_report` on the web process's
+# event loop and starved it long enough (2026-09-24 05:30–05:31) for the
+# Supervisor watchdog to find the add-on unhealthy and SIGKILL it (exit 137).
+# Both the scheduler and the on-demand button now go through here: the report is
+# built by `python -m services.job_worker` (own interpreter, own GIL) and this
+# process only polls the job row. See CLAUDE.md "Long Builds Are Background Jobs".
+
+# LLM timeout (900 s in _call_llm) + context gathering + headroom.
+REPORT_JOB_TIMEOUT = 17 * 60
+
+
+async def run_daily_report_job(db: Session, user_id: int, triggered_by: str = "user",
+                               model: str | None = None) -> dict:
+    """Generate a report in the job worker and wait for it. Same return shape as
+    generate_daily_report ({"markdown", "model"}); raises RuntimeError on failure."""
+    from services import jobs
+
+    job, _created = jobs.enqueue(db, user_id, "daily_report",
+                                 {"triggered_by": triggered_by, "model": model or ""})
+    outcome = await jobs.wait_for(job.id, timeout=REPORT_JOB_TIMEOUT)
+    if outcome["status"] == "done" and outcome["result"]:
+        return outcome["result"]
+    err = outcome.get("error") or f"report job ended with status {outcome['status']}"
+    # The worker records "ExcType: message"; strip the type so the UI reads cleanly.
+    if ": " in err and err.split(": ", 1)[0].isidentifier():
+        err = err.split(": ", 1)[1]
+    raise RuntimeError(err)

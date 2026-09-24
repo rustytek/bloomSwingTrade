@@ -372,6 +372,102 @@ def test_worker_module_has_no_import_side_effects():
     assert "import main" not in src and "from main" not in src
 
 
+@test
+def test_wait_for_returns_the_result_of_a_real_worker():
+    """wait_for is how the report button and the scheduler get an answer
+    without doing the work on the event loop."""
+    import asyncio
+    db = _fresh_db()
+    try:
+        job, _ = jobsvc.enqueue(db, _USER_ID, "selftest", {"steps": 2, "delay": 0.1})
+        out = asyncio.run(jobsvc.wait_for(job.id, timeout=90, poll=0.25))
+        assert out["status"] == "done", out
+        assert out["result"] and out["result"]["ok"] is True
+    finally:
+        db.close()
+
+
+@test
+def test_wait_for_times_out_without_killing_the_job():
+    import asyncio
+    db = _fresh_db()
+    try:
+        job, _ = jobsvc.enqueue(db, _USER_ID, "selftest", {"steps": 6, "delay": 0.5})
+        out = asyncio.run(jobsvc.wait_for(job.id, timeout=0.5, poll=0.1))
+        assert out["status"] == "timeout", out
+        _wait(db, job.id)   # let it finish so it doesn't leak into later tests
+    finally:
+        db.close()
+
+
+@test
+def test_report_job_failure_surfaces_as_runtime_error():
+    """End to end through a real worker: a report job that fails in the worker
+    must come back to the caller as a RuntimeError with a readable message
+    (api/ai.py turns that into a 503), not hang and not crash the web app."""
+    import asyncio
+    from services.report_service import run_daily_report_job
+    db = _fresh_db()
+    try:
+        try:
+            asyncio.run(run_daily_report_job(db, 987654, triggered_by="test"))
+        except RuntimeError as e:
+            assert "987654" in str(e) and "not found" in str(e), str(e)
+        else:
+            raise AssertionError("expected RuntimeError")
+    finally:
+        db.close()
+
+
+@test
+def test_daily_report_handler_heartbeats_and_passes_params_through():
+    """In-process run of the worker handler with the LLM step stubbed."""
+    import asyncio
+    from services import job_worker, report_service
+    db = _fresh_db()
+    user = db.query(User).filter(User.id == _USER_ID).first()
+    user.litellm_api_key = "sk-test-not-real"
+    db.commit()
+    seen, ticks = {}, []
+    real = report_service.generate_daily_report
+
+    async def fake(report_db, user_id, triggered_by="user", model=None, api_key=None, system_prompt=None):
+        assert report_db is not db, "the report must use its own session, not the job's"
+        seen.update(user_id=user_id, triggered_by=triggered_by, model=model, api_key=api_key)
+        await asyncio.sleep(0.01)
+        return {"markdown": "# hi", "model": model or "tooling_high"}
+
+    report_service.generate_daily_report = fake
+    try:
+        out = job_worker._daily_report(db, _USER_ID, {"triggered_by": "schedule", "model": "m1"},
+                                       lambda f, d: ticks.append((f, d)))
+    finally:
+        report_service.generate_daily_report = real
+        db.close()
+    assert out == {"markdown": "# hi", "model": "m1"}, out
+    assert seen == {"user_id": _USER_ID, "triggered_by": "schedule", "model": "m1",
+                    "api_key": "sk-test-not-real"}, seen
+    assert ticks and ticks[-1][0] == 0.99
+
+
+@test
+def test_daily_report_never_runs_on_the_web_event_loop():
+    """The 2026-09-24 05:31 outage: the scheduled report ran in-process, the
+    health check went unanswered, and the watchdog SIGKILLed the add-on."""
+    root = os.path.dirname(os.path.abspath(__file__))
+    for rel in ("main.py", os.path.join("api", "ai.py")):
+        src = open(os.path.join(root, rel), encoding="utf-8").read()
+        assert "await generate_daily_report(" not in src, (
+            rel + " builds the daily report on the event loop again")
+        assert "run_daily_report_job" in src, rel + " no longer uses the job worker"
+    from services.job_worker import HANDLERS
+    assert "daily_report" in HANDLERS
+    # The user's LiteLLM key must never be copied into background_jobs.params_json.
+    rs = open(os.path.join(root, "services", "report_service.py"), encoding="utf-8").read()
+    call = rs.split("def run_daily_report_job", 1)[1].split("outcome = ", 1)[0]
+    assert "api_key" not in call, "run_daily_report_job puts the API key into job params"
+
+
 def main_runner() -> int:
     passed = failed = 0
     failures = []

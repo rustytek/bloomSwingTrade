@@ -29,7 +29,7 @@ python test_weekly_plan.py       # weekly-plan decisions, risk-aware buy pick, s
 python test_broker.py            # Robinhood OAuth/MCP (mocked), order validation, paper safety, fill sync
 ```
 
-**235 tests across nine suites** (`python test_broker.py` covers the Robinhood/Trade layer, fully mocked). All are self-contained (no network) except
+**240 tests across nine suites** (`python test_broker.py` covers the Robinhood/Trade layer, fully mocked). All are self-contained (no network) except
 `test_jobs.py`, which deliberately **launches a real worker subprocess** against a
 throwaway SQLite file in a temp dir — mocking the subprocess would let the very
 layer it guards break while the test still passed. `test_passes.py`
@@ -190,7 +190,7 @@ while cloudflared logs handshake timeouts means a starved loop, not a slow endpo
 |---|---|
 | `database/models.py::BackgroundJob` | `background_jobs` table: status, `progress` 0–1, `progress_detail`, `heartbeat_at`, `result_json`, `params_key` |
 | `services/jobs.py` | API-side registry. `enqueue()` **reuses an in-flight job with the same `(user, kind, params_key)`** — the outage log shows `?refresh=true` arriving twice concurrently, doubling the load. `reap_stale()` fails a job whose heartbeat is older than `STALE_AFTER` (12 min), so a killed worker can't block the feature forever. `to_dict()` deliberately omits the result payload; polls must stay cheap |
-| `services/job_worker.py` | `python -m services.job_worker <job_id>` — a **fresh interpreter with its own GIL**. Must have no import side effects (it runs per job) and must never import `main.py`. Every path ends in a terminal status. Carries a `selftest` kind that exercises the whole pipeline in seconds |
+| `services/job_worker.py` | `python -m services.job_worker <job_id>` — a **fresh interpreter with its own GIL**. Must have no import side effects (it runs per job) and must never import `main.py`. Every path ends in a terminal status. Kinds: `edge_matrix`, `daily_report`, and a `selftest` kind that exercises the whole pipeline in seconds |
 | `api/jobs.py` | `GET /api/jobs`, `GET /api/jobs/{id}`, `POST /api/jobs/{id}/cancel`. Cancel marks the row inactive so a rebuild can start; it does **not** kill the detached worker, and says so |
 | `main.py::orphan_background_jobs()` | Runs at startup. Workers die with the container, so anything still `queued`/`running` is dead — resetting it immediately avoids a 12-minute window where no rebuild can start after every restart |
 
@@ -208,6 +208,26 @@ and empties on every restart.
 `services/chart_service.py`'s cache is also memory-only, so `main.py::_warm_chart_cache()`
 fills it in the background at startup rather than making the first `/charts` visitor pay
 for the cold fetch inside their own request.
+
+**The daily AI report is a job too (second outage, 2026-09-24 05:31).** The 05:30
+scheduler ran `generate_daily_report` for every user on the web event loop. Per-ticker
+quote enrichment (`_enrich_with_technicals`) and 5-year history parsing
+(`_closes_from_cache`) are synchronous there, and the chart cache (6 h TTL, warmed at the
+previous deploy) had expired, so yfinance threads were refilling it on the same GIL. The
+add-on stopped answering its `GET /` health check, the Supervisor logged `Watchdog found
+app SwingTrader is unhealthy`, and killed it (`exit code 137` — the SIGKILL after the stop
+timeout, **not** OOM). The add-on log shows the report starting and then `Started server
+process` with **no shutdown line and no traceback** — that signature means "killed from
+outside", so read `ha_get_logs(source="system_service", slug="supervisor")` for why.
+Now: `services/report_service.py::run_daily_report_job()` enqueues a `daily_report` job
+(handler in `job_worker.py`, own session, a 60 s heartbeat coroutine because the LLM call
+may run up to its 900 s timeout, longer than `STALE_AFTER`) and awaits it with
+`services/jobs.py::wait_for()` — `asyncio.sleep` polls of one row, zero work on the loop.
+Both the scheduler (users one at a time) and `POST /api/ai/daily-report` use it; the
+endpoint's response shape and its RuntimeError→503 behaviour are unchanged. The user's
+LiteLLM key is read from the `users` row inside the worker and is **never** put in
+`params_json`. `test_jobs.py::test_daily_report_never_runs_on_the_web_event_loop` guards
+the regression.
 
 ### Evidence Layer (`services/edge_matrix.py`, `services/scorecard.py`, `api/scorecard.py`)
 

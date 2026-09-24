@@ -29,7 +29,7 @@ python test_weekly_plan.py       # weekly-plan decisions, risk-aware buy pick, s
 python test_broker.py            # Robinhood OAuth/MCP (mocked), order validation, paper safety, fill sync
 ```
 
-**240 tests across nine suites** (`python test_broker.py` covers the Robinhood/Trade layer, fully mocked). All are self-contained (no network) except
+**241 tests across nine suites** (`python test_broker.py` covers the Robinhood/Trade layer, fully mocked). All are self-contained (no network) except
 `test_jobs.py`, which deliberately **launches a real worker subprocess** against a
 throwaway SQLite file in a temp dir — mocking the subprocess would let the very
 layer it guards break while the test still passed. `test_passes.py`
@@ -341,6 +341,8 @@ Copy `.env.example` to `.env`. `Settings` sets `extra = "ignore"`, so unknown ke
 | `BROKER_ENCRYPTION_KEY` | *(empty)* | Fernet key for stored broker tokens; blank = `broker.key` next to the DB |
 
 For HAOS, config goes through the add-on UI (mapped to `/data/options.json`).
+
+**Model dropdowns (Report page) are per-user and alias-only.** `GET /api/ai/models` calls LiteLLM `/v1/models` with the user's own virtual key (global key if none) — LiteLLM scopes that list to what the key may use, so **restricting a user's key to specific models in LiteLLM is how you assign models; the dropdown follows automatically**. An unrestricted key returns the whole catalog, so `services/ai_service.py::select_tier_aliases()` keeps only text-capable tier aliases (`tooling`, `tooling_local`, `coding`, `knowledge(_local)` × `high/med/low`; never `vision_*`/`embedding`) in family→tier order, and reports `hidden_count`. If a key offers no aliases at all the raw list is shown (`aliases_only: false`) rather than an empty dropdown. The response also carries `default` (REPORT_MODEL, then AI_MODEL, if offered) and `key_source` (`user`|`global`).
 
 ## Deployment Notes
 

@@ -410,14 +410,26 @@ async def list_models(user: User = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Cannot reach LLM server: {e}")
 
-    models = []
-    for m in data.get("data", []):
-        name = m.get("id") or m.get("name")
-        if name:
-            models.append({"name": name, "size_gb": None, "modified_at": None})
-    # Sort: put embedding models last, everything else alphabetical
-    models.sort(key=lambda m: (1 if "embed" in m["name"] else 0, m["name"]))
-    return {"models": models, "provider": provider, "base_url": llm_base_url()}
+    from services.ai_service import select_tier_aliases
+    names = [m.get("id") or m.get("name") for m in data.get("data", [])]
+    names = [n for n in names if n]
+    # LiteLLM scopes /v1/models to the calling key, so a key restricted to
+    # specific models returns exactly this user's assignment. Show only the
+    # text-capable tier aliases from that list; an unrestricted key would
+    # otherwise put the whole legacy catalog (OpenAI-compat names, aLocalModel_*) here.
+    aliases, hidden = select_tier_aliases(names)
+    aliases_only = bool(aliases)
+    shown = aliases if aliases_only else sorted(names)   # key has no aliases at all: don't hide everything
+    default = next((m for m in (s.report_model, s.ai_model) if m in shown), shown[0] if shown else None)
+    return {
+        "models": [{"name": n, "size_gb": None, "modified_at": None} for n in shown],
+        "default": default,
+        "aliases_only": aliases_only,
+        "hidden_count": hidden if aliases_only else 0,
+        "key_source": "user" if getattr(user, "litellm_api_key", None) else "global",
+        "provider": provider,
+        "base_url": llm_base_url(),
+    }
 
 
 @router.post("/debug/litellm")

@@ -1065,6 +1065,26 @@ def test_looks_like_raw_model_name_separates_aliases_from_models():
 
 
 @test
+def test_model_dropdown_shows_only_text_tier_aliases_in_order():
+    """/api/ai/models: an unrestricted LiteLLM key returns the whole catalog.
+    Only text-capable tier aliases may reach the Report page dropdown, grouped
+    tooling -> tooling_local -> ... and high -> med -> low within a family."""
+    from services.ai_service import select_tier_aliases
+    catalog = ["gpt-4", "aLocalModel_hermes3_8b_fast", "tooling_low", "vision_high",   # model-name-ok
+               "tooling_local_med", "embedding", "tooling_high", "knowledge_local_high",
+               "tooling_med", "vision_local_low", "groq/llama-3.3-70b", "tooling_local_high",  # model-name-ok
+               "coding_high", "tooling_high"]
+    aliases, hidden = select_tier_aliases(catalog)
+    assert aliases == ["tooling_high", "tooling_med", "tooling_low",
+                       "tooling_local_high", "tooling_local_med",
+                       "coding_high", "knowledge_local_high"], aliases
+    assert hidden == 6, hidden          # 13 distinct names, 7 kept (duplicate ignored)
+    # A key restricted to specific aliases yields exactly that assignment.
+    assert select_tier_aliases(["tooling_local_low", "tooling_med"]) == (["tooling_med", "tooling_local_low"], 0)
+    assert select_tier_aliases([]) == ([], 0)
+
+
+@test
 def test_check_model_aliases_reports_both_fields():
     """Both AI_MODEL and REPORT_MODEL are checked — the drift found in the wild
     had BOTH set to a raw name, so checking only one would have half-missed it."""

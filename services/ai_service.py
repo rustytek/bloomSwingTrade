@@ -12,6 +12,7 @@ implementation, so switching providers requires zero changes elsewhere.
 """
 
 import json
+import re
 import logging
 from abc import ABC, abstractmethod
 from config import get_settings
@@ -205,6 +206,43 @@ def looks_like_raw_model_name(value: str | None) -> bool:
     if any(m in v for m in _RAW_MODEL_MARKERS):
         return True
     return any(v.startswith(p) for p in _RAW_MODEL_PREFIXES)
+
+
+# Tier-alias families from aiProxy's CLAUDE.md "Tier Aliases" that can write a
+# text report or answer a chat. vision_* and embedding are aliases too, but a
+# report asked of a camera or embedding model is useless, so they are never
+# offered. Order here is the dropdown order.
+_TEXT_ALIAS_FAMILIES = ("tooling", "tooling_local", "coding", "coding_local",
+                        "knowledge", "knowledge_local")
+_TIER_ORDER = ("high", "med", "low")
+_TIER_ALIAS_RE = re.compile(r"^(?P<family>[a-z]+(?:_local)?)_(?P<tier>high|med|low)$")
+
+
+def select_tier_aliases(names) -> tuple[list[str], int]:
+    """Filter a LiteLLM `/v1/models` id list down to text-capable tier aliases.
+
+    Returns (aliases_in_display_order, hidden_count). LiteLLM already limits
+    `/v1/models` to what the calling virtual key may use, so a key restricted
+    to specific models yields exactly that user's assignment; an UNRESTRICTED
+    key (or the global fallback key) returns the whole catalog, legacy direct
+    names included — which is what put legacy OpenAI-compat and `aLocalModel_*`
+    names back in the dropdown. The app only ever calls tier aliases (see AI_MODEL rule), so
+    everything else is hidden rather than offered.
+    """
+    seen, picked = set(), []
+    total = 0
+    for n in names or []:
+        if not isinstance(n, str) or n in seen:
+            continue
+        seen.add(n)
+        total += 1
+        m = _TIER_ALIAS_RE.match(n.strip().lower())
+        if m and m.group("family") in _TEXT_ALIAS_FAMILIES:
+            picked.append((_TEXT_ALIAS_FAMILIES.index(m.group("family")),
+                           _TIER_ORDER.index(m.group("tier")), n))
+    picked.sort()
+    aliases = [n for _f, _t, n in picked]
+    return aliases, total - len(aliases)
 
 
 def check_model_aliases(settings=None) -> list[str]:

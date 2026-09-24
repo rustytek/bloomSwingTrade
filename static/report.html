@@ -381,9 +381,17 @@
           opt.textContent = m.name + gb;
           sel.appendChild(opt);
         });
-        // Restore saved or fall back to first
+        // Restore saved (only if this user's key still offers it — a saved
+        // legacy direct model name is dropped), else the configured default.
         const saved = i === 0 ? savedReport : savedChat;
         if (saved && models.find(m => m.name === saved)) sel.value = saved;
+        else if (data.default && models.find(m => m.name === data.default)) sel.value = data.default;
+        // Say where the list comes from, so a short list reads as "your key's
+        // assignment" rather than as a bug.
+        sel.title = (i === 0 ? 'Model used to generate the report' : 'Model used for chat')
+          + ' — tier aliases your LiteLLM ' + (data.key_source === 'user' ? 'key' : 'key (shared app key — no personal key set)')
+          + ' can use' + (data.hidden_count ? ` (${data.hidden_count} other models hidden)` : '')
+          + (data.aliases_only === false ? '. This key offers no tier aliases, so raw model names are shown.' : '.');
       });
 
       if (models.length === 0) {

@@ -793,6 +793,7 @@ STRATEGIES: dict[str, Strategy] = {
 
 def strategy_catalog() -> list[dict]:
     from services.regime import QUADRANT_INFO
+    from services.strategy_rationale import rationale_for
     return [
         {
             "id": s.id,
@@ -802,6 +803,7 @@ def strategy_catalog() -> list[dict]:
             "regimes": s.regimes,
             "regime_labels": [QUADRANT_INFO[q]["label"] for q in s.regimes if q in QUADRANT_INFO],
             "actionable": s.actionable,
+            "rationale": rationale_for(s.id),
         }
         for s in STRATEGIES.values()
     ]

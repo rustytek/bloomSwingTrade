@@ -19,6 +19,8 @@ number, and anything it cannot measure should say so rather than guess.**
 | Page | What it answers |
 |---|---|
 | **Playbook** (`/`) | What do I do today? Setups grouped by strategy, each carrying that strategy's tested edge *in the current regime*, with a Plan-a-Trade modal that checks correlation, sector drift and open risk **before** the position exists — and blocks the commit when a hard limit would be breached. |
+| **Weekly Plan** (`/plan`) | Walk me through this week. Five steps: read the market, the strategies in play and **why each one fits this market**, what to do with every holding (sell / trim / raise stop / hold, with reasons), new trades — each with a plain-English *why* and risk-checked against the buys above it — then a review you take to the Trade tab. |
+| **Trade** (`/trade`, last tab) | Send the trades you ticked to **Robinhood** through its official Agentic Trading connection (OAuth — SwingTrader never sees your password). Paper mode first; live mode needs a connected Agentic account and an explicit confirmation, and every live order is reviewed by Robinhood before it is placed. Fills are written back to your portfolio/journal automatically. |
 | **Strategy Lab** (`/backtest`) | Does this strategy actually work? A strategy × regime **edge matrix** with Wilson confidence intervals and `confirmed` / `unproven` / `mis-tagged` verdicts, plus walk-forward backtests in two modes. |
 | **Scorecard** (`/scorecard`) | Am I executing it? Realized results vs what the backtest expected, and execution leaks ranked by what they cost in R. |
 | **Screener / Charts / Journal** | The underlying universe, market context, and closed-trade log. |
@@ -85,6 +87,8 @@ Key pages:
 | `LITELLM_URL` | *(empty)* | LiteLLM OpenAI-compatible base URL |
 | `LITELLM_API_KEY` | *(empty)* | Required when `AI_PROVIDER=litellm`; use the restricted LiteLLM virtual key for this user/app |
 | `FRED_API_KEY` | *(empty)* | Optional FRED key for Macro & Liquidity charts: M2, Fed Funds, 2yr/10yr yields |
+| `PUBLIC_URL` | *(empty)* | Public origin of the app (e.g. `https://invest.example.com`), used for the Robinhood OAuth return address. Blank = derived from the request |
+| `BROKER_ENCRYPTION_KEY` | *(empty)* | Optional Fernet key for stored Robinhood tokens. Blank = `broker.key` is generated next to the database |
 | `QUOTE_CACHE_TTL` | `900` | Quote cache lifetime in seconds (15 min) |
 | `HISTORY_CACHE_TTL` | `3600` | History cache lifetime in seconds (1 hr) |
 
@@ -215,7 +219,8 @@ Full interactive docs available at: `https://localhost:8443/api/docs`
 ### Strategy & evidence
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/today` | Playbook payload: regime, positions, setups with plans |
+| GET | `/api/today` | Playbook payload: regime, positions, setups with plans, per-setup rank/metrics, strategy rationale, `selection` |
+| GET | `/api/weekly-plan` | Weekly walkthrough: position reviews, risk-checked proposed orders with `why[]` |
 | GET | `/api/backtest/strategies` | Strategy catalog with rules, scoring and `backtestable` |
 | GET | `/api/backtest/walk-forward` | Walk-forward; `mode=rotation\|trade_plan` |
 | GET | `/api/edge-matrix` | Strategy × regime evidence. A cold call returns `not_computed` rather than blocking — pass `?refresh=true` to build (slow) |
@@ -223,6 +228,21 @@ Full interactive docs available at: `https://localhost:8443/api/docs`
 | GET | `/api/scorecard` | Realized vs expected per strategy + execution quality |
 | GET/PUT | `/api/settings` | account_size, risk_pct, max_positions, atr_stop_mult, r_multiple, max_open_r |
 | GET | `/api/journal` | Closed trades, stats, per-strategy breakdown, equity curve |
+
+### Trade (Robinhood)
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/broker/status` | Connection, mode (paper/live), redirect URI, discovered tools |
+| POST | `/api/broker/connect` | Start Robinhood OAuth; returns `authorize_url` |
+| GET | `/api/broker/oauth/callback` | OAuth return (browser redirect; `state` is the auth) |
+| POST | `/api/broker/disconnect` | Delete stored tokens |
+| PUT | `/api/broker/mode` | `paper` \| `live` (live needs `confirm: true`) |
+| GET | `/api/broker/account` | Buying power and positions |
+| POST | `/api/broker/orders/preview` | Validate orders (+ Robinhood review in live mode) |
+| POST | `/api/broker/orders` | Place (live, `confirm: true`) or simulate (paper) |
+| GET | `/api/broker/orders` | Order log |
+| POST | `/api/broker/orders/sync` | Check fills; apply filled orders to the portfolio once |
+| POST | `/api/broker/orders/{id}/cancel` / `/resolve` | Cancel, or mark filled/cancelled by hand |
 
 ### AI (hooks)
 | Method | Endpoint | Description |

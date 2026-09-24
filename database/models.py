@@ -255,3 +255,70 @@ class BackgroundJob(Base):
     # otherwise it would sit at "running" forever and block every future refresh.
     heartbeat_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
+
+
+class BrokerAccount(Base):
+    """A user's link to Robinhood's official agentic-trading MCP server.
+
+    No Robinhood password ever reaches this app: the user logs in on
+    robinhood.com (OAuth 2.1 + PKCE) and Robinhood hands back a revocable
+    token. Tokens are Fernet-encrypted by services/secrets_box.py and NEVER
+    leave the server — the API reports only booleans and masked identifiers.
+    `mode` ships "paper": nothing is sent to the broker until the user
+    explicitly switches to live with a confirmation.
+    """
+    __tablename__ = "broker_accounts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True, index=True)
+    broker = Column(String(32), nullable=False, default="robinhood")
+    # From RFC 7591 dynamic client registration — reused while redirect_uri is unchanged.
+    client_id = Column(String(256), nullable=True)
+    redirect_uri = Column(String(512), nullable=True)
+    access_token_enc = Column(Text, nullable=True)
+    refresh_token_enc = Column(Text, nullable=True)
+    token_expires_at = Column(DateTime, nullable=True)
+    mcp_session_id = Column(String(256), nullable=True)
+    tools_json = Column(Text, nullable=True)          # cached tools/list result
+    account_number = Column(String(64), nullable=True)
+    mode = Column(String(8), nullable=False, default="paper")   # "paper" | "live"
+    connected_at = Column(DateTime, nullable=True)
+    live_enabled_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class BrokerOrder(Base):
+    """Audit log of every order the Trade page submitted (or simulated).
+
+    `plan_json` carries the trade plan's intent (stop/target/strategy/thesis…)
+    so a fill can be written to the portfolio exactly as a manual commit would.
+    `applied_to_portfolio` makes that write happen once, however often the
+    fills are synced.
+    """
+    __tablename__ = "broker_orders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    broker = Column(String(32), nullable=False, default="robinhood")
+    mode = Column(String(8), nullable=False)                     # "paper" | "live"
+    plan_item_id = Column(String(64), nullable=True)
+    ticker = Column(String(16), nullable=False)
+    side = Column(String(8), nullable=False)                     # "buy" | "sell"
+    order_type = Column(String(16), nullable=False, default="limit")
+    quantity = Column(Float, nullable=False)
+    limit_price = Column(Float, nullable=False)
+    time_in_force = Column(String(8), nullable=False, default="gfd")
+    # simulated | queued | unconfirmed | confirmed | partially_filled | filled
+    # | cancelled | rejected | failed
+    status = Column(String(24), nullable=False, index=True)
+    broker_order_id = Column(String(64), nullable=True, index=True)
+    filled_quantity = Column(Float, nullable=True)
+    avg_fill_price = Column(Float, nullable=True)
+    plan_json = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
+    response_json = Column(Text, nullable=True)                  # sanitized, trimmed
+    applied_to_portfolio = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=utcnow, index=True)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

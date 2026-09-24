@@ -36,8 +36,10 @@ from api.backtest import router as backtest_router
 from api.settings import router as settings_router
 from api.journal import router as journal_router
 from api.today import router as today_router
+from api.weekly_plan import router as weekly_plan_router
 from api.scorecard import router as scorecard_router
 from api.jobs import router as jobs_router
+from api.broker import router as broker_router
 from generate_ssl import generate_ssl_cert
 from services.universe import UNIVERSE
 from services.market_data import (
@@ -438,7 +440,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.20.2",
+    version="1.21.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -465,8 +467,10 @@ app.include_router(backtest_router)
 app.include_router(settings_router)
 app.include_router(journal_router)
 app.include_router(today_router)
+app.include_router(weekly_plan_router)
 app.include_router(scorecard_router)
 app.include_router(jobs_router)
+app.include_router(broker_router)
 
 
 # ── Static files (React SPA) ─────────────────────────────────────────────────
@@ -512,6 +516,11 @@ async def scorecard_page():
     return FileResponse(os.path.join(STATIC_DIR, "scorecard.html"))
 
 
+@app.get("/plan")
+async def serve_plan():
+    return FileResponse(os.path.join(STATIC_DIR, "plan.html"))
+
+
 @app.get("/today")
 async def today_page():
     return FileResponse(os.path.join(STATIC_DIR, "today.html"))
@@ -520,6 +529,11 @@ async def today_page():
 @app.get("/admin")
 async def admin_page():
     return FileResponse(os.path.join(STATIC_DIR, "admin.html"))
+
+
+@app.get("/trade")
+async def trade_page():
+    return FileResponse(os.path.join(STATIC_DIR, "trade.html"))
 
 
 @app.get("/")

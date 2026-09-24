@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SwingTrader — Trade</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/common.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background:#0b0b0c; color:#d8d8d8; font-family:'Inter',sans-serif; font-size:14px; line-height:1.5; }
+    .page { max-width:1180px; margin:0 auto; padding:18px 16px 40px; display:flex; flex-direction:column; gap:16px; }
+    .panel { background:#121215; border:1px solid #232327; border-radius:8px; padding:18px; }
+    .panel.locked { opacity:.55; }
+    .step-head { display:flex; align-items:center; gap:12px; margin-bottom:6px; }
+    .step-num { width:28px; height:28px; border-radius:50%; background:#1c1808; border:1px solid #3a3110; color:#f0a500; font-weight:800; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:13px; }
+    .step-num.done { background:#0e1b12; border-color:#1d3a28; color:#3fbf7f; }
+    .step-title { font-size:16px; font-weight:800; color:#fff; }
+    .step-sub { color:#8d8d93; font-size:12.5px; margin:0 0 14px 40px; line-height:1.6; }
+    .body { margin-left:40px; }
+    .intro h1 { font-size:20px; color:#fff; font-weight:800; }
+    .intro p { color:#9a9a9a; font-size:13px; margin-top:6px; line-height:1.65; max-width:900px; }
+    .stepper { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+    .stepper span { font-size:11px; padding:3px 10px; border-radius:12px; background:#17171a; border:1px solid #26262a; color:#999; }
+    .stepper span.on { color:#f0a500; border-color:#3a3110; background:#1c1808; }
+    .stepper span.ok { color:#3fbf7f; border-color:#1d3a28; background:#0e1b12; }
+    .note { border-radius:6px; padding:10px 12px; font-size:12.5px; line-height:1.6; margin-bottom:10px; }
+    .note.info { background:#0e131f; border:1px solid #22304f; color:#a9bce0; }
+    .note.warn { background:#1c1808; border:1px solid #3a3110; color:#f0c060; }
+    .note.bad { background:#25090b; border:1px solid #4a1418; color:#ff9598; }
+    .note.good { background:#0e1b12; border:1px solid #1d3a28; color:#7fd8a8; }
+    .note a { color:inherit; font-weight:700; }
+    ul.plain { padding-left:18px; margin:6px 0; font-size:12.5px; color:#b8b8b8; line-height:1.7; }
+    .kv { display:flex; justify-content:space-between; gap:10px; font-size:12.5px; padding:3px 0; border-bottom:1px solid #1a1a1d; }
+    .kv .k { color:#777; } .kv .v { font-family:'JetBrains Mono',monospace; color:#ddd; }
+    .row-actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px; }
+    .mode-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .mode-card { border:1px solid #26262a; border-radius:8px; padding:14px; background:#101013; cursor:pointer; }
+    .mode-card.sel { border-color:#f0a500; background:#17140a; }
+    .mode-card.live.sel { border-color:#e5484d; background:#1e0d0f; }
+    .mode-card h3 { font-size:14px; color:#eee; margin-bottom:4px; }
+    .mode-card p { font-size:12px; color:#999; line-height:1.55; }
+    .mode-card.disabled { cursor:not-allowed; opacity:.5; }
+    table { width:100%; border-collapse:collapse; font-size:12.5px; }
+    th { text-align:left; padding:7px 8px; color:#666; border-bottom:1px solid #232327; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; }
+    td { padding:8px; border-bottom:1px solid #1a1a1d; vertical-align:top; }
+    td input[type=number] { width:88px; background:#1a1a1e; border:1px solid #2a2a2f; color:#ddd; border-radius:4px; padding:5px 7px; font-family:'JetBrains Mono',monospace; font-size:12px; }
+    td select { background:#1a1a1e; border:1px solid #2a2a2f; color:#ddd; border-radius:4px; padding:4px; font-size:12px; }
+    input[type=checkbox] { width:16px; height:16px; accent-color:#f0a500; }
+    .side { display:inline-block; font-size:10px; font-weight:800; padding:2px 7px; border-radius:3px; letter-spacing:.05em; }
+    .side.buy { background:#0e1b12; color:#3fbf7f; border:1px solid #1d3a28; }
+    .side.sell { background:#25090b; color:#ff8a8d; border:1px solid #4a1418; }
+    .headline { font-size:12px; color:#ccc; }
+    .skip { font-size:11px; color:#c9a24a; }
+    details.why summary { cursor:pointer; font-size:11px; color:#f0a500; margin-top:4px; }
+    details.why ul { padding-left:16px; font-size:11.5px; color:#a6a6a6; line-height:1.6; margin-top:4px; }
+    .msgs { font-size:11.5px; line-height:1.5; margin-top:4px; }
+    .msgs .e { color:#ff8a8d; } .msgs .w { color:#f0c060; } .msgs .r { color:#9fb3d9; white-space:pre-wrap; }
+    .status { font-family:'JetBrains Mono',monospace; font-size:11px; padding:2px 6px; border-radius:3px; background:#17171a; border:1px solid #2a2a2f; color:#bbb; }
+    .status.filled { color:#3fbf7f; border-color:#1d3a28; }
+    .status.failed, .status.rejected { color:#ff8a8d; border-color:#4a1418; }
+    .status.simulated { color:#9fb3d9; border-color:#22304f; }
+    .confirm-line { display:flex; gap:9px; align-items:flex-start; font-size:12.5px; color:#ffb3b5; margin-top:12px; }
+    details.conn summary { cursor:pointer; color:#999; font-size:12px; font-weight:700; }
+    pre.schema { white-space:pre-wrap; font-size:10.5px; color:#8a8a90; background:#0e0e11; border:1px solid #1f1f23; border-radius:4px; padding:8px; margin-top:4px; max-height:220px; overflow:auto; }
+    .spinner { display:inline-block; width:12px; height:12px; border:2px solid #3a3110; border-top-color:#f0a500; border-radius:50%; animation:spin .8s linear infinite; vertical-align:-2px; margin-right:6px; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .footer { color:#666; font-size:11px; line-height:1.6; }
+    .table-wrap { overflow-x:auto; }
+    @media (max-width:760px) { .mode-grid { grid-template-columns:1fr; } .body, .step-sub { margin-left:0; } }
+  </style>
+</head>
+<body>
+  <div id="topbar" class="topbar"></div>
+  <main class="page">
+    <section class="intro">
+      <h1>Trade — send this week's plan to Robinhood</h1>
+      <p>This is the last step of the weekly routine. The <a class="ticker-link" style="font-family:inherit;" href="/plan">Weekly Plan</a> decided <b>what</b> to trade and <b>why</b>; this page turns the trades you pick into limit orders.
+        Work top to bottom: connect once, choose paper or live, tick the trades you want, preview them, then place them. Start in <b>paper mode</b> — it runs the whole flow without sending anything.</p>
+      <div class="stepper" id="stepper"></div>
+    </section>
+    <div id="banner"></div>
+
+    <!-- Step 1 -->
+    <section class="panel" id="step1">
+      <div class="step-head"><div class="step-num" id="n1">1</div><div class="step-title">Connect your Robinhood Agentic account</div></div>
+      <div class="step-sub">Optional for paper mode, required for live orders.</div>
+      <div class="body" id="connectBody"><span class="muted">Loading…</span></div>
+    </section>
+
+    <!-- Step 2 -->
+    <section class="panel" id="step2">
+      <div class="step-head"><div class="step-num" id="n2">2</div><div class="step-title">Choose paper or live</div></div>
+      <div class="step-sub">Paper runs every check and records the orders, but sends nothing and leaves your portfolio alone. Use it until the flow feels routine.</div>
+      <div class="body" id="modeBody"></div>
+    </section>
+
+    <!-- Step 3 -->
+    <section class="panel" id="step3">
+      <div class="step-head"><div class="step-num" id="n3">3</div><div class="step-title">Pick this week's trades</div></div>
+      <div class="step-sub">These come straight from your Weekly Plan. Anything you ticked there is ticked here. Adjust shares or the limit price if you want, then preview.</div>
+      <div class="body" id="pickBody"><span class="muted">Loading the weekly plan…</span></div>
+    </section>
+
+    <!-- Step 4 -->
+    <section class="panel" id="step4">
+      <div class="step-head"><div class="step-num" id="n4">4</div><div class="step-title">Review &amp; place</div></div>
+      <div class="step-sub">Nothing is sent until you press the button at the bottom of this step.</div>
+      <div class="body" id="reviewBody"><div class="muted" style="font-size:12.5px;">Press <b>Preview orders</b> in step 3 first.</div></div>
+    </section>
+
+    <!-- History -->
+    <section class="panel">
+      <div class="step-head"><div class="step-title">Order history</div></div>
+      <div class="step-sub" style="margin-left:0;">Every order this page has placed or simulated. Filled live orders are added to (or closed out of) your SwingTrader portfolio automatically, once.</div>
+      <div class="row-actions" style="margin-top:0;margin-bottom:10px;">
+        <button class="btn btn-sm" type="button" onclick="trSync()">Check fills</button>
+        <span id="syncMsg" class="muted" style="font-size:12px;"></span>
+      </div>
+      <div id="historyBody" class="table-wrap"><span class="muted">Loading…</span></div>
+    </section>
+
+    <section class="panel">
+      <details class="conn" id="connDetails">
+        <summary>Connection details (for troubleshooting)</summary>
+        <div id="connBody" style="margin-top:10px;font-size:12px;"></div>
+      </details>
+    </section>
+
+    <div class="footer">
+      Decision support, not investment advice. SwingTrader only sends <b>limit</b> orders for whole shares; they are <b>day orders</b> (expire at the close) unless you choose GTC.
+      Robinhood may ask you to approve an order in its app before it is placed. Every live order is reviewed by Robinhood first and its words are shown to you unchanged.
+    </div>
+  </main>
+
+  <script src="/static/js/common.js"></script>
+  <script>
+  'use strict';
+
+  /* Page state. Names are trade-page specific so nothing collides with common.js. */
+  let TR_STATUS = null;     // /api/broker/status
+  let TR_PLAN = null;       // /api/weekly-plan
+  let TR_PLAN_ERR = null;
+  let TR_SEL = new Set();   // selected order ids
+  let TR_EDIT = {};         // id -> {shares, limit, tif}
+  let TR_PREVIEW = null;    // last preview response
+  let TR_PREVIEWED = [];    // the order payloads that preview covered
+  let TR_ACCOUNT = null;
+
+  const trJson = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  const trNum = (v) => (v === null || v === undefined || (typeof v === 'number' && !isFinite(v))) ? null : Number(v);
+  const trMoney = (v) => trNum(v) === null ? '--' : fmtMoney(v, 2);
+  function trErr(e) { const m = (e && e.message) || String(e); try { const j = JSON.parse(m); return j.detail ? (typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)) : m; } catch (x) { return m; } }
+
+  /* ── Boot ───────────────────────────────────────────────────────────── */
+  async function trBoot() {
+    trBannerFromQuery();
+    await trLoadStatus();
+    await Promise.all([trLoadPlan(), trLoadHistory()]);
+    if (TR_STATUS && TR_STATUS.mode === 'live' && TR_STATUS.connected) trSync(true);
+  }
+
+  function trBannerFromQuery() {
+    const q = new URLSearchParams(window.location.search);
+    const b = document.getElementById('banner');
+    if (q.get('connected')) b.innerHTML = `<div class="note good">Robinhood connected. SwingTrader now holds a revocable token — never your password.</div>`;
+    else if (q.get('error')) b.innerHTML = `<div class="note bad"><b>Robinhood connection did not complete.</b><br>${esc(q.get('error'))}</div>`;
+    if (q.get('connected') || q.get('error')) { try { history.replaceState(null, '', '/trade'); } catch (e) { /* ignore */ } }
+  }
+
+  function trStepper() {
+    const s = TR_STATUS || {};
+    const steps = [
+      ['Connect', s.connected], ['Mode: ' + (s.mode === 'live' ? 'LIVE' : 'paper'), true],
+      ['Pick ' + TR_SEL.size, TR_SEL.size > 0], ['Review & place', false],
+    ];
+    document.getElementById('stepper').innerHTML = steps.map(([l, ok], i) => `<span class="${ok ? 'ok' : (i === 0 && !ok ? '' : 'on')}">${i + 1}. ${esc(l)}</span>`).join('');
+    document.getElementById('n1').className = 'step-num' + (s.connected ? ' done' : '');
+    document.getElementById('n2').className = 'step-num done';
+    document.getElementById('n3').className = 'step-num' + (TR_SEL.size ? ' done' : '');
+  }
+
+  /* ── Step 1: connect ────────────────────────────────────────────────── */
+  async function trLoadStatus() {
+    try { TR_STATUS = await api('/api/broker/status'); }
+    catch (e) { document.getElementById('connectBody').innerHTML = `<div class="note bad">Could not load connection status: ${esc(trErr(e))}</div>`; return; }
+    trRenderConnect(); trRenderMode(); trRenderConn(); trStepper();
+  }
+
+  function trRenderConnect() {
+    const s = TR_STATUS || {};
+    const el = document.getElementById('connectBody');
+    const explain = `
+      <div class="note info">
+        <b>How this works.</b> Robinhood offers an official connection for trading tools called <b>Agentic Trading</b>
+        (<a href="https://robinhood.com/us/en/support/articles/agentic-trading-overview/" target="_blank" rel="noopener">Robinhood's overview</a>). It trades only inside a separate
+        <b>Robinhood Agentic account</b> — a self-directed individual account you open on desktop at robinhood.com and fund separately, so SwingTrader can never touch your main account.
+        <ul class="plain">
+          <li><b>SwingTrader never sees your Robinhood password.</b> You sign in on robinhood.com and Robinhood hands this server a token it can revoke at any time.</li>
+          <li>The token is stored <b>encrypted</b> on this server, is never shown in the browser, and <b>Disconnect</b> deletes it.</li>
+          <li>Agentic Trading is in beta and covers stocks and ETFs only. Robinhood may ask you to approve each order in its app.</li>
+        </ul>
+      </div>`;
+    if (s.connected) {
+      el.innerHTML = `
+        <div class="note good">✓ Connected to Robinhood${s.account_number_masked ? ` — Agentic account <b class="mono">${esc(s.account_number_masked)}</b>` : ''}${s.connected_at ? ` <span class="muted">(since ${esc(new Date(s.connected_at).toLocaleString())})</span>` : ''}.</div>
+        ${s.last_error ? `<div class="note warn">${esc(s.last_error)}</div>` : ''}
+        <div class="row-actions">
+          <button class="btn btn-sm" type="button" onclick="trDisconnect()">Disconnect</button>
+          <span class="muted" style="font-size:11.5px;">You can also revoke access from the Robinhood app.</span>
+        </div>`;
+      return;
+    }
+    el.innerHTML = `${explain}
+      <ol class="plain">
+        <li>If you don't have one yet, open a <b>Robinhood Agentic account</b> on desktop at robinhood.com and move in the money you want SwingTrader to trade.</li>
+        <li>Press <b>Connect Robinhood</b>. You'll go to robinhood.com, sign in, and approve SwingTrader.</li>
+        <li>Robinhood sends you back here and this step turns green.</li>
+      </ol>
+      <div class="kv" style="margin-top:8px;"><span class="k">Return address Robinhood will use</span><span class="v" style="word-break:break-all;">${esc(s.redirect_uri || '--')}</span></div>
+      <div class="muted" style="font-size:11px;margin-top:4px;">If this isn't the address you use to reach SwingTrader, set <span class="mono">public_url</span> in the add-on configuration.</div>
+      ${s.last_error ? `<div class="note bad" style="margin-top:10px;"><b>Last attempt failed:</b> ${esc(s.last_error)}</div>` : ''}
+      <div class="row-actions">
+        <button class="btn btn-primary" id="connectBtn" type="button" onclick="trConnect()">Connect Robinhood ▸</button>
+        <span id="connectMsg" class="muted" style="font-size:12px;"></span>
+      </div>`;
+  }
+
+  async function trConnect() {
+    const btn = document.getElementById('connectBtn');
+    const msg = document.getElementById('connectMsg');
+    btn.disabled = true; msg.innerHTML = '<span class="spinner"></span>Contacting Robinhood…';
+    try {
+      const r = await api('/api/broker/connect', trJson('POST', {}));
+      if (r.status === 'redirect' && r.authorize_url) { msg.textContent = 'Opening robinhood.com…'; window.location.href = r.authorize_url; return; }
+      msg.innerHTML = `<span class="error">${esc(r.message || 'Robinhood did not return a sign-in link.')}</span>`;
+    } catch (e) { msg.innerHTML = `<span class="error">${esc(trErr(e))}</span>`; }
+    btn.disabled = false;
+  }
+
+  async function trDisconnect() {
+    try {
+      const r = await api('/api/broker/disconnect', trJson('POST', {}));
+      document.getElementById('banner').innerHTML = `<div class="note info">${esc(r.message || 'Disconnected.')}</div>`;
+    } catch (e) { document.getElementById('banner').innerHTML = `<div class="note bad">${esc(trErr(e))}</div>`; }
+    await trLoadStatus();
+  }
+
+  /* ── Step 2: mode ───────────────────────────────────────────────────── */
+  function trRenderMode() {
+    const s = TR_STATUS || {};
+    const live = s.mode === 'live';
+    document.getElementById('modeBody').innerHTML = `
+      <div class="mode-grid">
+        <div class="mode-card ${live ? '' : 'sel'}" onclick="trSetMode('paper')">
+          <h3>📝 Paper (recommended to start)</h3>
+          <p>Runs every check and logs the orders as <i>simulated</i>. Nothing is sent to Robinhood and your SwingTrader portfolio doesn't change.</p>
+        </div>
+        <div class="mode-card live ${live ? 'sel' : ''} ${s.connected ? '' : 'disabled'}" onclick="${s.connected ? '' : 'return;'}document.getElementById('liveConfirmWrap').hidden=false;">
+          <h3>💵 Live</h3>
+          <p>${s.connected ? 'Sends real limit orders to your Robinhood Agentic account. Filled orders update your SwingTrader portfolio.' : 'Connect Robinhood in step 1 first.'}</p>
+        </div>
+      </div>
+      <div id="liveConfirmWrap" ${live ? '' : 'hidden'} style="margin-top:12px;">
+        ${live ? `<div class="note bad"><b>LIVE mode is on.</b> Orders placed in step 4 use real money${s.live_enabled_at ? ` (enabled ${esc(new Date(s.live_enabled_at).toLocaleString())})` : ''}.</div>`
+          : `<label class="confirm-line"><input type="checkbox" id="liveAck"> <span>I understand live mode sends real orders with real money to my Robinhood Agentic account.</span></label>
+             <div class="row-actions"><button class="btn btn-primary" type="button" onclick="trSetMode('live')">Switch to live</button><span id="modeMsg" class="error" style="font-size:12px;"></span></div>`}
+      </div>`;
+  }
+
+  async function trSetMode(mode) {
+    const ack = document.getElementById('liveAck');
+    if (mode === 'live' && !(ack && ack.checked)) { const m = document.getElementById('modeMsg'); if (m) m.textContent = 'Tick the box to confirm first.'; return; }
+    if (TR_STATUS && TR_STATUS.mode === mode) return;
+    try { await api('/api/broker/mode', trJson('PUT', { mode, confirm: mode === 'live' })); }
+    catch (e) { const m = document.getElementById('modeMsg'); if (m) m.textContent = trErr(e); return; }
+    TR_PREVIEW = null; trRenderReview();
+    await trLoadStatus();
+  }
+
+  /* ── Step 3: pick ───────────────────────────────────────────────────── */
+  async function trLoadPlan() {
+    try { TR_PLAN = await api('/api/weekly-plan'); TR_PLAN_ERR = null; }
+    catch (e) { TR_PLAN = null; TR_PLAN_ERR = trErr(e); }
+    const orders = (TR_PLAN && TR_PLAN.orders) || [];
+    // The Weekly Plan page saves the ticked ids with the week they belong to.
+    // A selection from a previous week must not leak into this one.
+    let stored = null, storedWeek = null;
+    try {
+      stored = JSON.parse(localStorage.getItem('st_trade_selection') || 'null');
+      storedWeek = localStorage.getItem('st_trade_selection_week');
+    } catch (e) { stored = null; }
+    const ids = new Set(orders.map((o) => o.id));
+    const sameWeek = TR_PLAN && storedWeek && storedWeek === String(TR_PLAN.week_of);
+    TR_SEL = new Set(sameWeek && Array.isArray(stored)
+      ? stored.filter((id) => ids.has(id))
+      : orders.filter((o) => o.recommended).map((o) => o.id));
+    trRenderPick();
+  }
+
+  function trOrderById(id) { return ((TR_PLAN && TR_PLAN.orders) || []).find((o) => o.id === id) || null; }
+  function trVals(o) {
+    const e = TR_EDIT[o.id] || {};
+    return { shares: e.shares ?? o.shares, limit: e.limit ?? o.limit_price, tif: e.tif || 'gfd' };
+  }
+
+  function trRenderPick() {
+    const el = document.getElementById('pickBody');
+    if (!TR_PLAN) {
+      el.innerHTML = `<div class="note warn">The weekly plan could not be loaded${TR_PLAN_ERR ? ': ' + esc(TR_PLAN_ERR) : ''}. Open the <a href="/plan">Weekly Plan</a> first, then come back.</div>`;
+      trStepper(); return;
+    }
+    const orders = TR_PLAN.orders || [];
+    const head = TR_PLAN.summary && TR_PLAN.summary.headline ? `<div class="note info">${esc(TR_PLAN.summary.headline)}</div>` : '';
+    if (!orders.length) { el.innerHTML = head + `<div class="note good">The plan has no trades this week — sitting still is a valid decision.</div>`; trStepper(); return; }
+    const rows = orders.map((o, i) => {
+      const v = trVals(o);
+      const est = (trNum(v.shares) && trNum(v.limit)) ? v.shares * v.limit : null;
+      const side = o.side === 'sell' ? 'sell' : 'buy';
+      return `<tr>
+        <td><input type="checkbox" ${TR_SEL.has(o.id) ? 'checked' : ''} onchange="trToggle(${i}, this.checked)"></td>
+        <td><span class="side ${side}">${esc((o.kind || side).toUpperCase())}</span></td>
+        <td>${tickerLink(o.ticker)}<div class="muted" style="font-size:10.5px;">${esc(o.name || '')}</div></td>
+        <td><input type="number" min="1" step="1" value="${esc(v.shares)}" onchange="trEdit(${i}, 'shares', this.value)"></td>
+        <td><input type="number" min="0.01" step="0.01" value="${esc(v.limit)}" onchange="trEdit(${i}, 'limit', this.value)"></td>
+        <td><select onchange="trEdit(${i}, 'tif', this.value)"><option value="gfd" ${v.tif === 'gfd' ? 'selected' : ''}>Day</option><option value="gtc" ${v.tif === 'gtc' ? 'selected' : ''}>GTC</option></select></td>
+        <td class="mono">${trMoney(est)}</td>
+        <td style="min-width:260px;">
+          <div class="headline">${esc(o.headline || '')}</div>
+          ${o.recommended ? '' : `<div class="skip">Not recommended${o.skip_reason ? ': ' + esc(o.skip_reason) : ''}</div>`}
+          ${(o.why || []).length ? `<details class="why"><summary>Why?</summary><ul>${o.why.map((w) => `<li>${esc(w)}</li>`).join('')}</ul></details>` : ''}
+        </td>
+      </tr>`;
+    }).join('');
+    el.innerHTML = `${head}
+      <div class="row-actions" style="margin-top:0;margin-bottom:8px;">
+        <button class="btn btn-sm" type="button" onclick="trSelectRecommended()">Select all recommended</button>
+        <button class="btn btn-sm" type="button" onclick="trClear()">Clear</button>
+        <span class="muted" style="font-size:12px;">${TR_SEL.size} of ${orders.length} selected</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th></th><th>Action</th><th>Ticker</th><th>Shares</th><th>Limit $</th><th>Expires</th><th>Est. value</th><th>What &amp; why</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
+      <div class="row-actions">
+        <button class="btn btn-primary" type="button" onclick="trPreview()" ${TR_SEL.size ? '' : 'disabled'}>Preview orders ▸</button>
+        <span id="previewMsg" class="muted" style="font-size:12px;"></span>
+      </div>`;
+    trStepper();
+  }
+
+  function trSaveSel() {
+    try {
+      localStorage.setItem('st_trade_selection', JSON.stringify(Array.from(TR_SEL)));
+      if (TR_PLAN && TR_PLAN.week_of) localStorage.setItem('st_trade_selection_week', String(TR_PLAN.week_of));
+    } catch (e) { /* private mode */ }
+  }
+  function trToggle(i, on) { const o = TR_PLAN.orders[i]; if (on) TR_SEL.add(o.id); else TR_SEL.delete(o.id); trSaveSel(); TR_PREVIEW = null; trRenderPick(); trRenderReview(); }
+  function trEdit(i, field, val) {
+    const o = TR_PLAN.orders[i];
+    const e = TR_EDIT[o.id] || (TR_EDIT[o.id] = {});
+    if (field === 'shares') e.shares = parseInt(val, 10);
+    else if (field === 'limit') e.limit = parseFloat(val);
+    else e.tif = val;
+    TR_PREVIEW = null; trRenderPick(); trRenderReview();
+  }
+  function trSelectRecommended() { TR_SEL = new Set((TR_PLAN.orders || []).filter((o) => o.recommended).map((o) => o.id)); trSaveSel(); TR_PREVIEW = null; trRenderPick(); trRenderReview(); }
+  function trClear() { TR_SEL = new Set(); trSaveSel(); TR_PREVIEW = null; trRenderPick(); trRenderReview(); }
+
+  function trPayload() {
+    return ((TR_PLAN && TR_PLAN.orders) || []).filter((o) => TR_SEL.has(o.id)).map((o) => {
+      const v = trVals(o);
+      return { plan_item_id: o.id, ticker: o.ticker, side: o.side === 'sell' ? 'sell' : 'buy', shares: Number(v.shares),
+               limit_price: Number(v.limit), time_in_force: v.tif, plan: o.plan || null };
+    });
+  }
+
+  async function trPreview() {
+    const msg = document.getElementById('previewMsg');
+    const orders = trPayload();
+    msg.innerHTML = '<span class="spinner"></span>Checking' + ((TR_STATUS && TR_STATUS.mode === 'live') ? ' with Robinhood…' : '…');
+    try {
+      TR_PREVIEW = await api('/api/broker/orders/preview', trJson('POST', { orders }));
+      TR_PREVIEWED = orders;
+      msg.textContent = '';
+    } catch (e) { msg.innerHTML = `<span class="error">${esc(trErr(e))}</span>`; TR_PREVIEW = null; }
+    trRenderReview();
+    document.getElementById('step4').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  /* ── Step 4: review & place ─────────────────────────────────────────── */
+  function trRenderReview(results) {
+    const el = document.getElementById('reviewBody');
+    document.getElementById('n4').className = 'step-num' + (results ? ' done' : '');
+    if (results) { el.innerHTML = trResultsHtml(results); return; }
+    if (!TR_PREVIEW) { el.innerHTML = `<div class="muted" style="font-size:12.5px;">Press <b>Preview orders</b> in step 3 first.</div>`; return; }
+    const p = TR_PREVIEW;
+    const live = p.mode === 'live';
+    const t = p.totals || {};
+    const okCount = t.ok_count || 0;
+    const rows = (p.orders || []).map((r) => `<tr>
+        <td>${r.ok ? '✅' : '⛔'}</td>
+        <td><span class="side ${r.side === 'sell' ? 'sell' : 'buy'}">${esc(String(r.side || '').toUpperCase())}</span></td>
+        <td>${tickerLink(r.ticker)}</td>
+        <td class="mono">${esc(r.shares ?? '--')}</td>
+        <td class="mono">${trMoney(r.limit_price)}</td>
+        <td class="mono">${trMoney(r.last_price)}</td>
+        <td class="mono">${trMoney(r.est_value)}</td>
+        <td><div class="msgs">${(r.errors || []).map((x) => `<div class="e">${esc(x)}</div>`).join('')}${(r.warnings || []).map((x) => `<div class="w">${esc(x)}</div>`).join('')}${r.broker_review ? `<div class="r"><b>Robinhood review:</b> ${esc(r.broker_review)}</div>` : ''}${!(r.errors || []).length && !(r.warnings || []).length && !r.broker_review ? '<span class="muted">OK</span>' : ''}</div></td>
+      </tr>`).join('');
+    el.innerHTML = `
+      ${live ? '<div class="note bad"><b>LIVE</b> — these will be real orders in your Robinhood Agentic account.</div>' : '<div class="note info"><b>Paper mode</b> — these will be simulated. Nothing is sent and your portfolio stays as it is.</div>'}
+      ${(p.notes || []).map((n) => `<div class="note warn">${esc(n)}</div>`).join('')}
+      ${(t.errors || []).map((n) => `<div class="note bad">${esc(n)}</div>`).join('')}
+      ${(t.warnings || []).map((n) => `<div class="note">${esc(n)}</div>`).join('')}
+      <div class="table-wrap"><table>
+        <thead><tr><th></th><th>Side</th><th>Ticker</th><th>Shares</th><th>Limit</th><th>Last</th><th>Est. value</th><th>Checks</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
+      <div style="margin-top:10px;max-width:420px;">
+        <div class="kv"><span class="k">Buying</span><span class="v">${trMoney(t.buy_total)}</span></div>
+        <div class="kv"><span class="k">Selling</span><span class="v">${trMoney(t.sell_total)}</span></div>
+        <div class="kv"><span class="k">Buying power</span><span class="v">${t.buying_power_known ? trMoney(t.buying_power) : 'unknown — Robinhood will check'}</span></div>
+      </div>
+      ${live ? `<label class="confirm-line"><input type="checkbox" id="placeAck" onchange="document.getElementById('placeBtn').disabled=!this.checked||${okCount === 0}"> <span>I understand these are real orders with real money.</span></label>` : ''}
+      <div class="row-actions">
+        <button class="btn btn-primary" id="placeBtn" type="button" onclick="trPlace()" ${okCount === 0 || live ? 'disabled' : ''}>${live ? 'Place' : 'Simulate'} ${okCount} order${okCount === 1 ? '' : 's'}</button>
+        ${t.error_count ? `<span class="muted" style="font-size:12px;">${t.error_count} order${t.error_count === 1 ? '' : 's'} with problems will be skipped.</span>` : ''}
+        <span id="placeMsg" style="font-size:12px;"></span>
+      </div>`;
+  }
+
+  async function trPlace() {
+    const live = TR_PREVIEW && TR_PREVIEW.mode === 'live';
+    if (live && !(document.getElementById('placeAck') || {}).checked) return;
+    const btn = document.getElementById('placeBtn');
+    const msg = document.getElementById('placeMsg');
+    btn.disabled = true; msg.innerHTML = '<span class="spinner"></span>' + (live ? 'Sending to Robinhood…' : 'Simulating…');
+    try {
+      const r = await api('/api/broker/orders', trJson('POST', { orders: TR_PREVIEWED, confirm: !!live }));
+      TR_PREVIEW = null;
+      trRenderReview(r);
+      await trLoadHistory();
+    } catch (e) { msg.innerHTML = `<span class="error">${esc(trErr(e))}</span>`; btn.disabled = false; }
+  }
+
+  function trResultsHtml(r) {
+    const rows = (r.results || []).map((x) => `<tr>
+      <td>${tickerLink(x.ticker)}</td><td><span class="side ${x.side === 'sell' ? 'sell' : 'buy'}">${esc(String(x.side || '').toUpperCase())}</span></td>
+      <td class="mono">${esc(x.shares ?? '--')} @ ${trMoney(x.limit_price)}</td>
+      <td>${x.status ? `<span class="status ${esc(x.status)}">${esc(x.status)}</span>` : '<span class="status failed">skipped</span>'}</td>
+      <td class="msgs">${esc(x.message || (x.errors || []).join(' '))}</td></tr>`).join('');
+    return `<div class="note ${r.mode === 'live' ? 'good' : 'info'}">${r.mode === 'live' ? `Sent ${r.placed || 0} order(s) to Robinhood. If Robinhood asks, approve them in its app. Use <b>Check fills</b> below to update your portfolio.` : `Simulated ${r.placed || 0} order(s). Nothing was sent; your portfolio is unchanged.`}</div>
+      <div class="table-wrap"><table><thead><tr><th>Ticker</th><th>Side</th><th>Order</th><th>Status</th><th>Message</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+
+  /* ── History ────────────────────────────────────────────────────────── */
+  async function trLoadHistory() {
+    const el = document.getElementById('historyBody');
+    let r;
+    try { r = await api('/api/broker/orders?limit=50'); } catch (e) { el.innerHTML = `<div class="note bad">${esc(trErr(e))}</div>`; return; }
+    const orders = r.orders || [];
+    if (!orders.length) { el.innerHTML = '<div class="muted" style="font-size:12.5px;">No orders yet.</div>'; return; }
+    el.innerHTML = `<table><thead><tr><th>When</th><th>Mode</th><th>Order</th><th>Status</th><th>Filled</th><th></th></tr></thead><tbody>${orders.map((o) => {
+      const msgs = o.broker_messages || {};
+      const detail = [o.error, msgs.result, msgs.cancel].filter(Boolean).map((t) => `<div class="msgs r">${esc(String(t).slice(0, 600))}</div>`).join('');
+      const actions = o.open ? `<button class="btn btn-sm" type="button" onclick="trCancel(${o.id})">Cancel</button>
+          ${o.mode === 'live' ? `<button class="btn btn-sm" type="button" onclick="trResolve(${o.id}, 'filled', ${Number(o.limit_price)}, ${Number(o.quantity)})">Mark filled</button>
+          <button class="btn btn-sm" type="button" onclick="trResolve(${o.id}, 'cancelled')">Mark cancelled</button>` : ''}` : '';
+      return `<tr>
+        <td class="muted" style="font-size:11px;">${o.created_at ? esc(new Date(o.created_at + (o.created_at.endsWith('Z') || o.created_at.includes('+') ? '' : 'Z')).toLocaleString()) : '--'}</td>
+        <td>${o.mode === 'live' ? '<b style="color:#ff8a8d;">live</b>' : '<span class="muted">paper</span>'}</td>
+        <td><span class="side ${o.side === 'sell' ? 'sell' : 'buy'}">${esc(String(o.side).toUpperCase())}</span> ${tickerLink(o.ticker)} <span class="mono">${esc(o.quantity)} @ ${trMoney(o.limit_price)}</span>${detail}</td>
+        <td><span class="status ${esc(o.status)}">${esc(o.status)}</span>${o.applied_to_portfolio ? '<div class="muted" style="font-size:10.5px;">in portfolio</div>' : ''}</td>
+        <td class="mono">${o.filled_quantity ? esc(o.filled_quantity) + ' @ ' + trMoney(o.avg_fill_price) : '--'}</td>
+        <td style="white-space:nowrap;">${actions}</td></tr>`;
+    }).join('')}</tbody></table>`;
+  }
+
+  async function trSync(quiet) {
+    const m = document.getElementById('syncMsg');
+    m.innerHTML = '<span class="spinner"></span>Checking…';
+    try {
+      const r = await api('/api/broker/orders/sync', trJson('POST', {}));
+      m.textContent = (r.notes && r.notes.length) ? r.notes.join(' ') : (quiet ? '' : `Checked ${r.checked || 0} open order(s).`);
+    } catch (e) { m.innerHTML = `<span class="error">${esc(trErr(e))}</span>`; }
+    await trLoadHistory();
+  }
+
+  async function trCancel(id) {
+    try { await api(`/api/broker/orders/${id}/cancel`, trJson('POST', {})); }
+    catch (e) { document.getElementById('syncMsg').innerHTML = `<span class="error">${esc(trErr(e))}</span>`; }
+    await trLoadHistory();
+  }
+
+  async function trResolve(id, outcome, limit, qty) {
+    let body = { outcome };
+    if (outcome === 'filled') {
+      const px = window.prompt('Fill price shown in the Robinhood app:', limit);
+      if (px === null) return;
+      const q = window.prompt('Shares filled:', qty);
+      if (q === null) return;
+      body = { outcome, fill_price: parseFloat(px), filled_quantity: parseFloat(q) };
+    }
+    try {
+      const r = await api(`/api/broker/orders/${id}/resolve`, trJson('POST', body));
+      document.getElementById('syncMsg').textContent = r.note || 'Updated.';
+    } catch (e) { document.getElementById('syncMsg').innerHTML = `<span class="error">${esc(trErr(e))}</span>`; }
+    await trLoadHistory();
+  }
+
+  /* ── Connection details ─────────────────────────────────────────────── */
+  function trRenderConn() {
+    const s = TR_STATUS || {};
+    document.getElementById('connBody').innerHTML = `
+      <div class="kv"><span class="k">Connected</span><span class="v">${s.connected ? 'yes' : 'no'}</span></div>
+      <div class="kv"><span class="k">Mode</span><span class="v">${esc(s.mode || 'paper')}</span></div>
+      <div class="kv"><span class="k">Redirect URI (this request)</span><span class="v" style="word-break:break-all;">${esc(s.redirect_uri || '--')}</span></div>
+      <div class="kv"><span class="k">Registered redirect URI</span><span class="v" style="word-break:break-all;">${esc(s.registered_redirect_uri || '--')}</span></div>
+      <div class="kv"><span class="k">Tools discovered</span><span class="v">${esc(s.tools_discovered ?? 0)}</span></div>
+      <div class="kv"><span class="k">Review / place / status tools</span><span class="v">${esc(s.review_tool || '—')} / ${esc(s.place_tool || '—')} / ${esc(s.order_status_tool || '—')}</span></div>
+      <div class="row-actions">${s.connected ? '<button class="btn btn-sm" type="button" onclick="trLoadTools(true)">Re-discover tools</button>' : ''}</div>
+      <div id="toolsList" style="margin-top:8px;"></div>`;
+    if (s.connected) trLoadTools(false);
+  }
+
+  async function trLoadTools(refresh) {
+    const el = document.getElementById('toolsList');
+    if (!el) return;
+    try {
+      const r = await api('/api/broker/tools' + (refresh ? '?refresh=true' : ''));
+      el.innerHTML = (r.tools || []).map((t) => `<div style="margin-top:8px;"><b class="mono">${esc(t.name)}</b> <span class="muted">${esc(t.description || '')}</span><pre class="schema">${esc(JSON.stringify(t.inputSchema || {}, null, 2))}</pre></div>`).join('') || '<span class="muted">No tools discovered yet.</span>';
+      if (refresh) await trLoadStatus();
+    } catch (e) { el.innerHTML = `<span class="error">${esc(trErr(e))}</span>`; }
+  }
+
+  initHeader('/trade').then(trBoot).catch((e) => {
+    document.getElementById('banner').innerHTML = `<div class="note bad">${esc(e && e.message ? e.message : 'Failed to start')}</div>`;
+  });
+  </script>
+</body>
+</html>

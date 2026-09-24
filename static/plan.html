@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SwingTrader — Weekly Plan</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/common.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background:#0b0b0c; color:#d8d8d8; font-family:'Inter',sans-serif; font-size:14px; line-height:1.5; }
+    .page { max-width:1180px; margin:0 auto; padding:18px; display:flex; flex-direction:column; gap:16px; }
+    .hero { background:linear-gradient(100deg,#1c1808,#121215); border:1px solid #3a3110; border-radius:8px; padding:16px 18px; }
+    .hero h1 { font-size:19px; color:#fff; font-weight:800; line-height:1.3; }
+    .hero p { color:#a9a9a9; font-size:12.5px; margin-top:6px; }
+    .stepper { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin-top:14px; }
+    .stepper a { display:block; text-decoration:none; background:#121215; border:1px solid #26262a; border-radius:6px; padding:8px 10px; color:#bbb; font-size:11.5px; }
+    .stepper a b { display:block; color:#f0a500; font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
+    .step { background:#121215; border:1px solid #232327; border-radius:8px; padding:16px 18px; scroll-margin-top:70px; }
+    .step-head { display:flex; align-items:center; gap:12px; margin-bottom:6px; }
+    .step-num { width:30px; height:30px; border-radius:50%; background:#1c1808; border:1px solid #3a3110; color:#f0a500; font-weight:800; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .step-title { font-size:15px; font-weight:800; color:#eee; }
+    .step-intro { color:#8d8d93; font-size:12px; margin:0 0 12px 42px; line-height:1.6; }
+    .step-foot { display:flex; justify-content:flex-end; margin-top:12px; }
+    .light { width:14px; height:14px; border-radius:50%; display:inline-block; vertical-align:middle; margin-right:6px; box-shadow:0 0 10px; }
+    .light.green { background:#3fbf7f; color:#3fbf7f; } .light.yellow { background:#f0a500; color:#f0a500; } .light.red { background:#e5484d; color:#e5484d; }
+    .kpis { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+    .kpi { background:#17171a; border:1px solid #26262a; border-radius:4px; padding:4px 9px; font-size:11.5px; color:#bbb; }
+    ul.why { margin:6px 0 0 18px; font-size:12px; color:#bdbdbd; line-height:1.65; }
+    .card { background:#101013; border:1px solid #232327; border-radius:7px; padding:12px 14px; margin-bottom:10px; }
+    .card.rec { border-left:3px solid #3fbf7f; }
+    .card.opt { border-left:3px solid #3a3a40; }
+    .card-head { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+    .card-head input[type=checkbox] { width:17px; height:17px; accent-color:#f0a500; }
+    .headline { font-weight:700; color:#eee; font-size:13px; }
+    .badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:3px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+    .b-buy { background:#0e1b12; color:#3fbf7f; border:1px solid #1d3a28; }
+    .b-sell { background:#25090b; color:#ff7175; border:1px solid #4a1418; }
+    .b-trim { background:#0e1b1b; color:#4ec9c2; border:1px solid #1d3a3a; }
+    .b-hold { background:#17171a; color:#999; border:1px solid #2a2a2f; }
+    .b-watch, .b-raise_stop { background:#1c1808; color:#f0a500; border:1px solid #3a3110; }
+    .b-good { background:#0e1b12; color:#3fbf7f; border:1px solid #1d3a28; }
+    .b-bad { background:#25090b; color:#ff7175; border:1px solid #4a1418; }
+    .b-amber { background:#1c1808; color:#f0a500; border:1px solid #3a3110; }
+    .skip { font-size:11.5px; color:#c9a24a; margin-top:6px; }
+    details.more summary { cursor:pointer; color:#7aa2f7; font-size:11.5px; font-weight:600; margin-top:6px; }
+    .strat-card h3 { font-size:13.5px; color:#eee; }
+    .strat-card .row { font-size:12px; color:#b4b4b4; margin-top:5px; line-height:1.6; }
+    .strat-card .row b { color:#ddd; }
+    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th { text-align:left; padding:7px 8px; color:#666; border-bottom:1px solid #232327; font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+    td { padding:8px; border-bottom:1px solid #1a1a1d; }
+    .empty { color:#777; font-size:12px; padding:12px; text-align:center; }
+    .toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+    @media (max-width:900px){ .stepper{ grid-template-columns:1fr 1fr; } .grid2{ grid-template-columns:1fr; } .step-intro{ margin-left:0; } }
+  </style>
+</head>
+<body>
+  <div class="topbar" id="topbar"></div>
+  <main class="page">
+    <div id="loading" class="empty">Building your weekly plan…</div>
+    <div id="content" hidden>
+      <section class="hero">
+        <h1 id="headline"></h1>
+        <p>Work down the page once a week (the weekend or Monday before the open is ideal). Each step explains what the app recommends and <b>why</b> — tick only the trades you agree with, then take them to the Trade tab.</p>
+        <nav class="stepper">
+          <a href="#s1"><b>Step 1</b>Read the market</a>
+          <a href="#s2"><b>Step 2</b>Strategies in play</a>
+          <a href="#s3"><b>Step 3</b>What you own</a>
+          <a href="#s4"><b>Step 4</b>New trades</a>
+          <a href="#s5"><b>Step 5</b>Review &amp; send</a>
+        </nav>
+      </section>
+      <section class="step" id="s1"></section>
+      <section class="step" id="s2"></section>
+      <section class="step" id="s3"></section>
+      <section class="step" id="s4"></section>
+      <section class="step" id="s5"></section>
+      <div id="disclaimer" class="muted" style="font-size:11px;"></div>
+    </div>
+  </main>
+
+  <script src="/static/js/common.js"></script>
+  <script>
+  'use strict';
+
+  let PLAN = null;
+  const SEL_KEY = 'st_trade_selection';
+  let SELECTED = new Set();
+
+  const N = (v) => (v === null || v === undefined || (typeof v === 'number' && !isFinite(v))) ? null : v;
+  const num = (v, d = 2) => N(v) === null ? '--' : Number(v).toFixed(d);
+  const money = (v, d = 2) => N(v) === null ? '--' : (Number(v) < 0 ? '-$' : '$') + Math.abs(Number(v)).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+  const signed = (v, d = 1, s = '') => N(v) === null ? '--' : (Number(v) >= 0 ? '+' : '') + Number(v).toFixed(d) + s;
+
+  function loadSelection() {
+    try { const a = JSON.parse(localStorage.getItem(SEL_KEY) || 'null'); return Array.isArray(a) ? a : null; } catch (e) { return null; }
+  }
+  function saveSelection() {
+    try { localStorage.setItem(SEL_KEY, JSON.stringify(Array.from(SELECTED))); } catch (e) { /* private mode */ }
+  }
+
+  function stepHead(n, title, intro) {
+    return `<div class="step-head"><span class="step-num">${n}</span><span class="step-title">${esc(title)}</span></div>
+      <p class="step-intro">${intro}</p>`;
+  }
+  function nextBtn(target, label) {
+    return `<div class="step-foot"><a class="btn btn-primary btn-sm" href="#${target}">${esc(label)} ↓</a></div>`;
+  }
+  function whyList(items) {
+    return (items || []).length ? `<ul class="why">${items.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>` : '';
+  }
+  function verdictBadge(v) {
+    if (v === 'confirmed') return '<span class="badge b-good">backtest: confirmed</span>';
+    if (v === 'mis-tagged') return '<span class="badge b-bad">backtest: not working here</span>';
+    if (v === 'untagged-edge') return '<span class="badge b-good">backtest: edge found</span>';
+    if (v === 'unproven') return '<span class="badge b-amber">backtest: unproven</span>';
+    return '<span class="badge b-hold" title="Build the edge matrix in Strategy Lab to see tested evidence.">no backtest yet</span>';
+  }
+
+  /* ── Step 1 — the market ───────────────────────────────────────────────── */
+  function renderMarket() {
+    const r = PLAN.regime || {};
+    const spy = r.spy || {};
+    const vix = r.vix && typeof r.vix === 'object' ? r.vix.last : r.vix;
+    const br = r.breadth && typeof r.breadth === 'object' ? r.breadth.pct_above_ma200 : r.breadth;
+    const t = r.transition || {};
+    document.getElementById('s1').innerHTML = stepHead(1, 'Read the market',
+      'Everything else follows from this. The app classifies the market on two questions — <b>which way</b> is it going (S&amp;P 500 above or below its 200-day average) and <b>how strongly</b> (ADX trend strength) — plus a fear check (VIX). Different strategies make money in different markets, so this decides which ones run.')
+      + `<div style="margin-left:42px;">
+        <div style="font-size:16px;font-weight:800;color:#fff;"><span class="light ${esc(r.light || 'yellow')}"></span>${esc(r.quadrant_label || 'Unknown')}</div>
+        <div class="muted" style="font-size:12.5px;margin-top:4px;">${esc(r.quadrant_description || '')}</div>
+        <div style="font-size:13px;color:#f0a500;font-weight:700;margin-top:8px;">${esc(r.stance || '')}</div>
+        <div class="kpis">
+          <span class="kpi hint" data-tip="S&P 500 ETF price and its distance from its 200-day average — the direction axis.">SPY ${money(spy.price)} · ${signed(spy.vs_ma200, 1, '%')} vs 200-day</span>
+          <span class="kpi hint" data-tip="ADX(14): above 25 = trending, below 20 = choppy.">ADX ${num(r.adx, 1)} (${esc(r.adx_trend || '--')})</span>
+          <span class="kpi hint" data-tip="The market's fear gauge. Above ~25 is elevated.">VIX ${num(vix, 1)}</span>
+          <span class="kpi hint" data-tip="Share of stocks above their own 200-day average — how broad the move is.">Breadth ${N(br) === null ? '--' : num(br, 0) + '%'}</span>
+        </div>
+        ${(r.reasons || []).length ? `<div style="margin-top:10px;font-size:11px;color:#777;text-transform:uppercase;letter-spacing:.06em;font-weight:700;">What the classifier saw</div>${whyList(r.reasons)}` : ''}
+        ${t.changed ? `<div class="skip" style="font-weight:700;">⚡ The regime just changed: ${esc(t.reason || '')} — expect a different set of strategies than last week.</div>` : ''}
+      </div>` + nextBtn('s2', 'Next: which strategies are running');
+  }
+
+  /* ── Step 2 — strategies in play ───────────────────────────────────────── */
+  function stratCard(s, running) {
+    const ra = s.rationale || {};
+    return `<div class="card strat-card">
+      <div class="card-head"><h3>${esc(s.name)}</h3>${running ? verdictBadge(s.verdict) : ''}
+        <span class="muted" style="font-size:11px;margin-left:auto;">${running ? `${esc(s.setups)} setup${s.setups === 1 ? '' : 's'} this week` : ''}${s.actionable === false ? ' · watch-only' : ''}</span></div>
+      ${ra.fit_now ? `<div class="row"><b>${running ? 'Why it is running now' : 'Why it is sitting out'}:</b> ${esc(ra.fit_now)}</div>` : ''}
+      ${running && ra.why_it_works ? `<div class="row"><b>Why it works:</b> ${esc(ra.why_it_works)}</div>` : ''}
+      ${running && s.how ? `<div class="row"><b>How it picks stocks:</b> ${esc(s.how)}</div>` : ''}
+      ${running && s.horizon ? `<div class="row"><b>Typical hold:</b> ${esc(s.horizon)}</div>` : ''}
+      ${running && ra.fails_when ? `<div class="row"><b style="color:#e5484d;">When it loses:</b> ${esc(ra.fails_when)}</div>` : ''}
+      ${running && s.evidence ? `<div class="row"><b>Evidence:</b> ${esc(s.evidence)}</div>` : ''}
+    </div>`;
+  }
+  function renderStrategies() {
+    const run = PLAN.strategies_running || [];
+    const off = PLAN.strategies_standing_down || [];
+    const sel = PLAN.selection || {};
+    document.getElementById('s2').innerHTML = stepHead(2, 'Strategies in play — and why',
+      'A strategy is a repeatable rule for picking trades. Each one exploits a specific market behaviour, so each one only earns its keep in certain markets. Here is what is running for this market, the reasoning behind each, and — when you have built it in the Strategy Lab — whether the backtest agrees.')
+      + (run.length ? `<div class="grid2">${run.map((s) => stratCard(s, true)).join('')}</div>`
+        : '<div class="empty">No strategy is built for this market. Standing aside is a position too — protect what you have.</div>')
+      + (PLAN.evidence_available ? '' : `<div class="skip" style="margin-left:0;">Tip: build the edge matrix once in the <a href="/backtest" style="color:#f0a500;">Strategy Lab</a> to see whether each strategy has actually worked in this kind of market.</div>`)
+      + (sel.method ? `<details class="more"><summary>How the candidate stocks were found</summary><div class="muted" style="font-size:12px;margin-top:4px;">${esc(sel.method)}</div></details>` : '')
+      + (off.length ? `<details class="more"><summary>${off.length} strateg${off.length === 1 ? 'y' : 'ies'} sitting out this market</summary><div style="margin-top:8px;">${off.map((s) => stratCard(s, false)).join('')}</div></details>` : '')
+      + nextBtn('s3', 'Next: review what you own');
+  }
+
+  /* ── Step 3 — positions ────────────────────────────────────────────────── */
+  const VERDICT_LABEL = { sell: 'Sell', trim: 'Take partial profit', raise_stop: 'Raise stop', watch: 'Watch closely', hold: 'Hold' };
+  function orderById(id) { return (PLAN.orders || []).find((o) => o.id === id) || null; }
+  function checkbox(o) {
+    return `<input type="checkbox" ${SELECTED.has(o.id) ? 'checked' : ''} onchange="toggleOrder('${esc(o.id)}', this.checked)" title="Include this order on the Trade tab">`;
+  }
+  function renderPositions() {
+    const rows = PLAN.position_reviews || [];
+    const body = rows.length === 0
+      ? '<div class="empty">You have no open positions — skip ahead to new trades.</div>'
+      : rows.map((r) => {
+          const o = r.order_id ? orderById(r.order_id) : null;
+          return `<div class="card ${o && o.recommended ? 'rec' : 'opt'}">
+            <div class="card-head">
+              ${o ? checkbox(o) : ''}
+              ${tickerLink(r.ticker, '14px')}
+              <span class="badge b-${esc(r.verdict)}">${esc(VERDICT_LABEL[r.verdict] || r.verdict)}</span>
+              <span class="mono" style="font-size:12px;">${money(r.price)}</span>
+              <span class="mono ${Number(r.pnl_pct) >= 0 ? 'up' : 'down'}" style="font-size:12px;">${signed(r.pnl_pct, 1, '%')}</span>
+              ${N(r.open_r) !== null ? `<span class="mono muted" style="font-size:12px;" title="Profit measured in units of the risk you originally took">${signed(r.open_r, 2, 'R')}</span>` : ''}
+              ${r.strategy_name ? `<span class="muted" style="font-size:11px;">${esc(r.strategy_name)}</span>` : ''}
+              ${r.raise_stop_to ? `<button class="btn btn-sm" style="margin-left:auto;" onclick="raiseStop('${safeTicker(r.ticker)}', ${Number(r.raise_stop_to)})" type="button">Set stop to ${money(r.raise_stop_to)}</button>` : ''}
+            </div>
+            ${o ? `<div class="headline" style="margin-top:6px;">${esc(o.headline)}</div>` : ''}
+            ${whyList(r.why)}
+            ${o && !o.recommended && o.skip_reason ? `<div class="skip">${esc(o.skip_reason)}</div>` : ''}
+            <div id="stopmsg_${safeTicker(r.ticker)}" class="muted" style="font-size:11px;"></div>
+          </div>`;
+        }).join('');
+    document.getElementById('s3').innerHTML = stepHead(3, 'Deal with what you own first',
+      'Managing existing trades matters more than finding new ones. For every holding the app checks: has it hit your stop (sell — the plan said the idea was wrong), hit its target (take some profit), broken its long-term trend, overstayed its planned holding time, or earned a higher stop? Recommended orders are pre-ticked; optional ones are your call.')
+      + body + nextBtn('s4', 'Next: new trades');
+  }
+  async function raiseStop(ticker, stop) {
+    const r = (PLAN.position_reviews || []).find((x) => safeTicker(x.ticker) === ticker);
+    const msg = document.getElementById('stopmsg_' + ticker);
+    if (!r || N(r.avg_cost) === null) { if (msg) msg.textContent = 'Cannot update: position cost is unknown.'; return; }
+    try {
+      await api('/api/portfolio', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker, shares: Number(r.shares), avg_cost: Number(r.avg_cost), stop_loss: stop }) });
+      if (msg) msg.innerHTML = `<span class="up">Stop updated to ${money(stop)} in SwingTrader.</span> Remember to move the matching stop order at your broker too.`;
+    } catch (e) { if (msg) msg.innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+  }
+
+  /* ── Step 4 — new trades ───────────────────────────────────────────────── */
+  function renderBuys() {
+    const buys = (PLAN.orders || []).filter((o) => o.side === 'buy');
+    const cap = PLAN.capacity || {};
+    const body = buys.length === 0
+      ? '<div class="empty">No buy setups this week. In this market the strategies found nothing that meets their rules — not buying is the correct outcome.</div>'
+      : buys.map((o) => `<div class="card ${o.recommended ? 'rec' : 'opt'}">
+          <div class="card-head">
+            ${checkbox(o)}
+            <span class="badge b-buy">Buy</span>
+            ${tickerLink(o.ticker, '14px')}
+            <span class="muted" style="font-size:11px;">${esc([o.name, o.sector].filter(Boolean).join(' · '))}</span>
+            ${verdictBadge(o.evidence_verdict)}
+            <span class="mono" style="font-size:12px;margin-left:auto;">${esc(o.shares)} sh · ${money(o.est_value, 0)}</span>
+          </div>
+          <div class="headline" style="margin-top:6px;">${esc(o.headline)}</div>
+          ${o.trade_plan ? `<div class="kpis">
+            <span class="kpi">Limit ${money(o.limit_price)}</span>
+            <span class="kpi down">Stop ${money(o.trade_plan.stop)} (${signed(o.trade_plan.stop_pct, 1, '%')})</span>
+            <span class="kpi up">Target ${money(o.trade_plan.target)} (${signed(o.trade_plan.target_pct, 1, '%')})</span>
+            <span class="kpi">Risk ${money(o.trade_plan.risk_dollars)}</span>
+          </div>` : ''}
+          ${!o.recommended && o.skip_reason ? `<div class="skip">Not pre-selected: ${esc(o.skip_reason)}</div>` : ''}
+          <details class="more" ${o.recommended ? 'open' : ''}><summary>Why this trade</summary>${whyList(o.why)}</details>
+        </div>`).join('');
+    document.getElementById('s4').innerHTML = stepHead(4, 'Pick new trades',
+      `Candidates from the running strategies, best first. Each buy is sized so that if its stop is hit you lose only your chosen risk per trade, and each one is checked against what you already hold (and against the buys above it) for correlation, sector concentration and your total risk budget. You have <b>${esc(cap.slots_free ?? '--')}</b> free slot(s) of ${esc(cap.max_positions ?? '--')}.`)
+      + `<div class="toolbar"><button class="btn btn-sm" onclick="selectRecommended()" type="button">Tick all recommended</button><button class="btn btn-sm" onclick="clearSelection()" type="button">Clear all</button></div>`
+      + body + nextBtn('s5', 'Next: review');
+  }
+
+  /* ── Step 5 — review & send ────────────────────────────────────────────── */
+  function renderReview() {
+    const chosen = (PLAN.orders || []).filter((o) => SELECTED.has(o.id));
+    const buyTotal = chosen.filter((o) => o.side === 'buy').reduce((a, o) => a + (Number(o.est_value) || 0), 0);
+    const sellTotal = chosen.filter((o) => o.side === 'sell').reduce((a, o) => a + (Number(o.est_value) || 0), 0);
+    document.getElementById('s5').innerHTML = stepHead(5, 'Review and send',
+      'These are the orders you ticked. Sells are listed first — they free up cash and slots. Nothing is placed from this page: the Trade tab connects to Robinhood, lets you edit shares and prices, previews every order, and asks you to confirm.')
+      + (chosen.length === 0 ? '<div class="empty">No orders ticked. That is a valid week — sometimes the right trade is no trade.</div>'
+        : `<table><thead><tr><th>Order</th><th>Ticker</th><th>Shares</th><th>Limit</th><th>Est. value</th></tr></thead><tbody>
+          ${chosen.sort((a, b) => (a.side === 'sell' ? 0 : 1) - (b.side === 'sell' ? 0 : 1)).map((o) => `<tr>
+            <td><span class="badge b-${esc(o.kind)}">${esc(o.kind)}</span></td><td>${tickerLink(o.ticker)}</td>
+            <td class="mono">${esc(o.shares)}</td><td class="mono">${money(o.limit_price)}</td><td class="mono">${money(o.est_value, 0)}</td></tr>`).join('')}
+          </tbody></table>
+          <div class="kpis"><span class="kpi">Buys ${money(buyTotal, 0)}</span><span class="kpi">Sells ${money(sellTotal, 0)}</span><span class="kpi">Net cash ${money(sellTotal - buyTotal, 0)}</span></div>`)
+      + `<div class="step-foot" style="gap:8px;"><a class="btn" href="/" >Back to Playbook</a><a class="btn btn-primary" href="/trade" onclick="saveSelection()">Continue to Trade (${chosen.length}) →</a></div>`;
+  }
+
+  function toggleOrder(id, on) {
+    if (on) SELECTED.add(id); else SELECTED.delete(id);
+    saveSelection();
+    renderReview();
+  }
+  function selectRecommended() {
+    (PLAN.orders || []).filter((o) => o.side === 'buy' && o.recommended).forEach((o) => SELECTED.add(o.id));
+    saveSelection(); renderBuys(); renderReview();
+  }
+  function clearSelection() {
+    (PLAN.orders || []).filter((o) => o.side === 'buy').forEach((o) => SELECTED.delete(o.id));
+    saveSelection(); renderBuys(); renderReview();
+  }
+
+  function safe(fn, id) {
+    try { fn(); } catch (e) { const el = document.getElementById(id); if (el) el.innerHTML = `<div class="error">Section failed to render: ${esc(e.message)}</div>`; }
+  }
+
+  async function load() {
+    try {
+      PLAN = await api('/api/weekly-plan');
+    } catch (e) {
+      document.getElementById('loading').innerHTML = `<span class="error">Could not build the weekly plan: ${esc(e.message)}</span>`;
+      return;
+    }
+    // A saved selection only applies to orders that still exist this week;
+    // with none saved, start from the app's recommendations.
+    const ids = new Set((PLAN.orders || []).map((o) => o.id));
+    // The selection is per WEEK: last week's ticks must not carry into a new plan.
+    let savedWeek = null;
+    try { savedWeek = localStorage.getItem(SEL_KEY + '_week'); } catch (e) { /* private mode */ }
+    const saved = savedWeek === PLAN.week_of ? loadSelection() : null;
+    try { localStorage.setItem(SEL_KEY + '_week', PLAN.week_of || ''); } catch (e) { /* private mode */ }
+    SELECTED = saved ? new Set(saved.filter((id) => ids.has(id)))
+                     : new Set((PLAN.orders || []).filter((o) => o.recommended).map((o) => o.id));
+    saveSelection();
+    document.getElementById('headline').textContent = (PLAN.summary && PLAN.summary.headline) || 'Weekly Plan';
+    document.getElementById('loading').hidden = true;
+    document.getElementById('content').hidden = false;
+    safe(renderMarket, 's1');
+    safe(renderStrategies, 's2');
+    safe(renderPositions, 's3');
+    safe(renderBuys, 's4');
+    safe(renderReview, 's5');
+    document.getElementById('disclaimer').textContent = PLAN.disclaimer || '';
+  }
+
+  initHeader('/plan').then(load).catch((e) => {
+    const l = document.getElementById('loading');
+    if (l) l.innerHTML = `<span class="error">${esc(e && e.message ? e.message : 'Failed to start')}</span>`;
+  });
+  </script>
+</body>
+</html>

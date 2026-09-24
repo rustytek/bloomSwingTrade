@@ -526,6 +526,16 @@ def assess_new_position(ticker: str, plan: dict, positions, quotes,
     new_sector = after_quotes[ticker].get("sector") or "Unknown"
     after_w = after_conc["sector_weights"].get(new_sector, 0.0)
     before_w = before_conc["sector_weights"].get(new_sector, 0.0)
+    # Measure against the ACCOUNT, not just the invested book, while the book is
+    # smaller than the account. Otherwise the first position in an empty book is
+    # always "100% of the book" and blocks — as does a second name in a new
+    # sector — so a small or new account could never open a trade at all.
+    after_total = _num(after_conc.get("total_market_value"), 0.0) or 0.0
+    before_total = _num(before_conc.get("total_market_value"), 0.0) or 0.0
+    if account_size > after_total > 0:
+        after_w = round(after_w * after_total / account_size, 2)
+    if account_size > before_total > 0:
+        before_w = round(before_w * before_total / account_size, 2)
     if after_w >= SECTOR_BLOCK_PCT:
         warnings.append(_warn(
             "block", "sector_concentration",

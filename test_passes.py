@@ -872,7 +872,7 @@ _STATIC = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "static")
 _ROOT = _os.path.dirname(_STATIC)
 
 # Pages that load common.js and therefore share its global scope.
-_SHARED_PAGES = ("today.html", "backtest.html", "scorecard.html", "journal.html",
+_SHARED_PAGES = ("today.html", "plan.html", "trade.html", "backtest.html", "scorecard.html", "journal.html",
                  "admin.html", "charts.html", "report.html", "index.html")
 
 
@@ -908,7 +908,7 @@ def test_nav_is_rendered_from_nav_links_only():
     # Match an actual CALL — `initHeader('/charts', …)` — not a prose mention of
     # the name, which index.html legitimately contains in an explanatory comment.
     call = _re.compile(r"initHeader\(\s*['\"]")
-    for page in ("today.html", "backtest.html", "scorecard.html", "journal.html",
+    for page in ("today.html", "plan.html", "trade.html", "backtest.html", "scorecard.html", "journal.html",
                  "admin.html", "charts.html", "report.html"):
         html = _read_static(page)
         assert call.search(html), page + " never calls initHeader('<path>')"

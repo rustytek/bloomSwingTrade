@@ -28,6 +28,7 @@ from services.universe import UNIVERSE
 from services import chart_service
 from services import regime as regime_mod
 from services.regime import classify_regime, strategies_for_regime, QUADRANT_INFO
+from services.strategy_rationale import rationale_for
 
 _TTL_SECONDS = 15 * 60
 _cache: dict[int, tuple[dict, float]] = {}
@@ -215,6 +216,7 @@ async def _build_regime(cache: dict[str, dict]) -> dict:
         "quadrant_description": classified.get("quadrant_description"),
         "adx": classified["adx"],
         "adx_trend": classified["adx_trend"],
+        "above_200ma": classified.get("above_200ma"),
         "transition": classified["transition"],
         "spy": {
             "price": round(spy_price, 2) if spy_price else None,
@@ -267,9 +269,18 @@ def _build_positions(positions: list[PortfolioPosition], cache: dict[str, dict],
 def _build_setups(cache: dict[str, dict], held: set[str], account_size: float,
                   risk_pct: float, atr_mult: float, r_multiple: float,
                   active_ids: set[str] | None = None,
-                  per_strategy: int = 3, overall: int = 8) -> list[dict]:
+                  per_strategy: int = 3, overall: int = 8,
+                  selection: dict | None = None) -> list[dict]:
+    """Top setups across the active strategies.
+
+    `selection`, when passed, is filled in with HOW the list was chosen — how
+    many tickers were scanned, how many passed each strategy's rules, and the
+    cut-offs applied — so the Playbook can say "ranked #2 of 31 that qualified"
+    instead of presenting the list as if it fell from the sky.
+    """
     strategies = {sid: s for sid, s in STRATEGIES.items() if active_ids is None or sid in active_ids}
     by_strategy: dict[str, list] = {sid: [] for sid in strategies}
+    scanned = 0
     for ticker in UNIVERSE:
         if ticker in held:
             continue
@@ -278,18 +289,41 @@ def _build_setups(cache: dict[str, dict], held: set[str], account_size: float,
         quote = entry.get("quote") or {}
         if not bars:
             continue
+        scanned += 1
         for sid, strat in strategies.items():
             setup = strat.scan(ticker, bars, quote)
             if setup:
                 by_strategy[sid].append((setup, bars, quote))
 
     selected = []
+    pool_size: dict[str, int] = {}
+    rank_of: dict[tuple[str, str], int] = {}
     for sid, items in by_strategy.items():
         items.sort(key=lambda x: x[0].score, reverse=True)
+        pool_size[sid] = len(items)
+        for i, (setup, _b, _q) in enumerate(items):
+            rank_of[(sid, setup.ticker)] = i + 1
         selected.extend(items[:per_strategy])
     # Triggered before forming, then by score
     selected.sort(key=lambda x: (x[0].state != "triggered", -x[0].score))
     selected = selected[:overall]
+
+    if selection is not None:
+        selection.update({
+            "universe_size": len(UNIVERSE),
+            "scanned": scanned,
+            "skipped_held": len(held),
+            "per_strategy_cap": per_strategy,
+            "overall_cap": overall,
+            "passed_by_strategy": dict(pool_size),
+            "method": (
+                f"Scanned {scanned} tickers with cached price history (skipping the "
+                f"{len(held)} you already hold). Each running strategy applied its own rules; "
+                f"the survivors were ranked by that strategy's score, the top {per_strategy} per "
+                f"strategy kept, then setups that have TRIGGERED were put ahead of ones still "
+                f"FORMING, capped at {overall} overall."
+            ),
+        })
 
     out = []
     for setup, bars, quote in selected:
@@ -311,6 +345,11 @@ def _build_setups(cache: dict[str, dict], held: set[str], account_size: float,
             "state": setup.state,
             "score": round(setup.score, 4),
             "reasons": setup.reasons,
+            # Why THIS ticker rather than another that also passed the rules.
+            "rank": rank_of.get((setup.strategy, setup.ticker)),
+            "pool_size": pool_size.get(setup.strategy),
+            "metrics": setup.metrics,
+            "price": quote.get("price"),
             "swing_score": {"score": swing["score"], "grade": swing["grade"]} if swing else None,
             "plan": plan,
             "actionable": strat.actionable,
@@ -446,8 +485,9 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
     active_ids, evidence, matrix = _resolve_active_strategies(db, user, regime["quadrant"])
     pos_rows = _build_positions(positions, cache, atr_stop_mult)
     held = {p.ticker for p in positions}
+    selection: dict = {}
     setups = _build_setups(cache, held, account_size, risk_pct, atr_stop_mult, r_multiple,
-                           active_ids=active_ids)
+                           active_ids=active_ids, selection=selection)
 
     strategy_regime_status = []
     for s in STRATEGIES.values():
@@ -492,6 +532,14 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
             "regimes": s.regimes,
             "actionable": s.actionable,
             "reason": reason,
+            # WHY you would use this strategy at all, and why now — written
+            # opinion (services/strategy_rationale.py), shown alongside, never
+            # instead of, the tested evidence below.
+            "rationale": rationale_for(s.id, regime["quadrant"]),
+            "description": s.description,
+            "horizon": (s.details or {}).get("horizon"),
+            "how": (s.details or {}).get("how"),
+            "horizon_days": s.horizon_days,
             "evidence": {
                 "override_enabled": evidence["enabled"],
                 "override_applied": evidence["applied"],
@@ -532,6 +580,7 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
         "regime": regime,
         "positions": pos_rows,
         "setups": setups,
+        "selection": selection,
         "strategy_regime_status": strategy_regime_status,
         "evidence_regimes": evidence,
         "suppressed_by_regime": suppressed,

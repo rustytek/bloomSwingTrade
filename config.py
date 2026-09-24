@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     litellm_url: str = "http://192.168.0.21:4000"  # e.g. http://192.168.0.21:4000
     litellm_api_key: str = ""                      # LiteLLM virtual key for this user/app
 
+    # Public origin of this app, e.g. https://invest.example.com — used to build
+    # the Robinhood OAuth redirect URI (<public_url>/api/broker/oauth/callback).
+    # Blank = derive from the request (honours X-Forwarded-Proto/Host).
+    public_url: str = ""
+
     class Config:
         env_file = ".env"
         case_sensitive = False

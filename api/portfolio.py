@@ -376,23 +376,41 @@ def close_position(
     if not pos:
         raise HTTPException(status_code=404, detail="Position not found")
 
+    trade = journal_close(db, pos, req.exit_price, req.exit_date, req.notes)
+    return {
+        "id": trade.id,
+        "ticker": trade.ticker,
+        "pnl": trade.pnl,
+        "pnl_pct": trade.pnl_pct,
+        "r_multiple": trade.r_multiple,
+    }
+
+
+def journal_close(db: Session, pos: PortfolioPosition, exit_price: float,
+                  exit_date: date | None = None, notes: str | None = None) -> ClosedTrade:
+    """Archive `pos` to the journal at `exit_price` and delete it. Commits.
+
+    The single implementation behind POST /api/portfolio/{ticker}/close and the
+    broker fill sync (services/broker_service.py), so a Robinhood fill and a
+    manual close write an identical journal row.
+    """
     cost_basis = pos.shares * pos.avg_cost
-    pnl = pos.shares * req.exit_price - cost_basis
+    pnl = pos.shares * exit_price - cost_basis
     pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0.0
 
     # R-multiple against the INITIAL stop (legacy rows fall back to stop_loss).
     r_multiple, r_stop = compute_r_multiple(
-        pos.avg_cost, req.exit_price, pos.initial_stop, pos.stop_loss
+        pos.avg_cost, exit_price, pos.initial_stop, pos.stop_loss
     )
 
     trade = ClosedTrade(
-        user_id=user.id,
-        ticker=ticker,
+        user_id=pos.user_id,
+        ticker=pos.ticker,
         shares=pos.shares,
         avg_cost=pos.avg_cost,
-        exit_price=req.exit_price,
+        exit_price=exit_price,
         entry_date=pos.entry_date,
-        exit_date=req.exit_date or date.today(),
+        exit_date=exit_date or date.today(),
         stop_loss=pos.stop_loss,
         initial_stop=r_stop,
         target=pos.target,
@@ -407,7 +425,7 @@ def close_position(
         thesis=pos.thesis,
         invalidation=pos.invalidation,
         time_stop_days=pos.time_stop_days,
-        notes=req.notes or pos.notes,
+        notes=notes or pos.notes,
         opened_at=pos.added_at,
         closed_at=datetime.now(timezone.utc),
     )
@@ -415,13 +433,7 @@ def close_position(
     db.delete(pos)
     db.commit()
     db.refresh(trade)
-    return {
-        "id": trade.id,
-        "ticker": trade.ticker,
-        "pnl": trade.pnl,
-        "pnl_pct": trade.pnl_pct,
-        "r_multiple": trade.r_multiple,
-    }
+    return trade
 
 
 @router.delete("/{ticker}", status_code=status.HTTP_204_NO_CONTENT)

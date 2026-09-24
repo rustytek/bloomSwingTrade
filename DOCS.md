@@ -32,6 +32,7 @@ Open the Web UI button (or navigate to `https://<ha-ip>:8443`).
 
 | `litellm_url` | LiteLLM OpenAI-compatible base URL |
 | `litellm_api_key` | Required when `ai_provider` is `litellm`; use the restricted LiteLLM virtual key for this user/app |
+| `public_url` | Optional. The address you open SwingTrader at from outside (e.g. `https://invest.example.com`). Robinhood sends you back to `<public_url>/api/broker/oauth/callback` after you connect; leave blank to derive it from the request |
 | `fred_api_key` | Optional FRED API key for Macro & Liquidity charts: M2, Fed Funds, 2yr/10yr yields, and yield spread |
 
 ## Enabling FRED Macro Data
@@ -84,6 +85,23 @@ To back up your data, include the add-on data directory in your HA backup.
 4. Restart the add-on
 
 The AI panel in the stock detail view will populate automatically once configured.
+
+## Trading with Robinhood (Trade tab)
+
+The **Trade** tab sends the orders you tick in the **Weekly Plan** to Robinhood using Robinhood's official
+[Agentic Trading](https://robinhood.com/us/en/support/articles/agentic-trading-overview/) connection.
+
+1. Open a **Robinhood Agentic account** on desktop at robinhood.com and fund it. Orders can only ever land in
+   that account — never your main one.
+2. If you reach SwingTrader through a tunnel or reverse proxy, set `public_url` so Robinhood can send you back.
+3. On the Trade tab press **Connect Robinhood**, sign in on robinhood.com and approve. SwingTrader never sees your
+   Robinhood password; it stores an encrypted, revocable token (in `/data`). **Disconnect** deletes it.
+4. Run a week in **Paper** mode first — every check runs, nothing is sent, your portfolio doesn't change.
+5. Switch to **Live** when ready. Every live order is a whole-share limit order, is reviewed by Robinhood first,
+   and needs your explicit confirmation. **Check fills** writes filled orders into your portfolio and journal.
+
+Back up `/data` as a whole — the token encryption key (`broker.key`) lives next to the database; without it you
+simply reconnect.
 
 ## Updating
 

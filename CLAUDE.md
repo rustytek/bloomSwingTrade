@@ -25,9 +25,11 @@ python test_backtest.py          # backtest engine, exit rules, no-look-ahead, W
 python test_edge.py              # edge matrix verdicts, evidence override safety, scorecard
 python test_plan_persistence.py  # plan-intent columns, notes backfill, entry_chasing honesty
 python test_jobs.py              # background jobs: worker subprocess, dedupe, stale reaping
+python test_weekly_plan.py       # weekly-plan decisions, risk-aware buy pick, strategy rationale coverage
+python test_broker.py            # Robinhood OAuth/MCP (mocked), order validation, paper safety, fill sync
 ```
 
-**199 tests across seven suites.** All are self-contained (no network) except
+**235 tests across nine suites** (`python test_broker.py` covers the Robinhood/Trade layer, fully mocked). All are self-contained (no network) except
 `test_jobs.py`, which deliberately **launches a real worker subprocess** against a
 throwaway SQLite file in a temp dir — mocking the subprocess would let the very
 layer it guards break while the test still passed. `test_passes.py`
@@ -37,7 +39,7 @@ living in `api/*.py` can be imported without the full web stack.
 
 > **Counting routes:** this FastAPI version stores `_IncludedRouter` lazy references, so
 > `len(app.routes)` UNDERCOUNTS and filtering on `hasattr(r, "path")` silently omits every
-> router-mounted endpoint. Always verify through `app.openapi()["paths"]` (currently 66).
+> router-mounted endpoint. Always verify through `app.openapi()["paths"]` (currently 80; the OAuth callback is excluded from the schema).
 
 The app runs on HTTPS at `https://localhost:8443`. Swagger docs at `/api/docs`.
 
@@ -51,14 +53,18 @@ The app runs on HTTPS at `https://localhost:8443`. Swagger docs at `/api/docs`.
 ```
 React SPA (static/*.html) → FastAPI (main.py)
   → auth/ (JWT login/register)
-  → api/ (stocks, screener, watchlist, portfolio, ai, charts, today, settings, journal, backtest)
+  → api/ (stocks, screener, watchlist, portfolio, ai, charts, today, weekly_plan, broker,
+          settings, journal, backtest, scorecard, jobs)
   → services/ (market_data, indicators, ai_service, chart_service, report_service,
-               strategies, regime, trade_plan, today)
+               strategies, strategy_rationale, regime, trade_plan, today, weekly_plan,
+               broker_service, brokers/robinhood_mcp, secrets_box)
   → SQLite via SQLAlchemy (database/)
 ```
 
 ### Page Routes
 - `/` — the **Playbook** (`static/today.html`). Three-cell regime band (quadrant/ADX/SPY/VIX · the `transition.reason` "time to change strategy" signal · the risk budget from `GET /api/portfolio/risk`, with `unstopped_warning` shown loudly in red). Main column: setups **grouped by strategy**, each group header carrying that strategy's tested edge in the *current* quadrant from `GET /api/edge-matrix`, verdict-coloured (confirmed green / unproven amber / mis-tagged red). A collapsed "standing down" strip explains every off-regime strategy. Right rail: positions sorted by urgency with their `actions[]` verbatim, book exposure, and the morning checklist. The **Plan-a-Trade modal** wraps `POST /api/portfolio/assess` and commits through `POST /api/portfolio`; its commit button is disabled while any warning is `block` level. (Also the 404 catch-all fallback.)
+- `/plan` — the **Weekly Plan** (`static/plan.html`), the second tab: a five-step walkthrough (read the market → strategies in play and *why* → what to do with each holding → new trades → review) built on `GET /api/weekly-plan`. Every recommendation carries a plain-English `why[]`. Recommended orders are pre-ticked; the ticks are saved to localStorage `st_trade_selection` (a JSON array of order ids) **plus** `st_trade_selection_week` (= the plan's `week_of`), so a selection never carries into a new week. "Continue to Trade" hands the selection to `/trade`. Nothing is placed from this page.
+- `/trade` — the **Trade** page (`static/trade.html`), deliberately the **last** tab: connect Robinhood → paper/live → pick orders from `/api/weekly-plan` (honouring the week-scoped selection keys) → preview → place, plus an order-history panel. See "Trade / Robinhood" below.
 - `/screener` — the screener (`static/index.html`, formerly served at `/`).
 - `/backtest` — the **Strategy Lab** (`static/backtest.html`). Headlined by the strategy × regime edge matrix, then a single-strategy walk-forward with a rotation/trade_plan mode toggle, sortable trade log with exit-kind distribution, and a severity-sorted caveats panel.
 - `/scorecard` — the **Scorecard** (`static/scorecard.html`): realized expectancy vs the backtest's expected R, per-strategy drift with a sample-size guard, and execution-quality leaks ranked by realized R cost. Metrics the app cannot compute get their own "Not Measurable Yet" panel — never `0`, never `--` — each naming the field that must be persisted first.
@@ -88,6 +94,8 @@ React SPA (static/*.html) → FastAPI (main.py)
 | `services/exits.py` | Pluggable exit rules — `FixedStopTarget`, `AtrTrailingStop` (chandelier), `TimeStop`, `PartialProfitTaking`, `RegimeExit` — plus the priority-ordered `resolve_exit()` resolver. Stop fills are assumed to precede target fills within a bar. `build_exit_rules(..., strategy_id=…)` resolves the time stop's `max_bars` as: explicit caller value > the strategy's numeric `horizon_days` > `DEFAULT_TIME_STOP_BARS` (20). `strategy_horizon_days()` reads only the numeric attribute — `details["horizon"]` is prose and is never parsed |
 | `api/portfolio.py` | Positions CRUD/close/CSV-import, plus `GET /api/portfolio/risk` (heat, open risk, concentration, correlation matrix) and `POST /api/portfolio/assess` (pre-trade check). The `GET /api/portfolio` summary carries `open_r` and `portfolio_heat` |
 | `services/today.py` | Builds the `/api/today` payload; exposes `position_flags()` helper (see below) |
+| `services/strategy_rationale.py` | Written **why** for every strategy: `why_it_works`, `best_when`, `fails_when`, and a `regime_fit` sentence per quadrant. `rationale_for(id, quadrant)` adds `fit_now`. Surfaced in `/api/today`'s `strategy_regime_status[].rationale`, the Strategy Lab catalog, and the Weekly Plan. It is opinion, not evidence — the UI always labels it as such next to the edge-matrix verdict. `test_weekly_plan.py` fails if a registered strategy or quadrant has no text |
+| `services/weekly_plan.py` / `api/weekly_plan.py` | `GET /api/weekly-plan` — the decision layer on top of `build_today` (so the two pages can never disagree). See "Weekly Plan" below |
 | `services/edge_matrix.py` | Strategy × regime EVIDENCE matrix — one walk-forward per actionable strategy, bucketed by the `quadrant` already stamped on each rebalance period. Per-cell Wilson CI + `confidence`, and a `verdict` (`confirmed`/`unproven`/`mis-tagged`/`untagged-edge`) saying whether the hand-written `Strategy.regimes` tag is actually supported. 12h per-user cache |
 | `services/scorecard.py` | Realized (journal) vs expected (edge matrix) per strategy — `drift` plus a sample-size-guarded recommendation — and `execution_quality()` (entry chasing / stop loosening / overstayed horizon / off-regime entries), which returns any metric it cannot compute as explicitly UNAVAILABLE with the field it needs |
 | `api/scorecard.py` | `GET /api/scorecard`, `GET /api/edge-matrix` (cold call returns "not computed yet"; `?refresh=true` builds), `POST /api/edge-matrix/invalidate` |
@@ -231,6 +239,25 @@ Builds the `/api/today` payload (regime light, position health, top setups with 
 
 `position_flags()` reads `quote["ann_ret_1m"]` (the 21-bar annualized return) for its "weak 1M annualized return" flag — **not** `ann_ret`, which is now the full-history annualized figure that Sharpe/Sortino/Calmar are built from.
 
+### Weekly Plan (`services/weekly_plan.py`)
+`build_weekly_plan(db, user)` turns the Playbook payload into decisions:
+- **Position reviews** (`_review_position`) — `stop_hit` → recommended full **sell**; `target_hit` → recommended **trim** (half); `trend_break` → optional sell; held past the user's own `time_stop_days` with < 0.5R → recommended sell (past only the *strategy's* `horizon_days` → optional); otherwise **raise_stop** when the ATR trail is above the current stop, **watch** near the stop, or **hold**. Sell limits are the last price − 1% (`SELL_LIMIT_CUSHION`).
+- **Buys** (`_buy_orders`) — setups walked in Playbook order through `portfolio_risk.assess_new_position` against a **hypothetical book** that already contains every buy picked before it (and excludes recommended full sells). So the second of two highly-correlated names, a sector pile-up, or a blown open-R budget is blocked even though each would pass alone. Also not pre-selected: `forming` setups, strategies the cached edge matrix marks `mis-tagged` in this regime, and anything past `MAX_NEW_BUYS_PER_WEEK` (4). Buy limit = top of the ATR entry zone (no chasing).
+- **Order contract** (consumed by the Trade page): `{id: "buy:T"|"sell:T"|"trim:T", kind, side, ticker, shares:int, limit_price, est_value, recommended, skip_reason, headline, why[], strategy, strategy_name, plan:{stop, target, strategy, strategy_name, planned_entry, planned_entry_high, thesis, invalidation, time_stop_days}}`; buys also carry `trade_plan`, `risk_warnings[]`, `evidence_verdict`, `state`. The `plan` block is what gets persisted to `PortfolioPosition` on fill.
+- The edge matrix is read from **cache only**, never built (same rule as the Playbook).
+
+`/api/today` setups now also carry `rank` / `pool_size` ("ranked #2 of 31 that passed the rules"), the strategy's `metrics`, and `price`; the payload has a top-level `selection` block (scanned count, per-strategy pass counts, the cut-offs, and a prose `method`). `regime.above_200ma` is now included.
+
+**Sector concentration is measured against max(book, account_size)** in `assess_new_position`. It used to be the invested book alone, so the first trade into an empty book was "100% of the book" and **blocked**, and a second name in a new sector (~50%) blocked too — a new or small account could never open a position through Plan-a-Trade. Pinned by `test_first_position_in_empty_book_is_not_a_sector_block`.
+
+### Trade / Robinhood (`services/broker_service.py`, `services/brokers/robinhood_mcp.py`, `api/broker.py`)
+Live trading goes through **Robinhood's official Agentic Trading MCP server** (`https://agent.robinhood.com/mcp/trading`), not the private app API and not `robin_stocks` (global session, `input()` prompts, unbounded polling, pickled tokens — unusable in a multi-user server). Verified 2026-09-24 by probing: unauthenticated → 401 with `resource_metadata`; the AS metadata at `/.well-known/oauth-authorization-server/mcp/trading` gives authorize `https://robinhood.com/oauth`, token `https://api.robinhood.com/oauth2/token/`, **RFC 7591 dynamic registration**, public client (`none`), PKCE S256, scope `internal`. The app is the MCP client:
+- `POST /api/broker/connect` discovers metadata, registers a client once per redirect URI, stores a PKCE verifier + single-use `state` (10 min, user-bound) and returns `authorize_url`. `GET /api/broker/oauth/callback` takes **no bearer token** — `state` is the auth. Redirect URI = `PUBLIC_URL` (config / add-on option `public_url`) or the request origin via `X-Forwarded-*`. Tokens are Fernet-encrypted (`services/secrets_box.py`; key from `BROKER_ENCRYPTION_KEY` or `broker.key` next to the DB — **losing it means reconnecting**, not data loss).
+- Tool names/schemas are **not public**: the client calls `tools/list` and `map_arguments()` maps our order fields onto each tool's `inputSchema` (synonyms, enum aliases, coercion). An unmappable **required** property fails the order with the schema in the error — never a silent guess. `GET /api/broker/tools` exposes what was discovered.
+- **Safety invariants** (pinned in `test_broker.py`): paper mode makes no network call and never touches the portfolio; live mode needs a connected account + `confirm` to switch **and** `confirm:true` per submit; `review_equity_order` runs before every `place_equity_order` and a failed review places nothing; limit orders, whole shares, ≤20 per batch, limit within ±15% of the cached quote; a fill is applied to the portfolio exactly once (`applied_to_portfolio`), full sells journal through `api/portfolio.py::journal_close()` (the close endpoint's body, shared). No response ever carries a token. Paper buying power (Settings account size − holdings cost) only **warns**; live buying power blocks.
+- **Only mock-tested.** Discovery/registration (incl. whether Robinhood accepts our redirect host), the OAuth round trip, every MCP tool call and the result parsing (order id/state/fill field names are best guesses) have never run against the real service. Robinhood may hold an order for in-app approval (`pending_approval`, text shown verbatim). When there's no order-status tool, `POST /orders/{id}/resolve` lets the user mark fills by hand.
+- Models: `BrokerAccount` (one per user; client_id, redirect_uri, encrypted tokens, mode, tools cache) and `BrokerOrder` (the order log, with the plan intent in `plan_json`). New tables → `create_all`, no `_ensure_columns`.
+
 ### Backtesting (`api/backtest.py`)
 Walk-forward backtest takes a `strategy` param — one of the **actionable** strategy ids (`BACKTESTABLE_STRATEGIES`); non-actionable, watchlist-only strategies such as `bear_reversal_watch` are rejected by the query pattern and again defensively inside `run_walk_forward_backtest`, which returns an explanatory `notes` payload rather than a 500. `source` can be `universe` (the whole cached universe). `GET /api/backtest/strategies` lists all strategies with a `backtestable` flag. The backtest also accepts `period` (1Y/2Y/all), `start_date`, `end_date`, and `archive` params to bound the test window.
 
@@ -290,6 +317,8 @@ Copy `.env.example` to `.env`. `Settings` sets `extra = "ignore"`, so unknown ke
 | `FRED_API_KEY` | — | Optional; enables macro chart data |
 | `LITELLM_URL` | `http://192.168.0.21:4000` | LiteLLM proxy base URL |
 | `REPORT_MODEL` | `tooling_high` | LiteLLM tier alias for daily report generation |
+| `PUBLIC_URL` | *(empty)* | Public origin for the Robinhood OAuth redirect (`public_url` add-on option). Blank = derived from the request |
+| `BROKER_ENCRYPTION_KEY` | *(empty)* | Fernet key for stored broker tokens; blank = `broker.key` next to the DB |
 
 For HAOS, config goes through the add-on UI (mapped to `/data/options.json`).
 

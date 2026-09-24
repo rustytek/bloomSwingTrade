@@ -405,7 +405,9 @@ def test_assess_sector_block_and_before_after():
     quotes = [quote("AAA", 100.0, "Technology"), quote("BBB", 100.0, "Utilities"),
               quote("CCC", 100.0, "Energy"), quote("NEW", 100.0, "Technology")]
     plan = {"entry": 100.0, "stop": 95.0, "shares": 100}
-    res = pr.assess_new_position("NEW", plan, positions, quotes, {}, _SETTINGS)
+    # Fully invested account: the book IS the account, so book weight = account weight.
+    res = pr.assess_new_position("NEW", plan, positions, quotes, {},
+                                 dict(_SETTINGS, account_size=40000))
     sect = [w for w in res["warnings"] if w["code"] == "sector_concentration"]
     assert sect and sect[0]["level"] == "block", res["warnings"]
     assert approx(res["before"]["sector_weights"]["Technology"], 33.33, 0.01)
@@ -420,10 +422,25 @@ def test_assess_sector_warn_band():
     quotes = [quote("AAA", 100.0, "Utilities"), quote("BBB", 100.0, "Energy"),
               quote("CCC", 100.0, "Staples"), quote("NEW", 100.0, "Technology")]
     plan = {"entry": 100.0, "stop": 95.0, "shares": 150}   # 15k/45k = 33.3% Tech after
-    res = pr.assess_new_position("NEW", plan, positions, quotes, {}, _SETTINGS)
+    res = pr.assess_new_position("NEW", plan, positions, quotes, {},
+                                 dict(_SETTINGS, account_size=45000))
     sect = [w for w in res["warnings"] if w["code"] == "sector_concentration"]
     assert sect and sect[0]["level"] == "warn", res["warnings"]
     assert pr.SECTOR_WARN_PCT <= sect[0]["after_pct"] < pr.SECTOR_BLOCK_PCT
+
+
+@test
+def test_first_position_in_empty_book_is_not_a_sector_block():
+    """Regression: sector weight used to be measured against the invested book
+    only, so the FIRST trade in an empty account was '100% of the book' and was
+    blocked — a new account could never open anything. It is now measured
+    against max(book, account_size)."""
+    quotes = [quote("NEW", 100.0, "Technology")]
+    plan = {"entry": 100.0, "stop": 95.0, "shares": 20}      # $2k of a $10k account
+    res = pr.assess_new_position("NEW", plan, [], quotes, {},
+                                 dict(_SETTINGS, account_size=10000))
+    sect = [w for w in res["warnings"] if w["code"] == "sector_concentration"]
+    assert not sect, res["warnings"]
 
 
 @test

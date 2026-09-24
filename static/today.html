@@ -96,6 +96,14 @@
     .run-row .rt { margin-left:auto; display:flex; gap:5px; flex-wrap:wrap; }
     .run-forecast { margin-top:12px; border:1px solid #22304f; background:#0e131f; border-radius:6px; padding:11px 13px; font-size:12px; color:#a9bce0; line-height:1.6; }
     .run-forecast a { color:#7aa2f7; font-weight:700; }
+    details.why-box { margin-top:4px; font-size:11.5px; color:#b4b4b4; line-height:1.6; }
+    details.why-box summary { cursor:pointer; color:#7aa2f7; font-weight:600; font-size:11px; }
+    details.why-box > div { margin-top:4px; }
+    .pick-line { font-size:11px; color:#c9a24a; margin-top:4px; }
+    .metric-chips { display:flex; gap:5px; flex-wrap:wrap; margin:4px 0 6px; }
+    .weekly-cta { display:flex; align-items:center; gap:14px; flex-wrap:wrap; background:linear-gradient(100deg,#1c1808,#121215); border:1px solid #3a3110; border-radius:8px; padding:12px 16px; }
+    .weekly-cta .t { font-weight:800; color:#fff; font-size:14px; }
+    .weekly-cta .d { color:#a9a9a9; font-size:12px; }
 
     /* ── Standing down ───────────────────────────────────────────────────── */
     details.standdown { background:#101013; border:1px solid #232327; border-radius:6px; padding:10px 13px; }
@@ -156,6 +164,11 @@
   <div class="topbar" id="topbar"></div>
   <main class="page" id="page">
     <div id="loading" class="empty">Loading your daily briefing…</div>
+    <a class="weekly-cta" href="/plan" style="text-decoration:none;">
+      <span class="t">Weekly check →</span>
+      <span class="d">Step-by-step: read the market, deal with what you own, pick new trades with the reasoning for each, then send them to Robinhood.</span>
+      <span class="btn btn-primary btn-sm" style="margin-left:auto;">Start the Weekly Plan</span>
+    </a>
     <section id="bandWrap" class="band" hidden></section>
     <div class="cols" id="colsWrap" hidden>
       <div class="col">
@@ -400,8 +413,8 @@
         <div class="chips">
           <span class="chip hint" data-tip="ADX(14) on SPY — the trend-strength gauge. >=25 trending, <20 choppy.">ADX ${num(r.adx, 1)} · ${esc(r.adx_trend || '--')}</span>
           <span class="chip hint" data-tip="SPY price and its distance from the 50- and 200-day moving averages. vs200 is the direction axis of the regime.">SPY ${money(spy.price)} · vs50 ${signed(spy.vs_ma50, 1, '%')} · vs200 ${signed(spy.vs_ma200, 1, '%')}</span>
-          <span class="chip">VIX ${num(r.vix, 1)}</span>
-          ${N(r.breadth) !== null ? `<span class="chip">Breadth ${pct(r.breadth, 0)}</span>` : ''}
+          <span class="chip">VIX ${num(r.vix && typeof r.vix === 'object' ? r.vix.last : r.vix, 1)}</span>
+          ${(() => { const b = r.breadth && typeof r.breadth === 'object' ? r.breadth.pct_above_ma200 : r.breadth; return N(b) !== null ? `<span class="chip hint" data-tip="Share of the universe trading above its own 200-day MA.">Breadth ${pct(b, 0)} above 200MA</span>` : ''; })()}
         </div>
         <div class="chips">${(r.reasons || []).map((x) => `<span class="chip">${esc(x)}</span>`).join('')}</div>
         <div class="regime-sub" style="margin-top:8px;">as of ${esc(when || '--')}</div>
@@ -487,7 +500,8 @@
     const why = [];
     if (N(r.adx) !== null) why.push(`ADX(14) on SPY is <b>${num(r.adx, 1)}</b> (${esc(r.adx_trend || 'unknown')}) — this is the trend-strength axis.`);
     if (r.above_200ma !== undefined && r.above_200ma !== null) why.push(`SPY is <b>${r.above_200ma ? 'above' : 'below'}</b> its 200-day MA — this is the direction axis.`);
-    if (N(r.vix) !== null) why.push(`VIX is <b>${num(r.vix, 1)}</b> — the crisis overlay.`);
+    const vixLast = r.vix && typeof r.vix === 'object' ? r.vix.last : r.vix;
+    if (N(vixLast) !== null) why.push(`VIX is <b>${num(vixLast, 1)}</b> — the crisis overlay.`);
     (r.reasons || []).forEach((x) => why.push(esc(x)));
     if (!why.length) why.push('The classifier returned no reasons — treat the quadrant above as provisional.');
 
@@ -502,10 +516,22 @@
           const n = counts[s.id] || 0;
           const effect = s.evidence && s.evidence.effect === 'promoted'
             ? `<span class="ev" style="color:#7aa2f7;" title="${esc((s.evidence && s.evidence.note) || '')}">promoted by evidence</span>` : '';
+          const ra = s.rationale || {};
+          const whyNow = (ra.fit_now || ra.why_it_works) ? `
+            <details class="why-box" style="width:100%;">
+              <summary>Why this strategy is in play</summary>
+              ${ra.fit_now ? `<div><b>Why now:</b> ${esc(ra.fit_now)}</div>` : ''}
+              ${ra.why_it_works ? `<div><b>Why it works:</b> ${esc(ra.why_it_works)}</div>` : ''}
+              ${s.how ? `<div><b>How it picks stocks:</b> ${esc(s.how)}</div>` : ''}
+              ${s.horizon ? `<div><b>Typical hold:</b> ${esc(s.horizon)}</div>` : ''}
+              ${ra.fails_when ? `<div><b style="color:#e5484d;">When it loses:</b> ${esc(ra.fails_when)}</div>` : ''}
+              <div class="muted" style="font-size:10.5px;">Written reasoning — the verdict chip on the right is the backtested evidence.</div>
+            </details>` : '';
           return `<div class="run-row">
             <span class="rn">${esc(s.name || s.id)}</span>
             <span class="rc">${n} setup${n === 1 ? '' : 's'} today${s.actionable === false ? ' · watchlist-only' : ''}</span>
             <span class="rt">${effect}${e.verdict ? `<span class="ev ${verdictChipClass(e.verdict)}" title="Backtested verdict for this strategy in the current regime">${esc(String(e.verdict).toUpperCase())}</span>` : '<span class="ev" title="The edge matrix has no tested data for this strategy in this regime.">no tested data</span>'}</span>
+            ${whyNow}
           </div>`;
         }).join('');
 
@@ -588,9 +614,11 @@
       ? `<div class="empty">No strategies are producing setups right now. Data may still be backfilling, or nothing in the universe meets the filters for this regime.</div>`
       : order.map((id) => renderStrategyGroup(groups[id], statusById[id])).join('');
 
+    const sel = (DATA && DATA.selection) || {};
+    const method = sel.method ? `<details class="why-box" style="margin-bottom:12px;"><summary>How these stocks were chosen</summary><div>${esc(sel.method)}</div>${sel.passed_by_strategy ? `<div>Passed the rules today: ${Object.keys(sel.passed_by_strategy).map((k) => `${esc(((statusById[k] || {}).name) || k)} <b>${esc(sel.passed_by_strategy[k])}</b>`).join(' · ')}</div>` : ''}</details>` : '';
     wrap.innerHTML = `<div class="panel-title">Today's Playbook</div>
       <div class="panel-desc">Grouped by strategy, because a setup only means something inside the strategy that produced it. Each header carries that strategy's tested edge <b>in the current regime</b> — colour it green only when the backtest confirms it there.</div>
-      ${suppressed}${edgeNote}${body}`;
+      ${method}${suppressed}${edgeNote}${body}`;
   }
 
   function renderStrategyGroup(g, status) {
@@ -648,9 +676,29 @@
         <span class="muted" style="font-size:11px;">${esc([s.name, s.sector].filter(Boolean).join(' · ')) || ''}</span>
         ${state}${grade}
       </div>
+      ${N(s.rank) !== null && N(s.pool_size) !== null ? `<div class="pick-line">Why this stock: ranked <b>#${esc(s.rank)}</b> of ${esc(s.pool_size)} stocks that passed ${esc(s.strategy_name || 'this strategy')}'s rules today${s.state === 'forming' ? ' — still FORMING, the entry signal has not fired yet' : ''}.</div>` : ''}
       <div class="setup-reasons">${(s.reasons || []).length ? '• ' + (s.reasons || []).map(esc).join('<br>• ') : '<span class="muted">No reasons supplied.</span>'}</div>
+      ${metricChips(s.metrics)}
       ${planStrip}
     </div>`;
+  }
+
+  /* The numbers each strategy actually scored the stock on (Setup.metrics).
+     Only known keys get a label; unknown keys are skipped rather than shown raw. */
+  const METRIC_LABELS = {
+    slope_ann: ['Trend (ann.)', (v) => signed(v, 0, '%')], r2: ['Trend smoothness R²', (v) => num(v, 2)],
+    ret_21: ['1-month return', (v) => signed(v, 1, '%')], ret_63: ['3-month return', (v) => signed(v, 1, '%')],
+    dist_ma50: ['vs 50-day MA', (v) => signed(v, 1, '%')], rsi: ['RSI', (v) => num(v, 0)],
+    vol_ratio: ['Volume vs avg', (v) => num(v, 1) + '×'], p52w: ['52-week position', (v) => pct(v, 0)],
+    breakout_level: ['Breakout level', (v) => money(v)], zscore: ['Z-score vs 20-day', (v) => num(v, 2)],
+    dist_ma200: ['vs 200-day MA', (v) => signed(v, 1, '%')], mom_12_1: ['12-1 month momentum', (v) => signed(v, 1, '%')],
+    ann_vol: ['Volatility (ann.)', (v) => pct(v, 1)], vol_expansion: ['ATR expansion', (v) => num(v, 2) + '×'],
+  };
+  function metricChips(m) {
+    if (!m || typeof m !== 'object') return '';
+    const chips = Object.keys(METRIC_LABELS).filter((k) => N(m[k]) !== null)
+      .map((k) => `<span class="ev">${esc(METRIC_LABELS[k][0])} ${METRIC_LABELS[k][1](m[k])}</span>`);
+    return chips.length ? `<div class="metric-chips">${chips.join('')}</div>` : '';
   }
 
   /* ── 3. Standing down ──────────────────────────────────────────────────── */

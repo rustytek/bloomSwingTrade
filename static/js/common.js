@@ -66,13 +66,17 @@ const NAV_LINKS = [
   // Order is the intended WORKFLOW, not alphabetical: the Playbook tells you
   // which strategy the regime picked, and Strategy Lab sits right next to it
   // because that is where you go to disagree with that pick and test your own.
+  // Playbook -> Weekly Plan -> ... -> Trade is the weekly loop: see the market,
+  // walk through what to do and why, then (last tab) send the ticked orders.
   ['/', 'Playbook', 'Your daily workflow: market regime, position alerts, and setups grouped by strategy with their tested edge.'],
+  ['/plan', 'Weekly Plan', 'Step-by-step weekly check: the market, the strategies in play and why, what to do with each holding, and new trades with the reasoning for each.'],
   ['/backtest', 'Strategy Lab', 'Edge matrix by regime, walk-forward backtests (rotation vs trade-plan mode), and robustness checks. Go here to test your OWN forecast instead of the regime’s pick.'],
   ['/screener', 'Screener', 'Filter the full S&P 500 + ETF universe by fundamentals, technicals, and momentum.'],
   ['/charts', 'Charts', 'Market-wide dashboards: VIX, sectors, ETFs, breadth, and macro context.'],
   ['/scorecard', 'Scorecard', 'Realized results vs what the backtest expected, plus execution quality ranked by what it cost.'],
   ['/report', 'Report', 'AI-assisted daily market report and saved commentary.'],
   ['/journal', 'Journal', 'Closed-trade log with realized P&L, R-multiple, and win-rate stats.'],
+  ['/trade', 'Trade', 'Send the trades you picked in the Weekly Plan to Robinhood — paper mode first, then live with explicit confirmation.'],
 ];
 
 function buildTopbar(active, leftExtraHtml = '') {

@@ -1318,6 +1318,12 @@ function strategyDetailBlock(s, isSelected) {
     ${watchlistNote}
     ${d.how ? `<div style="margin-bottom:10px;"><strong style="color:#ccc;">How it works:</strong> ${esc(d.how)}</div>` : ''}
     ${d.horizon ? `<div style="margin-bottom:10px;color:#aaa;font-size:12px;"><strong style="color:#ccc;">Horizon:</strong> ${esc(d.horizon)}</div>` : ''}
+    ${(s.rationale && s.rationale.why_it_works) ? `<div style="margin-bottom:10px;background:#101318;border:1px solid #22304f;border-radius:5px;padding:9px 11px;font-size:12px;line-height:1.6;color:#b9c6e0;">
+      <div><strong style="color:#ccc;">Why use it:</strong> ${esc(s.rationale.why_it_works)}</div>
+      ${s.rationale.best_when ? `<div><strong style="color:#3fbf7f;">Works best when:</strong> ${esc(s.rationale.best_when)}</div>` : ''}
+      ${s.rationale.fails_when ? `<div><strong style="color:#e5484d;">Loses money when:</strong> ${esc(s.rationale.fails_when)}</div>` : ''}
+      <div class="muted" style="font-size:10.5px;margin-top:4px;">Written reasoning, not a test result — the edge matrix above is the evidence.</div>
+    </div>` : ''}
     ${rules ? `<div style="margin-bottom:6px;"><strong style="color:#ccc;font-size:12px;">Rules &amp; calculation</strong></div>
       <ol style="margin:0 0 12px 18px;color:#bbb;font-size:12px;line-height:1.6;">${rules}</ol>` : ''}
     ${d.scoring ? `<div style="margin-bottom:4px;"><strong style="color:#ccc;font-size:12px;">How it's scored</strong></div>

@@ -1103,6 +1103,73 @@ def test_no_ollama_references_remain():
     assert checked > 10, f"only scanned {checked} files — the glob is wrong"
 
 
+def _compare_fn_body(html, span=5000):
+    """The source of compareStrategies(), for the guards below.
+
+    Sliced by offset rather than split on a brace pattern: the function contains
+    nested braces and template literals, so any cheap delimiter match would cut
+    it in the wrong place and make the assertions below quietly vacuous.
+    """
+    i = html.index("async function compareStrategies()")
+    return html[i:i + span]
+
+
+@test
+def test_compare_only_requests_backtestable_strategies():
+    """The Strategy Lab's Compare ran EVERY strategy in STRATEGY_LABELS, which
+    loadStrategyCatalog tops up from /api/backtest/strategies — including
+    watchlist-only ones. /walk-forward rejects those with a 422 via its query
+    pattern, so Compare ran seven backtests, died on the eighth, and discarded
+    all seven. Observed live in the add-on log: momentum_rotation through
+    sector_rotation all 200, then bear_reversal_watch 422, and low_vol_trend
+    never ran at all."""
+    html = _read_static("backtest.html")
+    assert "function comparableStrategyIds()" in html, (
+        "compare no longer filters to backtestable strategies")
+    body = _compare_fn_body(html)
+    assert "comparableStrategyIds()" in body, (
+        "compareStrategies does not use the filtered id list")
+    assert "Object.keys(STRATEGY_LABELS)" not in body, (
+        "compareStrategies still iterates the raw STRATEGY_LABELS keys, which "
+        "include watchlist-only strategies the engine rejects with a 422")
+    assert "compareFailures.push" in body, (
+        "compareStrategies has no per-strategy error handling, so one failure "
+        "still discards every successful result")
+
+
+@test
+def test_compare_filter_matches_the_real_registry():
+    """Derived from STRATEGIES, not a hardcoded list, so adding a new
+    watchlist-only strategy cannot silently reintroduce the 422."""
+    from services.strategies import STRATEGIES
+    watch_only = sorted(sid for sid, s in STRATEGIES.items()
+                        if not getattr(s, "actionable", True))
+    assert watch_only, "no non-actionable strategy exists — this test is vacuous"
+
+    src = open(_os.path.join(_ROOT, "api", "backtest.py"), encoding="utf-8").read()
+    assert "if s.actionable" in src, (
+        "api/backtest.py no longer derives BACKTESTABLE_STRATEGIES from actionable")
+    assert "backtestable" in src, (
+        "the strategy catalog does not expose a backtestable flag, which is what "
+        "the page filters on")
+
+    html = _read_static("backtest.html")
+    assert "backtestable !== false" in html, (
+        "backtest.html no longer keys the compare filter off the backtestable flag")
+
+
+@test
+def test_compare_render_keys_off_successful_runs_only():
+    """compareIds and compareResults are consumed POSITIONALLY, so seeding
+    compareChecked from the attempted list would desync labels from data."""
+    html = _read_static("backtest.html")
+    body = _compare_fn_body(html)
+    assert "compareIds = okIds" in body, (
+        "compareIds is not the successful subset")
+    assert "okIds.forEach(id =>" in body, (
+        "compareChecked is not seeded from the successful ids")
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Runner
 # ──────────────────────────────────────────────────────────────────────────

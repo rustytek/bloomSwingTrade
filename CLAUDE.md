@@ -27,7 +27,7 @@ python test_plan_persistence.py  # plan-intent columns, notes backfill, entry_ch
 python test_jobs.py              # background jobs: worker subprocess, dedupe, stale reaping
 ```
 
-**196 tests across seven suites.** All are self-contained (no network) except
+**199 tests across seven suites.** All are self-contained (no network) except
 `test_jobs.py`, which deliberately **launches a real worker subprocess** against a
 throwaway SQLite file in a temp dir — mocking the subprocess would let the very
 layer it guards break while the test still passed. `test_passes.py`

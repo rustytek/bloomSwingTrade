@@ -1129,26 +1129,62 @@ async function load() {
 /* ── Compare ─────────────────────────────────────────────────────────────── */
 const COMPARE_COLORS = ['#f0a500', '#7eb8f5', '#9b8cff', '#4fd1a5', '#ff6b9d', '#ffd166', '#06d6a0', '#ef476f', '#118ab2'];
 function colorForIndex(i) { return COMPARE_COLORS[i] || `hsl(${(i * 47) % 360}, 70%, 60%)`; }
-let compareResults = [], compareIds = [], compareChecked = {};
+let compareResults = [], compareIds = [], compareChecked = {}, compareFailures = [];
+
+/* Strategies the BACKTEST ENGINE will actually accept.
+   `STRATEGY_LABELS` starts as four literals but is then topped up from
+   /api/backtest/strategies (see loadStrategyCatalog), which adds every strategy
+   in the catalog -- including watchlist-only ones like bear_reversal_watch.
+   The engine is long-only, so /walk-forward rejects those with a 422 via its
+   query pattern. Comparing over the raw key list therefore ran seven backtests,
+   died on the eighth, and threw all seven away. */
+function comparableStrategyIds() {
+  return Object.keys(STRATEGY_LABELS).filter((id) => {
+    const d = STRATEGY_DETAILS[id];
+    // Catalog not loaded yet: keep the id. The four built-in literals are all
+    // backtestable, and a missing catalog must not empty the comparison.
+    if (!d) return true;
+    return d.backtestable !== false;
+  });
+}
 
 async function compareStrategies() {
   const status = document.getElementById('status');
-  status.textContent = 'Comparing strategies…';
-  const ids = Object.keys(STRATEGY_LABELS);
-  try {
-    const results = [];
-    for (const sid of ids) {
+  const ids = comparableStrategyIds();
+  if (!ids.length) {
+    status.innerHTML = '<span class="error">No backtestable strategies available to compare.</span>';
+    return;
+  }
+  // One strategy failing must not discard the others -- that is what made a
+  // single 422 look like "the comparison is broken".
+  const results = [], okIds = [];
+  compareFailures = [];
+  for (let i = 0; i < ids.length; i++) {
+    const sid = ids[i];
+    status.textContent = `Comparing strategies… ${STRATEGY_LABELS[sid] || sid} (${i + 1}/${ids.length})`;
+    try {
       results.push(await api('/api/backtest/walk-forward?' + buildParams(sid).toString()));
+      okIds.push(sid);
+    } catch (e) {
+      compareFailures.push({ id: sid, msg: (e && e.message) ? String(e.message).slice(0, 200) : 'request failed' });
     }
+  }
+  if (!okIds.length) {
+    status.innerHTML = `<span class="error">Every strategy failed to backtest. First error: ${esc((compareFailures[0] || {}).msg || 'unknown')}</span>`;
+    return;
+  }
+  try {
     compareResults = results;
-    compareIds = ids;
+    compareIds = okIds;
     compareChecked = {};
-    ids.forEach(id => {
+    // Keyed off the strategies that actually RETURNED — compareIds/compareResults
+    // are consumed positionally, so a key for a failed run would desync them.
+    okIds.forEach(id => {
       const detail = STRATEGY_DETAILS[id];
       if (CUR_QUADRANT && detail && Array.isArray(detail.regimes)) compareChecked[id] = detail.regimes.includes(CUR_QUADRANT);
       else compareChecked[id] = CORE_STRATEGY_IDS.includes(id);
     });
-    if (!Object.values(compareChecked).some(Boolean)) ids.forEach(id => { if (CORE_STRATEGY_IDS.includes(id)) compareChecked[id] = true; });
+    if (!Object.values(compareChecked).some(Boolean)) okIds.forEach(id => { if (CORE_STRATEGY_IDS.includes(id)) compareChecked[id] = true; });
 
     const wrap = document.getElementById('compareWrap');
     wrap.hidden = false;
@@ -1156,7 +1192,9 @@ async function compareStrategies() {
     safeRender(renderCompareChart, 'compareTable');
     safeRender(renderCompareTable, 'compareTable');
     wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    status.textContent = 'Comparison complete';
+    status.textContent = compareFailures.length
+      ? `Comparison complete — ${okIds.length} of ${ids.length} strategies ran`
+      : 'Comparison complete';
   } catch (e) {
     status.innerHTML = `<span class="error">${esc(e && e.message ? e.message : 'Comparison failed')}</span>`;
   }
@@ -1165,6 +1203,15 @@ async function compareStrategies() {
 function renderCompareChecks() {
   const el = document.getElementById('compareChecks');
   if (!el) return;
+  // A strategy that could not be tested is named, not silently dropped —
+  // otherwise the comparison looks complete while quietly missing a row.
+  const failNote = compareFailures.length
+    ? `<div class="cav sev-low" style="margin-bottom:8px;"><div class="cav-title">`
+      + `${compareFailures.length} strateg${compareFailures.length === 1 ? 'y' : 'ies'} could not be compared</div>`
+      + `<div class="cav-detail">${compareFailures.map(f =>
+          `<strong>${esc(STRATEGY_LABELS[f.id] || f.id)}</strong>: ${esc(f.msg)}`).join('<br>')}`
+      + `<br>The results below cover the strategies that did run.</div></div>`
+    : '';
   const boxes = compareIds.map((id, i) => `
     <label class="hint" data-tip="Toggle ${esc(STRATEGY_LABELS[id] || id)} on the chart and table below (already fetched, no re-run needed)." style="flex-direction:row;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-size:12px;background:#151518;border:1px solid #232327;border-radius:4px;padding:5px 9px;">
       <input type="checkbox" data-sid="${esc(id)}" ${compareChecked[id] ? 'checked' : ''} onchange="toggleCompareStrategy('${esc(id)}', this.checked)">
@@ -1172,6 +1219,7 @@ function renderCompareChecks() {
       ${esc(STRATEGY_LABELS[id] || id)}
     </label>`).join('');
   el.innerHTML = `
+    ${failNote}
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;">
       <button type="button" class="btn" onclick="setAllCompareChecked(true)">Select all</button>
       <button type="button" class="btn" onclick="setAllCompareChecked(false)">Select none</button>

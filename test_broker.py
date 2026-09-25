@@ -653,6 +653,100 @@ def test_manual_resolve_when_no_status_tool():
     db.close()
 
 
+# ── Holdings: compare + import ─────────────────────────────────────────────
+
+@test
+def test_compare_holdings_statuses_and_ticker_forms():
+    st = [PortfolioPosition(ticker="BRK-B", shares=2, avg_cost=400.0),
+          PortfolioPosition(ticker="AAPL", shares=5, avg_cost=100.0),
+          PortfolioPosition(ticker="VTI", shares=3, avg_cost=250.0)]
+    rh = [{"ticker": "BRK.B", "shares": 2.0, "avg_cost": 410.0},
+          {"ticker": "AAPL", "shares": 7.0, "avg_cost": 101.0},
+          {"ticker": "MSFT", "shares": 10.0, "avg_cost": 400.0},
+          {"ticker": "NVDA", "shares": 4.0, "avg_cost": None}]
+    rows = {r["ticker"]: r for r in svc.compare_holdings(rh, st)}
+    assert rows["BRK-B"]["status"] == "match", "BRK.B and BRK-B are the same holding"
+    assert rows["AAPL"]["status"] == "shares_differ" and not rows["AAPL"]["importable"]
+    assert rows["MSFT"]["status"] == "robinhood_only" and rows["MSFT"]["importable"]
+    assert rows["NVDA"]["status"] == "robinhood_only" and not rows["NVDA"]["importable"] \
+        and "average cost" in rows["NVDA"]["reason"]
+    assert rows["VTI"]["status"] == "swingtrader_only" and not rows["VTI"]["importable"]
+
+
+@test
+def test_holdings_disconnected_makes_no_network_call():
+    _install(None)
+    db = SessionLocal()
+    u = _user(db)
+    h = _run(svc.holdings(db, u))
+    assert h["connected"] is False and h["readable"] is False and h["rows"] == []
+    try:
+        _run(svc.import_holdings(db, u, ["MSFT"]))
+        raise AssertionError("import without a connection must fail")
+    except mcp.ReauthRequired:
+        pass
+    db.close()
+
+
+@test
+def test_holdings_read_in_paper_mode_scoped_to_agentic_account_and_read_only():
+    fake = FakeRobinhood()
+    _install(fake)
+    db = SessionLocal()
+    u = _user(db)
+    _run(_connect(db, u, fake))
+    db.add(PortfolioPosition(user_id=u.id, ticker="VTI", shares=3, avg_cost=250.0))
+    db.commit()
+    h = _run(svc.holdings(db, u))
+    assert h["mode"] == "paper" and h["readable"], h
+    pos_calls = [a for n, a in fake.tool_calls if n == "get_positions"]
+    assert pos_calls and all(a.get("account_number") == "999888" for a in pos_calls), \
+        "positions must be read from the AGENTIC account, even on the very first call"
+    rows = {r["ticker"]: r["status"] for r in h["rows"]}
+    assert rows == {"MSFT": "robinhood_only", "VTI": "swingtrader_only"}, rows
+    assert h["summary"]["importable"] == 1
+    assert not any(n in ("review_equity_order", "place_equity_order") for n, _ in fake.tool_calls)
+    assert db.query(PortfolioPosition).filter(PortfolioPosition.user_id == u.id).count() == 1, \
+        "loading holdings must never change the portfolio"
+    db.close()
+
+
+@test
+def test_import_rereads_robinhood_adds_only_new_and_never_edits_existing():
+    fake = FakeRobinhood()
+    fake.positions = [{"symbol": "MSFT", "quantity": "10", "average_buy_price": "400"},
+                      {"symbol": "AAPL", "quantity": "9", "average_buy_price": "90"},
+                      {"symbol": "NVDA", "quantity": "4"}]
+    _install(fake)
+    db = SessionLocal()
+    u = _user(db)
+    _run(_connect(db, u, fake))
+    db.add(PortfolioPosition(user_id=u.id, ticker="AAPL", shares=5, avg_cost=100.0, stop_loss=95.0))
+    db.commit()
+    r = _run(svc.import_holdings(db, u, ["msft", "AAPL", "NVDA", "TSLA"]))
+    assert [x["ticker"] for x in r["imported"]] == ["MSFT"], r
+    reasons = {x["ticker"]: x["reason"] for x in r["skipped"]}
+    assert set(reasons) == {"AAPL", "NVDA", "TSLA"}, reasons
+    msft = db.query(PortfolioPosition).filter(PortfolioPosition.user_id == u.id,
+                                              PortfolioPosition.ticker == "MSFT").one()
+    assert msft.shares == 10 and msft.avg_cost == 400.0, "shares/cost come from Robinhood"
+    assert msft.stop_loss is None and msft.initial_stop is None and "Robinhood" in msft.notes
+    aapl = db.query(PortfolioPosition).filter(PortfolioPosition.user_id == u.id,
+                                              PortfolioPosition.ticker == "AAPL").one()
+    assert aapl.shares == 5 and aapl.avg_cost == 100.0 and aapl.stop_loss == 95.0, \
+        "an existing position must never be edited by an import"
+    r2 = _run(svc.import_holdings(db, u, ["MSFT"]))
+    assert not r2["imported"] and db.query(PortfolioPosition).filter(
+        PortfolioPosition.user_id == u.id, PortfolioPosition.ticker == "MSFT").count() == 1, \
+        "a second import must not duplicate"
+    try:
+        _run(svc.import_holdings(db, u, []))
+        raise AssertionError("empty import must be rejected")
+    except ValueError:
+        pass
+    db.close()
+
+
 # ── API surface: no secrets, callback redirects ──────────────────────────
 
 @test
@@ -689,6 +783,8 @@ def test_api_never_returns_tokens_and_callback_redirects():
         client.get("/api/broker/status").text,
         client.get("/api/broker/tools").text,
         client.get("/api/broker/account").text,
+        client.get("/api/broker/holdings").text,
+        client.post("/api/broker/holdings/import", json={"tickers": ["MSFT"]}).text,
         client.post("/api/broker/orders/preview", json={"orders": [_order()]}).text,
         client.post("/api/broker/orders", json={"orders": [_order()], "confirm": True}).text,
         client.get("/api/broker/orders").text,

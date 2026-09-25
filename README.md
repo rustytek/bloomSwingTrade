@@ -20,7 +20,7 @@ number, and anything it cannot measure should say so rather than guess.**
 |---|---|
 | **Playbook** (`/`) | What do I do today? Setups grouped by strategy, each carrying that strategy's tested edge *in the current regime*, with a Plan-a-Trade modal that checks correlation, sector drift and open risk **before** the position exists — and blocks the commit when a hard limit would be breached. |
 | **Weekly Plan** (`/plan`) | Walk me through this week. Five steps: read the market, the strategies in play and **why each one fits this market**, what to do with every holding (sell / trim / raise stop / hold, with reasons), new trades — each with a plain-English *why* and risk-checked against the buys above it — then a review you take to the Trade tab. |
-| **Trade** (`/trade`, last tab) | Send the trades you ticked to **Robinhood** through its official Agentic Trading connection (OAuth — SwingTrader never sees your password). Paper mode first; live mode needs a connected Agentic account and an explicit confirmation, and every live order is reviewed by Robinhood before it is placed. Fills are written back to your portfolio/journal automatically. |
+| **Trade** (`/trade`, last tab) | Send the trades you ticked to **Robinhood** through its official Agentic Trading connection (OAuth — SwingTrader never sees your password). Paper mode first; live mode needs a connected Agentic account and an explicit confirmation, and every live order is reviewed by Robinhood before it is placed. Fills are written back to your portfolio/journal automatically. A **Robinhood holdings** panel compares the Agentic account with your portfolio and can import holdings you pick. |
 | **Strategy Lab** (`/backtest`) | Does this strategy actually work? A strategy × regime **edge matrix** with Wilson confidence intervals and `confirmed` / `unproven` / `mis-tagged` verdicts, plus walk-forward backtests in two modes. |
 | **Scorecard** (`/scorecard`) | Am I executing it? Realized results vs what the backtest expected, and execution leaks ranked by what they cost in R. |
 | **Screener / Charts / Journal** | The underlying universe, market context, and closed-trade log. |
@@ -224,6 +224,8 @@ Full interactive docs available at: `https://localhost:8443/api/docs`
 | POST | `/api/broker/disconnect` | Delete stored tokens |
 | PUT | `/api/broker/mode` | `paper` \| `live` (live needs `confirm: true`) |
 | GET | `/api/broker/account` | Buying power and positions |
+| GET | `/api/broker/holdings` | Read-only: Agentic-account holdings vs your SwingTrader portfolio, per ticker |
+| POST | `/api/broker/holdings/import` | Add chosen Robinhood-only holdings to the portfolio (re-read from Robinhood; existing positions never changed) |
 | POST | `/api/broker/orders/preview` | Validate orders (+ Robinhood review in live mode) |
 | POST | `/api/broker/orders` | Place (live, `confirm: true`) or simulate (paper) |
 | GET | `/api/broker/orders` | Order log |

@@ -62,6 +62,10 @@
     .status.filled { color:#3fbf7f; border-color:#1d3a28; }
     .status.failed, .status.rejected { color:#ff8a8d; border-color:#4a1418; }
     .status.simulated { color:#9fb3d9; border-color:#22304f; }
+    .status.hs-good { color:#3fbf7f; border-color:#1d3a28; }
+    .status.hs-warn { color:#f0c060; border-color:#3a3110; }
+    .status.hs-info { color:#9fb3d9; border-color:#22304f; }
+    .status.hs-muted { color:#888; }
     .confirm-line { display:flex; gap:9px; align-items:flex-start; font-size:12.5px; color:#ffb3b5; margin-top:12px; }
     details.conn summary { cursor:pointer; color:#999; font-size:12px; font-weight:700; }
     pre.schema { white-space:pre-wrap; font-size:10.5px; color:#8a8a90; background:#0e0e11; border:1px solid #1f1f23; border-radius:4px; padding:8px; margin-top:4px; max-height:220px; overflow:auto; }
@@ -109,6 +113,17 @@
       <div class="step-head"><div class="step-num" id="n4">4</div><div class="step-title">Review &amp; place</div></div>
       <div class="step-sub">Nothing is sent until you press the button at the bottom of this step.</div>
       <div class="body" id="reviewBody"><div class="muted" style="font-size:12.5px;">Press <b>Preview orders</b> in step 3 first.</div></div>
+    </section>
+
+    <!-- Holdings -->
+    <section class="panel" id="holdingsPanel">
+      <div class="step-head"><div class="step-title">Robinhood holdings</div></div>
+      <div class="step-sub" style="margin-left:0;">What your Robinhood Agentic account holds, next to what SwingTrader thinks you hold. Loading this only <b>reads</b> from Robinhood; it never sends an order and never changes your portfolio. Holdings are added only when you tick them and press <b>Import</b>.</div>
+      <div class="row-actions" style="margin-top:0;margin-bottom:10px;">
+        <button class="btn btn-sm" type="button" id="holdLoadBtn" onclick="trLoadHoldings()">Load from Robinhood</button>
+        <span id="holdMsg" class="muted" style="font-size:12px;"></span>
+      </div>
+      <div id="holdingsBody" class="table-wrap"><span class="muted" style="font-size:12.5px;">Not loaded yet.</span></div>
     </section>
 
     <!-- History -->
@@ -159,7 +174,7 @@
     trBannerFromQuery();
     await trLoadStatus();
     await Promise.all([trLoadPlan(), trLoadHistory()]);
-    if (TR_STATUS && TR_STATUS.mode === 'live' && TR_STATUS.connected) trSync(true);
+    if (TR_STATUS && TR_STATUS.mode === 'live' && TR_STATUS.connected) { trSync(true); trLoadHoldings(); }
   }
 
   function trBannerFromQuery() {
@@ -507,6 +522,89 @@
       document.getElementById('syncMsg').textContent = r.note || 'Updated.';
     } catch (e) { document.getElementById('syncMsg').innerHTML = `<span class="error">${esc(trErr(e))}</span>`; }
     await trLoadHistory();
+  }
+
+  /* ── Holdings ───────────────────────────────────────────────────────── */
+  let TR_HOLD = null;          // /api/broker/holdings
+  let TR_HOLD_SEL = new Set(); // tickers ticked for import
+
+  const TR_HOLD_STATUS = {
+    match:            ['good', 'Matches'],
+    shares_differ:    ['warn', 'Shares differ'],
+    robinhood_only:   ['info', 'Only in Robinhood'],
+    swingtrader_only: ['muted', 'Not in Robinhood'],
+  };
+
+  async function trLoadHoldings() {
+    const el = document.getElementById('holdingsBody');
+    const m = document.getElementById('holdMsg');
+    if (!(TR_STATUS && TR_STATUS.connected)) {
+      el.innerHTML = '<div class="muted" style="font-size:12.5px;">Connect Robinhood in step 1 first.</div>';
+      return;
+    }
+    m.innerHTML = '<span class="spinner"></span>Reading holdings from Robinhood…';
+    try { TR_HOLD = await api('/api/broker/holdings'); m.textContent = ''; }
+    catch (e) { m.innerHTML = `<span class="error">${esc(trErr(e))}</span>`; return; }
+    TR_HOLD_SEL = new Set();
+    trRenderHoldings();
+  }
+
+  function trHoldCell(sh, cost) {
+    return sh === null || sh === undefined ? '<span class="muted">—</span>'
+      : `<span class="mono">${esc(sh)}</span> <span class="muted">@ ${trMoney(cost)}</span>`;
+  }
+
+  function trRenderHoldings() {
+    const h = TR_HOLD || {};
+    const el = document.getElementById('holdingsBody');
+    if (!h.readable) { el.innerHTML = `<div class="note warn">${esc(h.note || 'Holdings could not be read.')}</div>`; return; }
+    const s = h.summary || {};
+    const rows = h.rows || [];
+    const head = `<div class="note info">Agentic account <b class="mono">${esc(h.account_number_masked || '--')}</b>:
+        ${s.match || 0} match, ${s.shares_differ || 0} with different share counts, ${s.robinhood_only || 0} only in Robinhood.
+        ${s.swingtrader_only ? `${s.swingtrader_only} SwingTrader position(s) aren't in this account — normal if you hold them at another broker.` : ''}
+        ${trNum(h.buying_power) !== null ? `<br>Buying power ${trMoney(h.buying_power)}${trNum(h.cash) !== null ? ` · cash ${trMoney(h.cash)}` : ''}.` : ''}</div>`;
+    if (!rows.length) { el.innerHTML = head + '<div class="muted" style="font-size:12.5px;">No holdings on either side.</div>'; return; }
+    const body = rows.map((r) => {
+      const [cls, label] = TR_HOLD_STATUS[r.status] || ['muted', r.status];
+      const tick = r.importable
+        ? `<input type="checkbox" ${TR_HOLD_SEL.has(r.ticker) ? 'checked' : ''} onchange="trHoldTick('${esc(r.ticker)}', this.checked)">`
+        : '';
+      let hint = '';
+      if (r.status === 'shares_differ') hint = 'Not changed automatically. Edit the position in your portfolio if Robinhood is right.';
+      else if (r.status === 'robinhood_only') hint = r.importable ? 'Tick to import.' : (r.reason || '');
+      return `<tr>
+        <td>${tick}</td><td>${tickerLink(r.ticker)}</td>
+        <td>${trHoldCell(r.robinhood_shares, r.robinhood_avg_cost)}</td>
+        <td>${trHoldCell(r.swingtrader_shares, r.swingtrader_avg_cost)}</td>
+        <td><span class="status hs-${cls}">${esc(label)}</span>
+          ${hint ? `<div class="muted" style="font-size:11px;margin-top:3px;">${esc(hint)}</div>` : ''}</td></tr>`;
+    }).join('');
+    el.innerHTML = head + `<table><thead><tr><th></th><th>Ticker</th><th>Robinhood</th><th>SwingTrader</th><th>Status</th></tr></thead><tbody>${body}</tbody></table>
+      ${s.importable ? `<div class="note warn" style="margin-top:10px;">Imported holdings are added with Robinhood's share count and average cost, but <b>no stop, target or plan</b>. The Playbook will flag them as unstopped until you set a stop.</div>
+      <div class="row-actions"><button class="btn btn-sm btn-primary" type="button" id="holdImportBtn" onclick="trImportHoldings()" ${TR_HOLD_SEL.size ? '' : 'disabled'}>Import ${TR_HOLD_SEL.size} selected</button>
+        <span id="holdImportMsg" class="muted" style="font-size:12px;"></span></div>` : ''}`;
+  }
+
+  function trHoldTick(ticker, on) {
+    if (on) TR_HOLD_SEL.add(ticker); else TR_HOLD_SEL.delete(ticker);
+    const b = document.getElementById('holdImportBtn');
+    if (b) { b.disabled = !TR_HOLD_SEL.size; b.textContent = `Import ${TR_HOLD_SEL.size} selected`; }
+  }
+
+  async function trImportHoldings() {
+    if (!TR_HOLD_SEL.size) return;
+    const b = document.getElementById('holdImportBtn');
+    const m = document.getElementById('holdImportMsg');
+    b.disabled = true; m.innerHTML = '<span class="spinner"></span>Importing…';
+    let r;
+    try { r = await api('/api/broker/holdings/import', trJson('POST', { tickers: [...TR_HOLD_SEL] })); }
+    catch (e) { m.innerHTML = `<span class="error">${esc(trErr(e))}</span>`; b.disabled = false; return; }
+    const done = (r.imported || []).map((x) => x.ticker);
+    const skipped = (r.skipped || []).map((x) => `${x.ticker}: ${x.reason}`);
+    await trLoadHoldings();
+    document.getElementById('holdMsg').textContent =
+      (done.length ? `Imported ${done.join(', ')}. ` : 'Nothing imported. ') + skipped.join(' ');
   }
 
   /* ── Connection details ─────────────────────────────────────────────── */

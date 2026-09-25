@@ -392,7 +392,11 @@ async def _live_account(db: Session, acct: BrokerAccount) -> dict:
         t = mcp.find_tool(tools, "positions")
         if t:
             try:
-                r = s.call_tool(t["name"], mcp.map_arguments(t, {"account_number": acct.account_number}))
+                # Use the account just resolved above — on the first call
+                # acct.account_number is still empty, and an unscoped positions
+                # call could return the MAIN account's holdings.
+                number = out.get("account_number") or acct.account_number
+                r = s.call_tool(t["name"], mcp.map_arguments(t, {"account_number": number}))
                 out["positions"] = mcp.parse_positions(r["data"])
             except mcp.MappingError as exc:
                 out["note"] = str(exc)
@@ -417,6 +421,138 @@ async def account(db: Session, user: User) -> dict:
     data["mode"] = mode
     data["connected"] = is_connected(acct)
     return data
+
+
+# ── Holdings: Robinhood vs SwingTrader ─────────────────────────────────────
+#
+# READ-ONLY comparison. Works in paper mode too (reading holdings sends no
+# order). Nothing here changes the portfolio except import_holdings(), which
+# only ever ADDS tickers SwingTrader does not track yet, and only the ones the
+# user explicitly asked for.
+
+MAX_IMPORT = 100
+_SHARE_EPS = 1e-6
+
+
+def _key(ticker: str) -> str:
+    """Robinhood writes BRK.B; SwingTrader (yfinance) writes BRK-B."""
+    return str(ticker or "").upper().strip().replace(".", "-")
+
+
+def compare_holdings(rh_positions: list[dict], st_positions: list[PortfolioPosition]) -> list[dict]:
+    """One row per ticker held on either side. Pure — no DB, no network."""
+    rh = {}
+    for p in rh_positions:
+        k = _key(p.get("ticker"))
+        if k:
+            rh[k] = p
+    st = {_key(p.ticker): p for p in st_positions}
+    rows = []
+    for k in sorted(set(rh) | set(st)):
+        r, s = rh.get(k), st.get(k)
+        rh_sh = mcp.to_float(r.get("shares")) if r else None
+        rh_cost = mcp.to_float(r.get("avg_cost")) if r else None
+        st_sh = float(s.shares) if s else None
+        if r and s:
+            status_ = "match" if abs((rh_sh or 0) - st_sh) <= _SHARE_EPS else "shares_differ"
+        else:
+            status_ = "robinhood_only" if r else "swingtrader_only"
+        importable = status_ == "robinhood_only" and bool(rh_sh and rh_sh > 0) \
+            and bool(rh_cost and rh_cost > 0)
+        rows.append({
+            "ticker": k, "status": status_, "importable": importable,
+            "robinhood_shares": rh_sh, "robinhood_avg_cost": rh_cost,
+            "swingtrader_shares": st_sh, "swingtrader_avg_cost": float(s.avg_cost) if s else None,
+            "reason": None if importable or status_ != "robinhood_only"
+            else "Robinhood did not report an average cost, so it can't be imported with a correct cost basis.",
+        })
+    return rows
+
+
+async def _read_rh_positions(db: Session, user: User) -> tuple[BrokerAccount, dict]:
+    acct = get_account(db, user.id)
+    if not is_connected(acct):
+        raise mcp.ReauthRequired("Connect Robinhood first (step 1).")
+    async with _lock(user.id):
+        snap = await _live_account(db, acct)
+    return acct, snap
+
+
+def _st_positions(db: Session, user: User) -> list[PortfolioPosition]:
+    return db.query(PortfolioPosition).filter(PortfolioPosition.user_id == user.id).all()
+
+
+async def holdings(db: Session, user: User) -> dict:
+    acct = get_account(db, user.id)
+    base = {"connected": is_connected(acct), "mode": (acct.mode if acct else "paper") or "paper",
+            "account_number_masked": _mask(acct.account_number) if acct else None}
+    if not base["connected"]:
+        return {**base, "readable": False, "rows": [], "summary": {},
+                "note": "Connect Robinhood in step 1 to compare holdings."}
+    acct, snap = await _read_rh_positions(db, user)
+    base["account_number_masked"] = _mask(acct.account_number)
+    positions = snap.get("positions")
+    if positions is None:
+        return {**base, "readable": False, "rows": [], "summary": {},
+                "note": snap.get("note") or ("Robinhood's connection did not return holdings in a shape "
+                                             "SwingTrader recognizes. See Connection details below."),
+                "buying_power": snap.get("buying_power"), "cash": snap.get("cash")}
+    rows = compare_holdings(positions, _st_positions(db, user))
+    summary = {s: sum(1 for r in rows if r["status"] == s)
+               for s in ("match", "shares_differ", "robinhood_only", "swingtrader_only")}
+    summary["importable"] = sum(1 for r in rows if r["importable"])
+    return {**base, "readable": True, "rows": rows, "summary": summary, "note": snap.get("note"),
+            "buying_power": snap.get("buying_power"), "cash": snap.get("cash"),
+            "fetched_at": _now().isoformat()}
+
+
+async def import_holdings(db: Session, user: User, tickers: list[str]) -> dict:
+    """Add the requested Robinhood-only holdings to the SwingTrader portfolio.
+
+    Share counts and costs are RE-READ from Robinhood here — never taken from
+    the request — and a ticker SwingTrader already tracks is never touched.
+    Imported rows carry no stop, so the Playbook flags them as unstopped until
+    the user sets one (they are never silently counted as zero risk).
+    """
+    wanted = []
+    for t in tickers or []:
+        k = _key(t)
+        if k and k not in wanted:
+            wanted.append(k)
+    if not wanted:
+        raise ValueError("Pick at least one holding to import.")
+    if len(wanted) > MAX_IMPORT:
+        raise ValueError(f"At most {MAX_IMPORT} holdings per import.")
+    _acct, snap = await _read_rh_positions(db, user)
+    if snap.get("positions") is None:
+        raise mcp.BrokerError(snap.get("note") or "Robinhood holdings could not be read; nothing was imported.")
+    rows = {r["ticker"]: r for r in compare_holdings(snap["positions"], _st_positions(db, user))}
+    today = date.today()
+    imported, skipped = [], []
+    for k in wanted:
+        r = rows.get(k)
+        if r is None or r["status"] == "swingtrader_only":
+            skipped.append({"ticker": k, "reason": "Not held in your Robinhood Agentic account."})
+        elif r["status"] != "robinhood_only":
+            skipped.append({"ticker": k, "reason": "Already in your SwingTrader portfolio — left unchanged."})
+        elif not r["importable"]:
+            skipped.append({"ticker": k, "reason": r["reason"] or "Missing shares or cost from Robinhood."})
+        else:
+            sh, cost = r["robinhood_shares"], r["robinhood_avg_cost"]
+            db.add(PortfolioPosition(
+                user_id=user.id, ticker=k, shares=sh, avg_cost=cost,
+                notes=(f"Imported from the Robinhood Agentic account on {today.isoformat()} "
+                       f"({sh:g} shares @ ${cost:,.2f}). No stop or plan was recorded — set a stop."),
+            ))
+            imported.append({"ticker": k, "shares": sh, "avg_cost": cost})
+    if imported:
+        db.commit()
+        try:
+            from services.today import invalidate_cache
+            invalidate_cache(user.id)
+        except Exception:  # noqa: BLE001
+            pass
+    return {"imported": imported, "skipped": skipped}
 
 
 # ── Validation ─────────────────────────────────────────────────────────────

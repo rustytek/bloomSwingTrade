@@ -166,6 +166,30 @@ async def broker_account(db: Session = Depends(get_db), user: User = Depends(get
         raise _http_error(exc)
 
 
+class ImportIn(BaseModel):
+    tickers: list[str] = Field(max_length=svc.MAX_IMPORT)
+
+
+@router.get("/holdings")
+async def broker_holdings(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Read-only: Robinhood Agentic holdings vs the SwingTrader portfolio."""
+    try:
+        return await svc.holdings(db, user)
+    except Exception as exc:  # noqa: BLE001
+        raise _http_error(exc)
+
+
+@router.post("/holdings/import")
+async def broker_import_holdings(body: ImportIn, db: Session = Depends(get_db),
+                                 user: User = Depends(get_current_user)):
+    """Add the chosen Robinhood-only holdings to the portfolio. Shares/cost are
+    re-read from Robinhood server-side; existing positions are never changed."""
+    try:
+        return await svc.import_holdings(db, user, body.tickers)
+    except Exception as exc:  # noqa: BLE001
+        raise _http_error(exc)
+
+
 @router.post("/orders/preview")
 async def broker_preview(body: OrdersIn, db: Session = Depends(get_db),
                          user: User = Depends(get_current_user)):

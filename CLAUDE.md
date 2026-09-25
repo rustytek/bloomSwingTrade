@@ -30,7 +30,7 @@ python test_broker.py            # Robinhood OAuth/MCP (mocked), order validatio
 python test_fixes.py             # layering (no services->api imports), AI provider fail-loud, CORS, stub hygiene
 ```
 
-**249 tests across ten suites** (`python test_broker.py` covers the Robinhood/Trade layer, fully mocked). All are self-contained (no network) except
+**253 tests across ten suites** (`python test_broker.py` covers the Robinhood/Trade layer, fully mocked). All are self-contained (no network) except
 `test_jobs.py`, which deliberately **launches a real worker subprocess** against a
 throwaway SQLite file in a temp dir — mocking the subprocess would let the very
 layer it guards break while the test still passed. `test_passes.py`
@@ -41,7 +41,7 @@ living in `api/*.py` can be imported without the full web stack.
 
 > **Counting routes:** this FastAPI version stores `_IncludedRouter` lazy references, so
 > `len(app.routes)` UNDERCOUNTS and filtering on `hasattr(r, "path")` silently omits every
-> router-mounted endpoint. Always verify through `app.openapi()["paths"]` (currently 80; the OAuth callback is excluded from the schema).
+> router-mounted endpoint. Always verify through `app.openapi()["paths"]` (currently 82; the OAuth callback is excluded from the schema).
 
 The app runs on HTTPS at `https://localhost:8443`. Swagger docs at `/api/docs`.
 
@@ -66,7 +66,7 @@ React SPA (static/*.html) → FastAPI (main.py)
 ### Page Routes
 - `/` — the **Playbook** (`static/today.html`). Three-cell regime band (quadrant/ADX/SPY/VIX · the `transition.reason` "time to change strategy" signal · the risk budget from `GET /api/portfolio/risk`, with `unstopped_warning` shown loudly in red). Main column: setups **grouped by strategy**, each group header carrying that strategy's tested edge in the *current* quadrant from `GET /api/edge-matrix`, verdict-coloured (confirmed green / unproven amber / mis-tagged red). A collapsed "standing down" strip explains every off-regime strategy. Right rail: positions sorted by urgency with their `actions[]` verbatim, book exposure, and the morning checklist. The **Plan-a-Trade modal** wraps `POST /api/portfolio/assess` and commits through `POST /api/portfolio`; its commit button is disabled while any warning is `block` level. (Also the 404 catch-all fallback.)
 - `/plan` — the **Weekly Plan** (`static/plan.html`), the second tab: a five-step walkthrough (read the market → strategies in play and *why* → what to do with each holding → new trades → review) built on `GET /api/weekly-plan`. Every recommendation carries a plain-English `why[]`. Recommended orders are pre-ticked; the ticks are saved to localStorage `st_trade_selection` (a JSON array of order ids) **plus** `st_trade_selection_week` (= the plan's `week_of`), so a selection never carries into a new week. "Continue to Trade" hands the selection to `/trade`. Nothing is placed from this page.
-- `/trade` — the **Trade** page (`static/trade.html`), deliberately the **last** tab: connect Robinhood → paper/live → pick orders from `/api/weekly-plan` (honouring the week-scoped selection keys) → preview → place, plus an order-history panel. See "Trade / Robinhood" below.
+- `/trade` — the **Trade** page (`static/trade.html`), deliberately the **last** tab: connect Robinhood → paper/live → pick orders from `/api/weekly-plan` (honouring the week-scoped selection keys) → preview → place, plus a **Robinhood holdings** panel and an order-history panel. See "Trade / Robinhood" below.
 - `/screener` — the screener (`static/index.html`, formerly served at `/`).
 - `/backtest` — the **Strategy Lab** (`static/backtest.html`). Headlined by the strategy × regime edge matrix, then a single-strategy walk-forward with a rotation/trade_plan mode toggle, sortable trade log with exit-kind distribution, and a severity-sorted caveats panel.
 - `/scorecard` — the **Scorecard** (`static/scorecard.html`): realized expectancy vs the backtest's expected R, per-strategy drift with a sample-size guard, and execution-quality leaks ranked by realized R cost. Metrics the app cannot compute get their own "Not Measurable Yet" panel — never `0`, never `--` — each naming the field that must be persisted first.
@@ -277,6 +277,7 @@ Live trading goes through **Robinhood's official Agentic Trading MCP server** (`
 - `POST /api/broker/connect` discovers metadata, registers a client once per redirect URI, stores a PKCE verifier + single-use `state` (10 min, user-bound) and returns `authorize_url`. `GET /api/broker/oauth/callback` takes **no bearer token** — `state` is the auth. Redirect URI = `PUBLIC_URL` (config / add-on option `public_url`) or the request origin via `X-Forwarded-*`. Tokens are Fernet-encrypted (`services/secrets_box.py`; key from `BROKER_ENCRYPTION_KEY` or `broker.key` next to the DB — **losing it means reconnecting**, not data loss).
 - Tool names/schemas are **not public**: the client calls `tools/list` and `map_arguments()` maps our order fields onto each tool's `inputSchema` (synonyms, enum aliases, coercion). An unmappable **required** property fails the order with the schema in the error — never a silent guess. `GET /api/broker/tools` exposes what was discovered.
 - **Safety invariants** (pinned in `test_broker.py`): paper mode makes no network call and never touches the portfolio; live mode needs a connected account + `confirm` to switch **and** `confirm:true` per submit; `review_equity_order` runs before every `place_equity_order` and a failed review places nothing; limit orders, whole shares, ≤20 per batch, limit within ±15% of the cached quote; a fill is applied to the portfolio exactly once (`applied_to_portfolio`), full sells journal through `services/journal.py::journal_close()` (the close endpoint's body, shared; `api/portfolio.py` re-exports it and `compute_r_multiple`). **`services/` never imports from `api/`** — `test_fixes.py` pins this. No response ever carries a token. Paper buying power (Settings account size − holdings cost) only **warns**; live buying power blocks.
+- **Holdings panel** — `GET /api/broker/holdings` compares the Agentic account's positions with the SwingTrader portfolio per ticker (`match` / `shares_differ` / `robinhood_only` / `swingtrader_only`; `BRK.B` and `BRK-B` are the same key). It is **read-only and allowed in paper mode** (reading sends no order). `POST /api/broker/holdings/import {tickers}` is the only write: it **re-reads Robinhood server-side** (never trusts share counts from the request), adds only `robinhood_only` tickers that have an average cost, and **never edits an existing position** — a `shares_differ` row is shown, not fixed. Imported rows get no stop/plan, so the Playbook flags them as unstopped. `swingtrader_only` is expected for holdings kept at another broker (e.g. the Fidelity import). The positions call is always scoped to the resolved **Agentic** account number, including on the very first call (it used to go out unscoped then).
 - **Only mock-tested.** Discovery/registration (incl. whether Robinhood accepts our redirect host), the OAuth round trip, every MCP tool call and the result parsing (order id/state/fill field names are best guesses) have never run against the real service. Robinhood may hold an order for in-app approval (`pending_approval`, text shown verbatim). When there's no order-status tool, `POST /orders/{id}/resolve` lets the user mark fills by hand.
 - Models: `BrokerAccount` (one per user; client_id, redirect_uri, encrypted tokens, mode, tools cache) and `BrokerOrder` (the order log, with the plan intent in `plan_json`). New tables → `create_all`, no `_ensure_columns`.
 
@@ -345,6 +346,34 @@ Copy `.env.example` to `.env`. `Settings` sets `extra = "ignore"`, so unknown ke
 For HAOS, config goes through the add-on UI (mapped to `/data/options.json`).
 
 **Model dropdowns (Report page) are per-user and alias-only.** `GET /api/ai/models` calls LiteLLM `/v1/models` with the user's own virtual key (global key if none) — LiteLLM scopes that list to what the key may use, so **restricting a user's key to specific models in LiteLLM is how you assign models; the dropdown follows automatically**. An unrestricted key returns the whole catalog, so `services/ai_service.py::select_tier_aliases()` keeps only text-capable tier aliases (`tooling`, `tooling_local`, `coding`, `knowledge(_local)` × `high/med/low`; never `vision_*`/`embedding`) in family→tier order, and reports `hidden_count`. If a key offers no aliases at all the raw list is shown (`aliases_only: false`) rather than an empty dropdown. The response also carries `default` (REPORT_MODEL, then AI_MODEL, if offered) and `key_source` (`user`|`global`).
+
+## Runs On Home Assistant — Test and Debug There
+
+**Production AND testing both happen on Home Assistant.** SwingTrader runs as a Home Assistant
+OS add-on (a Docker container HA builds locally from `Dockerfile`, `build: true`). There is no
+separate staging environment: the local test suites prove the logic, but a change is only
+*verified* once it is running in the add-on. "Push for testing" means: bump the version,
+push to `rustytek/bloomSwingTrade`, let HA update the add-on, then check it there.
+
+**Claude can reach Home Assistant directly through the Home Assistant MCP connection**
+(`mcp__claude_ai_Home_Assistant__*` tools — load them with ToolSearch). Use it to debug this
+program instead of asking the user to copy logs:
+- **Add-on:** slug `bfe614ab_swingtrader`, update entity `update.swingtrader_update`.
+  Reachable at `https://192.168.0.156:8443` and publicly as `https://invest.rustytek.net`
+  via the Cloudflared add-on (`9074a9fa_cloudflared`). `watchdog: true`, `auto_update: true`
+  — it can update itself between sessions, so check which version is actually running first.
+- **App log:** `ha_get_logs(source="supervisor", slug="bfe614ab_swingtrader")`. Read the
+  cloudflared add-on's log too — uvicorn only logs a request when it *completes*, so a hung
+  request is invisible in the app log (see "Long Builds Are Background Jobs").
+- **Why it restarted / did it update:** `ha_get_logs(source="system_service", slug="supervisor")`
+  shows watchdog kills, `Build ...:<ver> done` and `successfully updated`. The `update.*`
+  entity can report a stale `installed_version` right after an update — trust the Supervisor
+  log, and don't replay an update on a stale reading.
+- **Updating:** after a push, the add-on store picks the new version up on its own schedule
+  (minutes); `ha_manage_updates` / `ha_manage_app` can then install it. Forcing a store
+  refresh isn't possible through the MCP tools.
+- Installing an update or restarting the add-on is outward-facing — confirm with the user
+  first unless they already asked for it.
 
 ## Deployment Notes
 

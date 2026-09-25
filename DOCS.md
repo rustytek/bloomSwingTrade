@@ -91,6 +91,10 @@ The **Trade** tab sends the orders you tick in the **Weekly Plan** to Robinhood 
 4. Run a week in **Paper** mode first — every check runs, nothing is sent, your portfolio doesn't change.
 5. Switch to **Live** when ready. Every live order is a whole-share limit order, is reviewed by Robinhood first,
    and needs your explicit confirmation. **Check fills** writes filled orders into your portfolio and journal.
+6. **Robinhood holdings** (on the Trade tab) shows what the Agentic account holds next to your SwingTrader
+   portfolio. Loading it only reads — it works in paper mode and never changes anything. Holdings that are only
+   in Robinhood can be ticked and **imported**; they arrive with Robinhood's share count and cost but no stop,
+   so set one. Positions SwingTrader already tracks are never changed by an import.
 
 Back up `/data` as a whole — the token encryption key (`broker.key`) lives next to the database; without it you
 simply reconnect.

@@ -8,9 +8,10 @@ settings = get_settings()
 # Ensure data directory exists
 os.makedirs("data", exist_ok=True)
 
+_connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
 engine = create_engine(
     settings.database_url,
-    connect_args={"check_same_thread": False},  # Required for SQLite
+    connect_args=_connect_args,  # check_same_thread is SQLite-only
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

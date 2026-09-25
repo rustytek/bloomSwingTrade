@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from database.models import PortfolioPosition, StockCache, User, WatchlistItem, ClosedTrade
+from database.models import PortfolioPosition, StockCache, User, ClosedTrade
 from services.indicators import calc_atr, calc_ma, compute_swing_score
 from services.market_data import _is_fresh
 from services.strategies import STRATEGIES

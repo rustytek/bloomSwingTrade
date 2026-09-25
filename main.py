@@ -441,17 +441,19 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.21.2",
+    version="1.21.3",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
 )
 
-# CORS — allow the frontend origin (same host, different port only in dev)
+# CORS — explicit origin when PUBLIC_URL is set (credentialed); wildcard without credentials otherwise ("*" + credentials is rejected by browsers).
+# The browser's Origin header never has a trailing slash, so strip one from PUBLIC_URL or it never matches.
+_cors_origin = get_settings().public_url.rstrip("/")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=[_cors_origin] if _cors_origin else ["*"],
+    allow_credentials=bool(_cors_origin),
     allow_methods=["*"],
     allow_headers=["*"],
 )

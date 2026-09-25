@@ -37,10 +37,8 @@ services:
 
       # ── FRED API ─────────────────────────────────────────────────────────
       - FRED_API_KEY=${FRED_API_KEY:-}
-
-      # ── Cache TTLs (seconds) ──────────────────────────────────────────────
-      - QUOTE_CACHE_TTL=${QUOTE_CACHE_TTL:-900}
-      - HISTORY_CACHE_TTL=${HISTORY_CACHE_TTL:-3600}
+      # ── Broker token encryption (blank = auto-generated broker.key file) ──
+      - BROKER_ENCRYPTION_KEY=${BROKER_ENCRYPTION_KEY:-}
 
     restart: unless-stopped
     healthcheck:

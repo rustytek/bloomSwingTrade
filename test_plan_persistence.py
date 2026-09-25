@@ -79,7 +79,8 @@ class _StubFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
         pass
 
 
-sys.meta_path.append(_StubFinder())
+_STUB_FINDER = _StubFinder()
+sys.meta_path.append(_STUB_FINDER)
 
 # Point the ORM at a throwaway DB BEFORE anything imports database/db.py, so
 # importing main can never touch ./data/swingtrader.db.
@@ -96,6 +97,18 @@ from services.regime import (                                         # noqa: E4
     strategies_for_regime, strategies_for_regime_with_evidence,
 )
 from services import scorecard                                        # noqa: E402
+
+
+# The web-dependency stub above is import-time scaffolding only. Drop the
+# finder and purge any stub modules it provided, so later imports in this
+# process resolve the real packages (or raise a real ImportError) instead of
+# silently reusing stubs bound for these tests.
+try:
+    sys.meta_path.remove(_STUB_FINDER)
+except ValueError:
+    pass
+for _stubbed in [m for m in list(sys.modules) if m.split(".")[0] in _STUBBED_PACKAGES]:
+    del sys.modules[_stubbed]
 
 
 # ──────────────────────────────────────────────────────────────────────────

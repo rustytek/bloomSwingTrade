@@ -28,16 +28,9 @@ import traceback
 
 import numpy as np
 
-# `import config` reads .env through pydantic-settings; a stale key there would
-# hard-fail the import chain used by services.market_data. Neutralize the env
-# file for this test process BEFORE market_data (transitively) imports config.
-import config
-from pydantic_settings import SettingsConfigDict
-
-config.Settings.model_config = SettingsConfigDict(
-    env_file=None, case_sensitive=False, extra="ignore"
-)
-config.get_settings.cache_clear()
+# Settings uses extra="ignore", so a stale .env key can no longer hard-fail
+# the import chain (see config.py). No global model_config override here: it
+# would leak into every other test module in a shared pytest process.
 
 from services.indicators import (  # noqa: E402
     calc_adx, compute_performance_metrics, compute_score,

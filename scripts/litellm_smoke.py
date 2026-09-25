@@ -154,7 +154,8 @@ def _headers(api_key: str) -> dict:
     return headers
 
 
-async def list_models(base_url: str, api_key: str, timeout: float) -> None:
+def list_models(base_url: str, api_key: str, timeout: float) -> None:
+    # Sync on purpose: uses blocking urlopen — callers run it in a worker thread.
     url = f"{base_url}/v1/models"
     started = time.perf_counter()
     req = Request(url, headers=_headers(api_key), method="GET")
@@ -179,7 +180,8 @@ async def list_models(base_url: str, api_key: str, timeout: float) -> None:
             print(f"- {name}")
 
 
-async def chat(base_url: str, api_key: str, model: str, mode: str, timeout: float, target_chars: Optional[int]) -> None:
+def chat(base_url: str, api_key: str, model: str, mode: str, timeout: float, target_chars: Optional[int]) -> None:
+    # Sync on purpose: uses blocking urlopen — callers run it in a worker thread.
     url = f"{base_url}/v1/chat/completions"
     system = "You are a concise SwingTrader smoke-test assistant."
     user = _make_context(mode, target_chars)
@@ -245,15 +247,18 @@ def parse_args() -> argparse.Namespace:
 
 async def main() -> None:
     args = parse_args()
+    if not args.api_key:
+        print("error: no API key — pass --api-key or set LITELLM_API_KEY", file=sys.stderr)
+        raise SystemExit(2)
     if args.list_models:
-        await list_models(args.base_url, args.api_key, args.timeout)
+        await asyncio.to_thread(list_models, args.base_url, args.api_key, args.timeout)
         return
     target_chars = args.target_chars
     if target_chars is None and args.mode == "market":
         target_chars = 13655
     if target_chars is None and args.mode == "report":
         target_chars = 26639
-    await chat(args.base_url, args.api_key, args.model, args.mode, args.timeout, target_chars)
+    await asyncio.to_thread(chat, args.base_url, args.api_key, args.model, args.mode, args.timeout, target_chars)
 
 
 if __name__ == "__main__":

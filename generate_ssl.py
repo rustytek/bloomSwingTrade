@@ -48,7 +48,6 @@ def generate_ssl_cert(cert_path: str = "ssl/cert.pem", key_path: str = "ssl/key.
         x509.DNSName(hostname),
         x509.DNSName("swingtrader.local"),
         x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
-        x509.IPAddress(ipaddress.IPv4Address("0.0.0.0")),
     ]
     # Add LAN IP if different from loopback
     if local_ip not in ("127.0.0.1", "0.0.0.0"):

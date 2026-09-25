@@ -461,19 +461,20 @@ def get_ai_service(api_key: str | None = None) -> AIService:
     if provider == "litellm":
         return LiteLLMAIService(api_key=api_key)
 
-    if provider == "anthropic":
-        # Uncomment when AnthropicAIService is implemented above
-        # return AnthropicAIService()
-        logger.warning("Anthropic provider selected but not yet implemented. Using mock.")
+    if provider == "none":
         return MockAIService()
+
+    if provider == "anthropic":
+        # AnthropicAIService is not implemented — fail loudly, never mock.
+        # (No mock fallback: a misconfigured provider must error.)
+        raise RuntimeError("AI_PROVIDER=anthropic is not implemented — use 'litellm' (or 'none' for placeholder responses).")
 
     if provider == "openai":
-        # Uncomment when OpenAIAIService is implemented above
-        # return OpenAIAIService()
-        logger.warning("OpenAI provider selected but not yet implemented. Using mock.")
-        return MockAIService()
+        # OpenAIAIService is not implemented — fail loudly, never mock.
+        # (No mock fallback: a misconfigured provider must error.)
+        raise RuntimeError("AI_PROVIDER=openai is not implemented — use 'litellm' (or 'none' for placeholder responses).")
 
-    return MockAIService()
+    raise RuntimeError(f"Unknown AI_PROVIDER={provider!r} — expected 'litellm' or 'none'.")
 
 
 def ai_service(user: "User" = Depends(get_current_user)) -> AIService:

@@ -382,8 +382,7 @@ async def build_weekly_plan(db: Session, user: User, force: bool = False) -> dic
     regime = today.get("regime") or {}
     settings_used = today.get("settings_used") or {}
 
-    from api.settings import resolve_max_open_r   # api layer owns the budget rule
-    budget, basis = resolve_max_open_r(user)
+    budget, basis = portfolio_risk.resolve_max_open_r(user)
     settings = dict(settings_used, max_open_r=budget)
 
     # 1. Positions

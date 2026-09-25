@@ -8,10 +8,11 @@ from database.models import User, ReportCache
 from auth.deps import get_current_user
 from services import market_data
 from services.ai_service import AIService, ai_service
+from services.tickers import normalize_ticker
 from config import get_settings
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
-settings = get_settings()
+# NOTE: no module-level settings — every path uses current_settings() instead.
 logger = logging.getLogger(__name__)
 
 # Default system prompt for market chat. Users may override this per-account via
@@ -332,7 +333,7 @@ async def analyze_stock(
     user: User = Depends(get_current_user),
     svc: AIService = Depends(ai_service),
 ):
-    ticker = ticker.upper()
+    ticker = normalize_ticker(ticker)
     data = await market_data.get_quote(ticker, db)
     if data is None:
         raise HTTPException(status_code=404, detail=f"No data for {ticker}")
@@ -348,7 +349,7 @@ async def get_signals(
     user: User = Depends(get_current_user),
     svc: AIService = Depends(ai_service),
 ):
-    ticker = ticker.upper()
+    ticker = normalize_ticker(ticker)
     data = await market_data.get_quote(ticker, db)
     if data is None:
         raise HTTPException(status_code=404, detail=f"No data for {ticker}")
@@ -374,7 +375,7 @@ async def chat(
     user: User = Depends(get_current_user),
     svc: AIService = Depends(ai_service),
 ):
-    ticker = ticker.upper()
+    ticker = normalize_ticker(ticker)
     data = await market_data.get_quote(ticker, db) or {}
     answer = await svc.chat(ticker, req.question, data)
     return {"ticker": ticker, "question": req.question, "answer": answer}

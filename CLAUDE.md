@@ -27,14 +27,16 @@ python test_plan_persistence.py  # plan-intent columns, notes backfill, entry_ch
 python test_jobs.py              # background jobs: worker subprocess, dedupe, stale reaping
 python test_weekly_plan.py       # weekly-plan decisions, risk-aware buy pick, strategy rationale coverage
 python test_broker.py            # Robinhood OAuth/MCP (mocked), order validation, paper safety, fill sync
+python test_fixes.py             # layering (no services->api imports), AI provider fail-loud, CORS, stub hygiene
 ```
 
-**241 tests across nine suites** (`python test_broker.py` covers the Robinhood/Trade layer, fully mocked). All are self-contained (no network) except
+**249 tests across ten suites** (`python test_broker.py` covers the Robinhood/Trade layer, fully mocked). All are self-contained (no network) except
 `test_jobs.py`, which deliberately **launches a real worker subprocess** against a
 throwaway SQLite file in a temp dir — mocking the subprocess would let the very
 layer it guards break while the test still passed. `test_passes.py`
 installs permissive import stubs for `fastapi`, `jose`, `passlib` and `bcrypt` (appended to the
-**end** of `sys.meta_path`, so a real install always wins) purely so the pure helper functions
+**end** of `sys.meta_path`, so a real install always wins, and **removed again — finder and stub modules — right after
+the imports**, so a stub can never leak into another suite sharing the process) purely so the pure helper functions
 living in `api/*.py` can be imported without the full web stack.
 
 > **Counting routes:** this FastAPI version stores `_IncludedRouter` lazy references, so
@@ -85,7 +87,7 @@ React SPA (static/*.html) → FastAPI (main.py)
 | `auth/deps.py` | `get_current_user` / `get_current_admin` JWT dependencies |
 | `services/market_data.py` | yfinance wrapper, dual-layer cache (in-memory dict + SQLite), indicator calculation; emits the `schema_v: 2` quote contract (see "Quote Field Contract" below) |
 | `services/universe.py` | ~450 tickers: S&P 500 constituents + ETF lists |
-| `services/ai_service.py` | Abstract `AIService` base + Mock/LiteLLM implementations (Anthropic/OpenAI stubbed, not yet implemented) |
+| `services/ai_service.py` | Abstract `AIService` base + Mock/LiteLLM implementations. `get_ai_service()` returns the mock **only** for `AI_PROVIDER=none`; `anthropic`/`openai` (not implemented) and unknown providers **raise** rather than silently serving mock output |
 | `services/indicators.py` | Technical indicators; includes `calc_atr(highs, lows, closes, period=14)` (Wilder-smoothed) and `calc_adx(highs, lows, closes, period=14)` (Wilder ADX/+DI/-DI — trend-strength gauge behind `services/regime.py`; **the DI series is offset by `period`, not 1** — getting that wrong silently yields look-ahead values). `compute_performance_metrics` returns **both** `ann_ret` (full-history annualized %, the figure Sharpe/Sortino/Calmar/Info Ratio/Treynor are computed from) and `ann_ret_1m` (21-bar annualized %); both annualize over `n-1` return periods |
 | `services/regime.py` | ADX + 200MA + VIX/realized-vol market regime classifier — see "Market Regime" below |
 | `services/strategies.py` | 9-strategy framework; registry `STRATEGIES` (see below) |
@@ -252,7 +254,7 @@ Portfolio-level risk, all pure functions (no DB, no network — covered by `test
 - `concentration(...)` — sector weights of market value plus MV-weighted beta, threshold-flagged, with `beta_coverage_pct` so a book of beta-less quotes is not silently reported as beta 1.
 - `portfolio_heat(...)` — open R vs budget, slots vs `max_positions`.
 - `assess_new_position(...)` — the pre-trade check behind the Plan-a-Trade screen. Returns `{level: "block"|"warn"|"info", code, message}` warnings plus the projected before → after state. Thresholds: correlation 0.70 warn / 0.85 block, sector weight 30% warn / 40% block, open R ≥80% of budget warn / over budget block, book at `max_positions` blocks.
-- **Risk budget:** `max_open_r` is the user's CHOSEN ceiling when `User.max_open_r` is set, and otherwise falls back to the derived `max_positions × risk_pct` (`implied_max_open_r` — every slot at full risk). `api/settings.py::resolve_max_open_r(user) -> (budget, basis)` decides which, and `api/portfolio.py::_with_basis()` stamps the resulting `budget_basis` over the derived note this pure module emits, so **a derived number is never presented as a deliberate decision**. `services/portfolio_risk.py` stays pure and always emits the derived note; the real value is passed in.
+- **Risk budget:** `max_open_r` is the user's CHOSEN ceiling when `User.max_open_r` is set, and otherwise falls back to the derived `max_positions × risk_pct` (`implied_max_open_r` — every slot at full risk). `services/portfolio_risk.py::resolve_max_open_r(user) -> (budget, basis)` decides which (duck-typed on `user`, so the module stays DB-free; `api/settings.py` re-exports it), and `api/portfolio.py::_with_basis()` stamps the resulting `budget_basis` over the derived note this pure module emits, so **a derived number is never presented as a deliberate decision**. The rest of `services/portfolio_risk.py` always emits the derived note; the real value is passed in.
 
 ### Today Dashboard (`services/today.py`)
 Builds the `/api/today` payload (regime light, position health, top setups with trade plans, checklist, capacity). Exposes the shared `position_flags()` helper, also reused by `build_decision_cockpit`. Per-user in-memory cache (15-min TTL), invalidated by the scheduler.
@@ -274,7 +276,7 @@ Builds the `/api/today` payload (regime light, position health, top setups with 
 Live trading goes through **Robinhood's official Agentic Trading MCP server** (`https://agent.robinhood.com/mcp/trading`), not the private app API and not `robin_stocks` (global session, `input()` prompts, unbounded polling, pickled tokens — unusable in a multi-user server). Verified 2026-09-24 by probing: unauthenticated → 401 with `resource_metadata`; the AS metadata at `/.well-known/oauth-authorization-server/mcp/trading` gives authorize `https://robinhood.com/oauth`, token `https://api.robinhood.com/oauth2/token/`, **RFC 7591 dynamic registration**, public client (`none`), PKCE S256, scope `internal`. The app is the MCP client:
 - `POST /api/broker/connect` discovers metadata, registers a client once per redirect URI, stores a PKCE verifier + single-use `state` (10 min, user-bound) and returns `authorize_url`. `GET /api/broker/oauth/callback` takes **no bearer token** — `state` is the auth. Redirect URI = `PUBLIC_URL` (config / add-on option `public_url`) or the request origin via `X-Forwarded-*`. Tokens are Fernet-encrypted (`services/secrets_box.py`; key from `BROKER_ENCRYPTION_KEY` or `broker.key` next to the DB — **losing it means reconnecting**, not data loss).
 - Tool names/schemas are **not public**: the client calls `tools/list` and `map_arguments()` maps our order fields onto each tool's `inputSchema` (synonyms, enum aliases, coercion). An unmappable **required** property fails the order with the schema in the error — never a silent guess. `GET /api/broker/tools` exposes what was discovered.
-- **Safety invariants** (pinned in `test_broker.py`): paper mode makes no network call and never touches the portfolio; live mode needs a connected account + `confirm` to switch **and** `confirm:true` per submit; `review_equity_order` runs before every `place_equity_order` and a failed review places nothing; limit orders, whole shares, ≤20 per batch, limit within ±15% of the cached quote; a fill is applied to the portfolio exactly once (`applied_to_portfolio`), full sells journal through `api/portfolio.py::journal_close()` (the close endpoint's body, shared). No response ever carries a token. Paper buying power (Settings account size − holdings cost) only **warns**; live buying power blocks.
+- **Safety invariants** (pinned in `test_broker.py`): paper mode makes no network call and never touches the portfolio; live mode needs a connected account + `confirm` to switch **and** `confirm:true` per submit; `review_equity_order` runs before every `place_equity_order` and a failed review places nothing; limit orders, whole shares, ≤20 per batch, limit within ±15% of the cached quote; a fill is applied to the portfolio exactly once (`applied_to_portfolio`), full sells journal through `services/journal.py::journal_close()` (the close endpoint's body, shared; `api/portfolio.py` re-exports it and `compute_r_multiple`). **`services/` never imports from `api/`** — `test_fixes.py` pins this. No response ever carries a token. Paper buying power (Settings account size − holdings cost) only **warns**; live buying power blocks.
 - **Only mock-tested.** Discovery/registration (incl. whether Robinhood accepts our redirect host), the OAuth round trip, every MCP tool call and the result parsing (order id/state/fill field names are best guesses) have never run against the real service. Robinhood may hold an order for in-app approval (`pending_approval`, text shown verbatim). When there's no order-status tool, `POST /orders/{id}/resolve` lets the user mark fills by hand.
 - Models: `BrokerAccount` (one per user; client_id, redirect_uri, encrypted tokens, mode, tools cache) and `BrokerOrder` (the order log, with the plan intent in `plan_json`). New tables → `create_all`, no `_ensure_columns`.
 
@@ -303,7 +305,7 @@ This distinction is the point: **`rotation` measures a different system than the
 - `PortfolioPosition` and `ClosedTrade` both gained the trade plan's INTENT, previously packed into `notes` as `THESIS:` / `INVALIDATION:` / `TIME STOP:` / `PLAN: entry <x>` prefixed lines: `planned_entry`, `planned_entry_high`, `thesis`, `invalidation`, `time_stop_days` (all nullable). `planned_entry`/`planned_entry_high` are **write-once** like `initial_stop` — they are the reference the fill is judged against by `services/scorecard.py`'s `entry_chasing` metric, so an edit must never rewrite them. `services/trade_plan.py::parse_plan_notes()` is the one decoder of the legacy prefixed-notes shape, and `main.py::backfill_plan_fields_from_notes()` runs it once inside `ensure_schema_migrations()`: it fills only NULL columns, **never touches `notes`** (the only free-form copy of a trade's reasoning), and is therefore idempotent.
 - `User.max_open_r` (Float, nullable) — the CHOSEN open-R ceiling. NULL is meaningful and is deliberately **not** repaired to a default: it means "not chosen", and consumers fall back to the derived `max_positions × risk_pct`.
 - `User.use_evidence_regimes` (Boolean, default False) — per-user opt-in for the edge-matrix regime override on the Playbook. See "Market Regime".
-- `PortfolioPosition` and `ClosedTrade` both gained `initial_stop` (nullable) — the stop the position was **opened** with. It is written once (on creation, or the first time a stop is supplied) and never overwritten, so trailing a stop up cannot inflate the recorded R. `api/portfolio.py::compute_r_multiple(avg_cost, exit_price, initial_stop, stop_loss)` is the single source of that math and falls back to `stop_loss` for legacy rows where `initial_stop` is NULL.
+- `PortfolioPosition` and `ClosedTrade` both gained `initial_stop` (nullable) — the stop the position was **opened** with. It is written once (on creation, or the first time a stop is supplied) and never overwritten, so trailing a stop up cannot inflate the recorded R. `services/journal.py::compute_r_multiple(avg_cost, exit_price, initial_stop, stop_loss)` (re-exported by `api/portfolio.py`) is the single source of that math and falls back to `stop_loss` for legacy rows where `initial_stop` is NULL.
 - Closing a position (`POST /api/portfolio/{ticker}/close`) archives it to the journal and deletes it; `DELETE /api/portfolio/{ticker}` remains a non-journaled hard delete for correcting mistaken entries.
 - Lightweight SQLite `ALTER` migrations are handled by `ensure_schema_migrations()` in `main.py` (renamed from `ensure_cache_columns`, now with a generic `_ensure_columns` helper).
 
@@ -331,14 +333,14 @@ Copy `.env.example` to `.env`. `Settings` sets `extra = "ignore"`, so unknown ke
 |---|---|---|
 | `SECRET_KEY` | weak default | Change this — used for JWT signing |
 | `ADMIN_USER` / `ADMIN_PASS` | `admin` / `changeme` | Synced to the configured admin account on startup |
-| `AI_PROVIDER` | `litellm` | `none` \| `anthropic` \| `openai` \| `litellm` |
+| `AI_PROVIDER` | `litellm` | `litellm` \| `none` (mock). `anthropic`/`openai` are not implemented and raise |
 | `AI_API_KEY` | — | Required when provider is `anthropic` or `openai` |
 | `AI_MODEL` | `tooling_high` | LiteLLM tier alias — see aiProxy's `CLAUDE.md` Tier Aliases |
 | `FRED_API_KEY` | — | Optional; enables macro chart data |
 | `LITELLM_URL` | `http://192.168.0.21:4000` | LiteLLM proxy base URL |
 | `REPORT_MODEL` | `tooling_high` | LiteLLM tier alias for daily report generation |
 | `PUBLIC_URL` | *(empty)* | Public origin for the Robinhood OAuth redirect (`public_url` add-on option). Blank = derived from the request |
-| `BROKER_ENCRYPTION_KEY` | *(empty)* | Fernet key for stored broker tokens; blank = `broker.key` next to the DB |
+| `BROKER_ENCRYPTION_KEY` | *(empty)* | Fernet key for stored broker tokens (`broker_encryption_key` add-on option); blank = `broker.key` next to the DB |
 
 For HAOS, config goes through the add-on UI (mapped to `/data/options.json`).
 
@@ -347,6 +349,7 @@ For HAOS, config goes through the add-on UI (mapped to `/data/options.json`).
 ## Deployment Notes
 
 - **Versioning before push**: Any push to the remote repo must include a Home Assistant-visible version bump so HA detects the update. Keep `config.json` (`version`), `build.json` (`io.hass.version`), and `main.py` (`FastAPI(... version=...)`) in sync. Do not push functional changes without updating these version fields. If HA still does not show the update after a normal patch bump, use a clearer next version bump (for example `1.5.9` -> `1.6.0`), push it, then tell the user to reload/check updates in the HA Add-on Store because HA can cache add-on repository metadata.
+- **CORS**: with `PUBLIC_URL` set, only that origin is allowed, with credentials; without it, `*` **without** credentials (browsers reject `*` + credentials). Same-origin use of the app is unaffected either way.
 - **SSL**: Auto-generated self-signed cert on first run, stored in `./ssl/` (or `/data/ssl/` in HAOS). Persists across restarts.
 - **Database**: `./data/swingtrader.db` (SQLite). Survives all restarts; back up by copying this file.
 - **Scheduler**: APScheduler runs daily report generation at 05:30 local time using the configured AI provider.

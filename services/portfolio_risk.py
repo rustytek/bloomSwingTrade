@@ -373,6 +373,41 @@ def implied_max_open_r(max_positions: int | float | None, risk_pct: float | None
     return round(mp * rp, 4)
 
 
+def resolve_max_open_r(user) -> tuple[float | None, str]:
+    """The open-R budget actually in force, plus an honest basis string.
+
+    A CHOSEN ceiling (`user.max_open_r`) wins. When it is NULL the budget falls
+    back to the derived `max_positions x risk_pct` — the exposure of a fully
+    loaded book at full per-trade risk, which is a ceiling nobody picked. The
+    returned string says which of the two it is, so the UI can stop labelling a
+    derived number as a decision.
+
+    Lives here (not in api/settings.py) so every caller — api/portfolio,
+    services/weekly_plan — shares one implementation without a services->api
+    import. `user` is duck-typed (max_open_r/max_positions/risk_pct) to keep
+    this module DB-free.
+    """
+    chosen = getattr(user, "max_open_r", None)
+    try:
+        chosen = float(chosen) if chosen is not None else None
+    except (TypeError, ValueError):
+        chosen = None
+    if chosen is not None and chosen > 0:
+        return round(chosen, 4), (
+            f"max_open_r is a chosen ceiling of {round(chosen, 4):g}R (Settings), "
+            "not derived from max_positions x risk_pct."
+        )
+    derived = implied_max_open_r(
+        getattr(user, "max_positions", None), getattr(user, "risk_pct", None)
+    )
+    # The note still says a dedicated setting "would be better" — it now
+    # exists, so point at it rather than editing anything else.
+    return derived, (
+        DEFAULT_MAX_OPEN_R_NOTE
+        + " Set `max_open_r` in Settings to choose a ceiling instead."
+    )
+
+
 def portfolio_heat(positions, quotes, max_open_r: float | None,
                    risk_unit: float | None = None,
                    max_positions: int | None = None) -> dict:

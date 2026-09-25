@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 from database.models import BrokerAccount, BrokerOrder, PortfolioPosition, User
 from services import secrets_box
 from services.brokers import robinhood_mcp as mcp
+from services.journal import journal_close
 
 MAX_ORDERS = 20
 MAX_SHARES = 100_000
@@ -775,7 +776,6 @@ def apply_fill(db: Session, order: BrokerOrder, commit: bool = True) -> str | No
             note = f"Sold {qty:g} {order.ticker}, but SwingTrader had no position to reduce."
             order.error = note
         elif qty >= pos.shares - 1e-9:
-            from api.portfolio import journal_close
             order.applied_to_portfolio = True   # journal_close commits
             journal_close(db, pos, px, date.today(),
                           f"Closed by Robinhood order (SwingTrader #{order.id}) at ${px:,.2f}.")

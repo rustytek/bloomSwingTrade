@@ -26,13 +26,13 @@ Open the Web UI button (or navigate to `https://<ha-ip>:8443`).
 | `use_ha_ssl` | Use HA's own SSL certificate instead of a self-signed cert |
 | `certfile` | HA certificate file (only used when `use_ha_ssl` is `true`) |
 | `keyfile` | HA key file (only used when `use_ha_ssl` is `true`) |
-| `ai_provider` | AI provider: `none`, `anthropic`, `openai`, or `litellm` |
+| `ai_provider` | AI provider: `litellm` (recommended) or `none` (placeholder responses). `anthropic`/`openai` are not implemented and show an error |
 | `ai_api_key` | API key for direct OpenAI/Anthropic-style providers; not used for LiteLLM |
 | `ai_model` | For LiteLLM, a tier alias like `tooling_high` (not a raw model name); for Anthropic/OpenAI, a model override e.g. `claude-opus-4-6` |
-
 | `litellm_url` | LiteLLM OpenAI-compatible base URL |
 | `litellm_api_key` | Required when `ai_provider` is `litellm`; use the restricted LiteLLM virtual key for this user/app |
 | `public_url` | Optional. The address you open SwingTrader at from outside (e.g. `https://invest.example.com`). Robinhood sends you back to `<public_url>/api/broker/oauth/callback` after you connect; leave blank to derive it from the request |
+| `broker_encryption_key` | Optional Fernet key used to encrypt the stored Robinhood token. Leave blank and a `broker.key` file is generated in `/data`; losing that key only means reconnecting Robinhood |
 | `fred_api_key` | Optional FRED API key for Macro & Liquidity charts: M2, Fed Funds, 2yr/10yr yields, and yield spread |
 
 ## Enabling FRED Macro Data
@@ -72,17 +72,9 @@ To back up your data, include the add-on data directory in your HA backup.
 4. Set `litellm_api_key` to the user's restricted LiteLLM virtual key.
 5. Restart the add-on.
 
-### Anthropic Claude
-1. Set `ai_provider: anthropic`
-2. Set `ai_api_key` to your Anthropic API key
-3. Optionally set `ai_model: claude-opus-4-6`
-4. Restart the add-on
-
-### OpenAI
-1. Set `ai_provider: openai`
-2. Set `ai_api_key` to your OpenAI API key
-3. Optionally set `ai_model: gpt-4o`
-4. Restart the add-on
+### Anthropic / OpenAI
+Not implemented. Choosing `anthropic` or `openai` makes the AI panel show an error (it used to show
+placeholder text silently). Route those models through LiteLLM instead.
 
 The AI panel in the stock detail view will populate automatically once configured.
 

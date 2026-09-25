@@ -5,41 +5,14 @@ from pydantic import BaseModel, Field
 from auth.deps import get_current_user
 from database.db import get_db
 from database.models import User
-from services import portfolio_risk
+from services.portfolio_risk import resolve_max_open_r  # noqa: F401 — canonical home is services/portfolio_risk.py; re-exported here so existing `from api.settings import ...` imports keep working
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
-def resolve_max_open_r(user: User) -> tuple[float | None, str]:
-    """The open-R budget actually in force, plus an honest basis string.
-
-    A CHOSEN ceiling (`User.max_open_r`) wins. When it is NULL the budget falls
-    back to the derived `max_positions x risk_pct` — the exposure of a fully
-    loaded book at full per-trade risk, which is a ceiling nobody picked. The
-    returned string says which of the two it is, so the UI can stop labelling a
-    derived number as a decision.
-
-    Single source of truth: `api/portfolio.py` imports this rather than
-    re-deriving the budget, and `services/portfolio_risk.py` is never edited —
-    the value is passed in.
-    """
-    chosen = getattr(user, "max_open_r", None)
-    try:
-        chosen = float(chosen) if chosen is not None else None
-    except (TypeError, ValueError):
-        chosen = None
-    if chosen is not None and chosen > 0:
-        return round(chosen, 4), (
-            f"max_open_r is a chosen ceiling of {round(chosen, 4):g}R (Settings), "
-            "not derived from max_positions x risk_pct."
-        )
-    derived = portfolio_risk.implied_max_open_r(user.max_positions, user.risk_pct)
-    # portfolio_risk's note still says a dedicated setting "would be better" —
-    # it now exists, so point at it rather than editing that pure module.
-    return derived, (
-        portfolio_risk.DEFAULT_MAX_OPEN_R_NOTE
-        + " Set `max_open_r` in Settings to choose a ceiling instead."
-    )
+# resolve_max_open_r now lives in services/portfolio_risk.py (shared by the
+# API and services layers without a services->api import); it is
+# re-exported at this module's top for existing import sites.
 
 
 class SettingsResponse(BaseModel):

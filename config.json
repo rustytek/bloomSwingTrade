@@ -1,7 +1,7 @@
 {
   "name": "SwingTrader",
   "description": "Self-hosted swing trading screener — live market data via Yahoo Finance, technical indicators (RSI, MACD, BB, MA), watchlist & portfolio tracking, Fidelity CSV import, and optional AI analysis via LiteLLM.",
-  "version": "1.21.2",
+  "version": "1.21.3",
   "slug": "swingtrader",
   "url": "https://github.com/rustytek/bloomSwingTrade",
   "arch": ["amd64", "aarch64"],
@@ -30,7 +30,8 @@
     "litellm_url": "http://192.168.0.21:4000",
     "litellm_api_key": "",
     "report_model": "tooling_high",
-    "public_url": ""
+    "public_url": "",
+    "broker_encryption_key": ""
   },
   "schema": {
     "secret_key": "str",
@@ -46,6 +47,7 @@
     "litellm_url": "str",
     "litellm_api_key": "str",
     "report_model": "str",
-    "public_url": "str?"
+    "public_url": "str?",
+    "broker_encryption_key": "str?"
   }
 }

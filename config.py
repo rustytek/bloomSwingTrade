@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 import os
 
@@ -46,15 +46,19 @@ class Settings(BaseSettings):
     # the Robinhood OAuth redirect URI (<public_url>/api/broker/oauth/callback).
     # Blank = derive from the request (honours X-Forwarded-Proto/Host).
     public_url: str = ""
+    # Optional Fernet key for encrypting stored broker tokens. Blank = a key
+    # file (broker.key) is generated next to the SQLite database on first use.
+    broker_encryption_key: str = ""
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
         # Tolerate stale/unknown keys left in a local .env or in Home
         # Assistant's stored add-on options after a setting is retired.
         # Without this, pydantic-settings raises a ValidationError at import
         # time and the app will not start at all.
-        extra = "ignore"
+        extra="ignore",
+    )
 
 
 @lru_cache()

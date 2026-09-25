@@ -81,7 +81,7 @@ Key pages:
 | `ADMIN_USER` | `admin` | Initial admin username (first run only) |
 | `ADMIN_PASS` | `changeme` | Initial admin password (first run only) |
 | `PORT` | `8443` | HTTPS port |
-| `AI_PROVIDER` | `none` | `none` \| `anthropic` \| `openai` \| `litellm` |
+| `AI_PROVIDER` | `litellm` | `litellm` \| `none` (placeholder responses). `anthropic`/`openai` are not implemented and raise an error rather than silently returning mock output |
 | `AI_API_KEY` | *(empty)* | API key for direct OpenAI/Anthropic-style providers; not used for LiteLLM |
 | `AI_MODEL` | `tooling_high` | LiteLLM tier alias — never a raw provider model name |
 | `LITELLM_URL` | *(empty)* | LiteLLM OpenAI-compatible base URL |
@@ -89,8 +89,8 @@ Key pages:
 | `FRED_API_KEY` | *(empty)* | Optional FRED key for Macro & Liquidity charts: M2, Fed Funds, 2yr/10yr yields |
 | `PUBLIC_URL` | *(empty)* | Public origin of the app (e.g. `https://invest.example.com`), used for the Robinhood OAuth return address. Blank = derived from the request |
 | `BROKER_ENCRYPTION_KEY` | *(empty)* | Optional Fernet key for stored Robinhood tokens. Blank = `broker.key` is generated next to the database |
-| `QUOTE_CACHE_TTL` | `900` | Quote cache lifetime in seconds (15 min) |
-| `HISTORY_CACHE_TTL` | `3600` | History cache lifetime in seconds (1 hr) |
+| `QUOTE_CACHE_TTL` | `86400` | Quote cache lifetime in seconds (data refreshes after each NYSE close) |
+| `HISTORY_CACHE_TTL` | `86400` | History cache lifetime in seconds |
 
 ---
 
@@ -109,26 +109,12 @@ REPORT_MODEL=tooling_high
 
 If your LiteLLM proxy requires a key, set `LITELLM_API_KEY` to the user's restricted LiteLLM virtual key.
 
-### Anthropic Claude
+### Anthropic / OpenAI (not implemented)
 
-```env
-AI_PROVIDER=anthropic
-AI_API_KEY=sk-ant-...
-AI_MODEL=claude-opus-4-6   # optional
-```
-
-Then implement `AnthropicAIService` in `services/ai_service.py` (template provided as comments).
-Restart the container: `docker-compose restart`
-
-### OpenAI
-
-```env
-AI_PROVIDER=openai
-AI_API_KEY=sk-...
-AI_MODEL=gpt-4o   # optional
-```
-
-Implement `OpenAIAIService` in `services/ai_service.py` (template in comments).
+`AI_PROVIDER=anthropic` and `AI_PROVIDER=openai` are not implemented. They used to fall back silently to
+placeholder (mock) output; since v1.21.3 the AI endpoints raise an error instead, so a misconfiguration is
+visible. Route those providers through LiteLLM, or implement `AnthropicAIService` / `OpenAIAIService` in
+`services/ai_service.py`. Use `AI_PROVIDER=none` if you deliberately want placeholder responses.
 
 ---
 

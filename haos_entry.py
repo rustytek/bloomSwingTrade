@@ -31,6 +31,7 @@ if os.path.exists(OPTS):
     os.environ["LITELLM_URL"]  = str(opts.get("litellm_url",  "http://192.168.0.21:4000"))
     os.environ["LITELLM_API_KEY"] = str(opts.get("litellm_api_key", ""))
     os.environ["BROKER_ENCRYPTION_KEY"] = str(opts.get("broker_encryption_key", ""))
+    os.environ["TIINGO_API_KEY"] = str(opts.get("tiingo_api_key", "") or "")
     os.environ["PUBLIC_URL"]   = str(opts.get("public_url", "") or "")
     os.environ["HOST"]         = "0.0.0.0"
     os.environ["PORT"]         = "8443"

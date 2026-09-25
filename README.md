@@ -21,7 +21,7 @@ number, and anything it cannot measure should say so rather than guess.**
 | **Playbook** (`/`) | What do I do today? Setups grouped by strategy, each carrying that strategy's tested edge *in the current regime*, with a Plan-a-Trade modal that checks correlation, sector drift and open risk **before** the position exists — and blocks the commit when a hard limit would be breached. |
 | **Weekly Plan** (`/plan`) | Walk me through this week. Five steps: read the market, the strategies in play and **why each one fits this market**, what to do with every holding (sell / trim / raise stop / hold, with reasons), new trades — each with a plain-English *why* and risk-checked against the buys above it — then a review you take to the Trade tab. |
 | **Trade** (`/trade`, last tab) | Send the trades you ticked to **Robinhood** through its official Agentic Trading connection (OAuth — SwingTrader never sees your password). Paper mode first; live mode needs a connected Agentic account and an explicit confirmation, and every live order is reviewed by Robinhood before it is placed. Fills are written back to your portfolio/journal automatically. A **Robinhood holdings** panel compares the Agentic account with your portfolio and can import holdings you pick. |
-| **Strategy Lab** (`/backtest`) | Does this strategy actually work? A strategy × regime **edge matrix** with Wilson confidence intervals and `confirmed` / `unproven` / `mis-tagged` verdicts, plus walk-forward backtests in two modes. |
+| **Strategy Lab** (`/backtest`) | Does this strategy actually work? A strategy × regime **edge matrix** with Wilson confidence intervals and `confirmed` / `unproven` / `mis-tagged` verdicts, plus walk-forward backtests in two modes over any **5-year window of the last 20 years**, filled the way you actually trade (next-day limit entries, never at the signal close) (so a test can sit on 2008, 2018, 2020 or 2022). The edge matrix uses all 20 years. |
 | **Scorecard** (`/scorecard`) | Am I executing it? Realized results vs what the backtest expected, and execution leaks ranked by what they cost in R. |
 | **Screener / Charts / Journal** | The underlying universe, market context, and closed-trade log. |
 
@@ -89,6 +89,7 @@ Key pages:
 | `FRED_API_KEY` | *(empty)* | Optional FRED key for Macro & Liquidity charts: M2, Fed Funds, 2yr/10yr yields |
 | `PUBLIC_URL` | *(empty)* | Public origin of the app (e.g. `https://invest.example.com`), used for the Robinhood OAuth return address. Blank = derived from the request |
 | `BROKER_ENCRYPTION_KEY` | *(empty)* | Optional Fernet key for stored Robinhood tokens. Blank = `broker.key` is generated next to the database |
+| `TIINGO_API_KEY` | *(empty)* | Optional free [Tiingo](https://www.tiingo.com) key — fallback source for the 20-year history download when Yahoo returns an empty or cut-short series |
 | `QUOTE_CACHE_TTL` | `86400` | Quote cache lifetime in seconds (data refreshes after each NYSE close) |
 | `HISTORY_CACHE_TTL` | `86400` | History cache lifetime in seconds |
 
@@ -208,7 +209,9 @@ Full interactive docs available at: `https://localhost:8443/api/docs`
 | GET | `/api/today` | Playbook payload: regime, positions, setups with plans, per-setup rank/metrics, strategy rationale, `selection` |
 | GET | `/api/weekly-plan` | Weekly walkthrough: position reviews, risk-checked proposed orders with `why[]` |
 | GET | `/api/backtest/strategies` | Strategy catalog with rules, scoring and `backtestable` |
-| GET | `/api/backtest/walk-forward` | Walk-forward; `mode=rotation\|trade_plan` |
+| GET | `/api/backtest/walk-forward` | Walk-forward; `mode=rotation\|trade_plan`; tests at most 5 years — `start_date` picks which 5 of the last 20 |
+| GET | `/api/history/status` | 20-year archive coverage: complete/partial/missing tickers, sources, problems |
+| POST | `/api/history/backfill` | Admin: start (or resume) the 20-year download in the background |
 | GET | `/api/edge-matrix` | Strategy × regime evidence. A cold call returns `not_computed` rather than blocking — pass `?refresh=true` to build (slow) |
 | POST | `/api/edge-matrix/invalidate` | Bust the cached matrix |
 | GET | `/api/scorecard` | Realized vs expected per strategy + execution quality |

@@ -39,6 +39,8 @@ services:
       - FRED_API_KEY=${FRED_API_KEY:-}
       # ── Broker token encryption (blank = auto-generated broker.key file) ──
       - BROKER_ENCRYPTION_KEY=${BROKER_ENCRYPTION_KEY:-}
+      # ── Tiingo (optional fallback for the 20-year history backfill) ──
+      - TIINGO_API_KEY=${TIINGO_API_KEY:-}
 
     restart: unless-stopped
     healthcheck:

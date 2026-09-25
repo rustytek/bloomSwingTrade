@@ -91,7 +91,10 @@ DEFAULT_MODE = "trade_plan" if _SUPPORTS_TRADE_PLAN else "rotation"
 #       the SPY>200MA entry filter ON, which blocks every entry in exactly the
 #       regimes defined by SPY<200MA — so trending_bear / choppy_volatile cells
 #       were almost entirely cash periods scored as 0% "results".
-METHOD_VERSION = 2
+#   3 — fills moved to the session AFTER each decision (next-day limit entries,
+#       next-open time/regime exits, open-to-open rotation). v2 cells were
+#       measured with same-close fills and overstate breakout/momentum edges.
+METHOD_VERSION = 3
 
 VERDICTS = ("confirmed", "unproven", "mis-tagged", "untagged-edge")
 
@@ -192,7 +195,8 @@ def actionable_strategy_ids() -> list[str]:
     return [sid for sid, s in STRATEGIES.items() if getattr(s, "actionable", True)]
 
 
-def _run_one(db: Session, user_id: int, strategy_id: str, source: str, kwargs: dict) -> dict:
+def _run_one(db: Session, user_id: int, strategy_id: str, source: str, kwargs: dict,
+             progress=None) -> dict:
     """One walk-forward run, bucketed into quadrant cells.
 
     run_walk_forward_backtest is called with KEYWORD arguments only and only
@@ -200,6 +204,8 @@ def _run_one(db: Session, user_id: int, strategy_id: str, source: str, kwargs: d
     concurrently and we must not depend on anything that isn't there today.
     """
     call = {k: v for k, v in kwargs.items() if k in _BACKTEST_PARAMS}
+    if progress is not None and "progress" in _BACKTEST_PARAMS:
+        call["progress"] = progress
     try:
         result = run_walk_forward_backtest(
             db=db, user_id=user_id, strategy_id=strategy_id, source=source, **call
@@ -280,7 +286,15 @@ def build_edge_matrix(db: Session, user_id: int, source: str = "universe",
         # being worked on rather than the one just finished.
         _tick(_i / _total, f"{getattr(strat, 'name', sid)} ({_i + 1}/{_total})")
         tagged = list(getattr(strat, "regimes", []) or [])
-        run = _run_one(db, user_id, sid, source, kwargs)
+        label = getattr(strat, "name", sid)
+
+        def _sub(fraction, detail, _i=_i, _label=label):
+            # A 20-year run is minutes per strategy; ticking from INSIDE it
+            # keeps the job's heartbeat well within jobs.STALE_AFTER.
+            _tick((_i + max(0.0, min(1.0, float(fraction)))) / _total,
+                  f"{_label} ({_i + 1}/{_total}): {detail}")
+
+        run = _run_one(db, user_id, sid, source, kwargs, progress=_sub)
         if run["error"]:
             errors.append({"strategy": sid, "error": run["error"]})
         if data_quality is None and run.get("data_quality"):
@@ -400,6 +414,14 @@ def _normalize_kwargs(backtest_kwargs: dict) -> dict:
     # would pre-empt exactly the regimes being measured. See METHOD_VERSION.
     if "spy_regime" in _BACKTEST_PARAMS:
         kwargs.setdefault("spy_regime", False)
+    # Measure on the 20-year archive (+ cache). Per ticker it falls back to
+    # the 5-year cache until the backfill has run, and data_quality says which.
+    if "history" in _BACKTEST_PARAMS:
+        kwargs.setdefault("history", "20y")
+    # Strategy Lab runs are capped at a 5-year window; the matrix is not — it
+    # exists to see every regime (2008, 2018, 2020, 2022) and runs in the worker.
+    if "max_window_years" in _BACKTEST_PARAMS:
+        kwargs.setdefault("max_window_years", None)
     return kwargs
 
 

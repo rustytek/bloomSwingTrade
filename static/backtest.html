@@ -12,6 +12,9 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { background:#0b0b0c; color:#d8d8d8; font-family:'Inter',sans-serif; font-size:14px; line-height:1.5; }
     .page { max-width:1700px; margin:0 auto; padding:20px; display:flex; flex-direction:column; gap:16px; } .warn { color:#f0a500; }
+    .spinner-inline { display:inline-block; width:10px; height:10px; border:2px solid #3a3110; border-top-color:#f0a500; border-radius:50%; animation:stspin .8s linear infinite; vertical-align:-1px; margin-right:6px; }
+    @keyframes stspin { to { transform:rotate(360deg); } }
+    #historyBody > div { margin-top:3px; }
     .tutorial { display:grid; grid-template-columns:1.1fr 1fr; gap:16px; background:#101013; border:1px solid #232327; border-radius:6px; padding:16px; }
     .tutorial-title { font-size:14px; color:#eee; font-weight:800; margin-bottom:8px; }
     .tutorial-copy { color:#999; font-size:12px; line-height:1.6; }
@@ -237,14 +240,14 @@
       <label class="hint" data-tip="Estimated trading cost per rebalance in basis points. 10 bps means 0.10%, used to make the backtest less optimistic.">Cost bps
         <input id="costBps" type="number" min="0" max="100" value="10">
       </label>
-      <label class="hint" data-tip="How far back to test. All history uses every cached bar; 1Y/2Y restrict to a recent window (or to Start date → Start date + that length).">Period
+      <label class="hint" data-tip="How long a window to test — at most 5 years. The data goes back 20 years (once the download in the 20-year panel has run), so use Start date to choose WHICH 5 years: e.g. 2007-01-01 tests through the 2008 crash. Blank Start date = the most recent window.">Period
         <select id="period">
-          <option value="all">All history</option>
-          <option value="1Y">1 Year</option>
+          <option value="all">5 Years (max)</option>
           <option value="2Y">2 Years</option>
+          <option value="1Y">1 Year</option>
         </select>
       </label>
-      <label class="hint" data-tip="Optional. Sets where the window begins. With a Period of 1Y/2Y, the test runs Start date → Start date + that length; leave blank to use the most recent window.">Start date
+      <label class="hint" data-tip="Optional. Where the window begins — anywhere in the last 20 years. The test runs Start date → Start date + Period (never more than 5 years); leave blank for the most recent window.">Start date
         <input id="startDate" type="date">
       </label>
       <label class="hint" data-tip="Optional end of the test window. Mainly used with 'Fetch any era' to bound an arbitrary historical range (Start date → End date).">End date
@@ -267,6 +270,14 @@
       <button id="compareBtn" class="btn hint" data-tip="Run every strategy with the current settings and compare CAGR, drawdown, Sharpe, Sortino, exposure, and equity curves side by side.">Compare Strategies</button>
       <span id="status" class="note" aria-live="polite"></span>
       <span id="cadenceHint" class="note" style="color:#f0a500;" hidden>Mean Reversion exits only register at rebalance in rotation mode — the Weekly (5-day) cadence is recommended there.</span>
+    </section>
+
+    <section class="panel" id="historyPanel">
+      <div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+        <strong>20-year price history</strong>
+        <span id="historyActions"></span>
+      </div>
+      <div id="historyBody" class="note" style="margin-top:6px;">Loading…</div>
     </section>
 
     <!-- ── 3. CAVEATS ────────────────────────────────────────────────────── -->
@@ -1095,6 +1106,55 @@ function renderCockpit(c) {
 }
 
 /* ── Run ─────────────────────────────────────────────────────────────────── */
+/* ── 20-year history panel ───────────────────────────────────────────────── */
+let HIST_POLL = null;
+async function loadHistoryPanel() {
+  const body = document.getElementById('historyBody');
+  const actions = document.getElementById('historyActions');
+  let s;
+  try { s = await api('/api/history/status'); }
+  catch (e) { body.innerHTML = `<span class="error">${esc(e && e.message ? e.message : 'unavailable')}</span>`; return; }
+  const job = s.job || null;
+  const running = job && (job.status === 'queued' || job.status === 'running');
+  const pct = running ? Math.round((Number(job.progress) || 0) * 100) : null;
+  const srcs = Object.entries(s.sources || {}).map(([k, v]) => `${esc(k)} ${esc(v)}`).join(', ');
+  const lines = [
+    `<b>${esc(s.complete)}</b> of ${esc(s.tickers_total)} tickers have 20 years (target: from ${esc(s.target_start)})`
+      + (s.partial ? ` · ${esc(s.partial)} partial` : '') + (s.missing ? ` · ${esc(s.missing)} not downloaded yet` : '') + '.',
+    s.spy_start ? `SPY archive starts ${esc(s.spy_start)}${s.vix_start ? ` · VIX from ${esc(s.vix_start)} (used for the crisis-volatility regime rule)` : ''}.` : 'Not downloaded yet — until it is, backtests can only start within the last 5 years and the edge matrix sees 5 years.',
+    srcs ? `Sources: ${srcs}. Tiingo fallback ${s.tiingo_configured ? 'configured' : '<b>not configured</b> — set <span class="mono">tiingo_api_key</span> in the add-on options to fill tickers Yahoo gets wrong'}.` : `Tiingo fallback ${s.tiingo_configured ? 'configured' : 'not configured'}.`,
+  ];
+  if (running) lines.push(`<span class="spinner-inline"></span>Downloading: ${pct}% · ${esc(job.progress_detail || '')}`);
+  else if (job && job.status === 'failed') lines.push(`<span class="error">Last download failed: ${esc(job.error || '')}</span>`);
+  const last = s.last_result;
+  if (!running && last && last.counts) {
+    const c = last.counts;
+    lines.push(`Last run: ${esc(c.done)} downloaded (${esc(c.yfinance)} Yahoo, ${esc(c.tiingo)} Tiingo), ${esc(c.skipped)} already complete, ${esc(c.failed)} failed.`
+      + (last.tiingo_note ? ` <span class="warn">${esc(last.tiingo_note)}</span>` : ''));
+  }
+  if ((s.problems || []).length) {
+    lines.push(`<details><summary>${esc(s.problems.length)} ticker(s) with data problems</summary>${s.problems.map(p =>
+      `<div><span class="ticker-link" onclick="openTickerDetail('${esc(p.ticker)}')">${esc(p.ticker)}</span> — ${esc((p.issues || []).join('; '))}</div>`).join('')}</details>`);
+  }
+  lines.push('<span class="muted">Caveat: the ticker list is today\'s S&amp;P 500, so companies that failed or left the index are missing. That flatters older years, 2008 most of all.</span>');
+  body.innerHTML = lines.map(l => `<div>${l}</div>`).join('');
+  actions.innerHTML = s.can_start && !running
+    ? `<button class="btn btn-sm hint" type="button" id="histStartBtn" data-tip="Downloads 20 years of daily prices for every ticker in the background (roughly 30–40 minutes). Already-complete tickers are skipped, so it is safe to run again.">${s.complete ? 'Update / resume download' : 'Download 20-year history'}</button>`
+    : (s.can_start ? '' : '<span class="muted" style="font-size:11px;">An admin can start the download.</span>');
+  const btn = document.getElementById('histStartBtn');
+  if (btn) btn.addEventListener('click', startHistoryBackfill);
+  clearTimeout(HIST_POLL);
+  if (running) HIST_POLL = setTimeout(loadHistoryPanel, 4000);
+}
+
+async function startHistoryBackfill() {
+  const btn = document.getElementById('histStartBtn');
+  if (btn) btn.disabled = true;
+  try { await api('/api/history/backfill', { method: 'POST' }); }
+  catch (e) { document.getElementById('historyBody').innerHTML += `<div class="error">${esc(e && e.message ? e.message : 'Could not start')}</div>`; }
+  loadHistoryPanel();
+}
+
 async function load() {
   const status = document.getElementById('status');
   status.textContent = 'Running…';
@@ -1400,6 +1460,7 @@ document.getElementById('weeklyPresetBtn').addEventListener('click', () => {
   loadStrategyDetails().catch(() => { /* handled inside */ });
   await loadCurrentQuadrant();
   loadEdge(false).catch(() => { /* handled inside */ });
+  loadHistoryPanel().catch(() => { /* handled inside */ });
   load();
 })();
 </script>

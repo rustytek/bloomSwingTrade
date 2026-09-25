@@ -40,6 +40,7 @@ from api.weekly_plan import router as weekly_plan_router
 from api.scorecard import router as scorecard_router
 from api.jobs import router as jobs_router
 from api.broker import router as broker_router
+from api.history import router as history_router
 from generate_ssl import generate_ssl_cert
 from services.universe import UNIVERSE
 from services.market_data import (
@@ -249,6 +250,12 @@ def ensure_schema_migrations():
         _ensure_columns(conn, "report_cache", {
             "model": "VARCHAR(128)",
         })
+        _ensure_columns(conn, "history_archive", {
+            "source": "VARCHAR(16)",
+            "requested_start": "VARCHAR(10)",
+            "issues": "TEXT",
+            "checked_at": "DATETIME",
+        })
 
         # Repair any NULL trading-settings left behind by older migrations that
         # added these columns without a DEFAULT (those rows 500 the Today page
@@ -441,7 +448,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SwingTrader",
     description="Swing trading screener with AI analysis hooks",
-    version="1.21.5",
+    version="1.22.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -474,6 +481,7 @@ app.include_router(weekly_plan_router)
 app.include_router(scorecard_router)
 app.include_router(jobs_router)
 app.include_router(broker_router)
+app.include_router(history_router)
 
 
 # ── Static files (React SPA) ─────────────────────────────────────────────────

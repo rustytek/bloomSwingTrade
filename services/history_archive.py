@@ -79,6 +79,16 @@ def ensure_archive(db: Session, ticker: str, need_start: str, need_end: str) -> 
         return []
 
     actual_start, actual_end = bars[0]["date"], bars[-1]["date"]
+    if row and row.start_date and row.end_date and (
+            actual_start > row.start_date or actual_end < row.end_date):
+        # The download covers LESS than what is stored (a truncated Yahoo
+        # answer). Never shrink the archive — the 20-year backfill lives here too.
+        logger.warning("Archive fetch for %s returned %s..%s, narrower than stored %s..%s — kept stored",
+                       ticker, actual_start, actual_end, row.start_date, row.end_date)
+        try:
+            return json.loads(row.bars_json or "[]")
+        except Exception:
+            return bars
     payload = json.dumps(bars)
     if row:
         row.bars_json = payload

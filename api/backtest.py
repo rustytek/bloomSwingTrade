@@ -46,7 +46,7 @@ def walk_forward(
     cost_bps: float = Query(10, ge=0, le=100),
     spy_regime: bool = Query(True),
     regime_ma: int = Query(200, ge=20, le=200),
-    period: str = Query("all", pattern="^(1Y|2Y|all)$"),
+    period: str = Query("all", pattern="^(1Y|2Y|5Y|all)$"),
     start_date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     end_date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     archive: bool = Query(False),
@@ -66,6 +66,10 @@ def walk_forward(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # Always draws on the 20-year archive (+ the daily cache), so start_date
+    # can sit anywhere in the last 20 years — but the TESTED window is capped
+    # at MAX_WINDOW_YEARS inside the engine. Each ticker is loaded only from
+    # shortly before the window, so a run costs about what a 5-year run always has.
     return run_walk_forward_backtest(
         db=db,
         user_id=user.id,
@@ -87,6 +91,7 @@ def walk_forward(
         atr_stop_mult=atr_stop_mult if atr_stop_mult is not None else user.atr_stop_mult,
         r_multiple=r_multiple if r_multiple is not None else user.r_multiple,
         exit_rules=exit_rules,
+        history="20y",
     )
 
 

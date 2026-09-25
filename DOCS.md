@@ -33,7 +33,23 @@ Open the Web UI button (or navigate to `https://<ha-ip>:8443`).
 | `litellm_api_key` | Required when `ai_provider` is `litellm`; use the restricted LiteLLM virtual key for this user/app |
 | `public_url` | Optional. The address you open SwingTrader at from outside (e.g. `https://invest.example.com`). Robinhood sends you back to `<public_url>/api/broker/oauth/callback` after you connect; leave blank to derive it from the request |
 | `broker_encryption_key` | Optional Fernet key used to encrypt the stored Robinhood token. Leave blank and a `broker.key` file is generated in `/data`; losing that key only means reconnecting Robinhood |
+| `tiingo_api_key` | Optional free key from tiingo.com. Used only when Yahoo returns an empty or cut-short 20-year history for a ticker |
 | `fred_api_key` | Optional FRED API key for Macro & Liquidity charts: M2, Fed Funds, 2yr/10yr yields, and yield spread |
+
+## 20-Year Price History (Strategy Lab)
+
+SwingTrader can keep 20 years of daily prices. The strategy × regime edge matrix uses all of them, so it sees the
+2008, 2018, 2020 and 2022 sell-offs. A single backtest tests at most 5 years, but you choose which 5 with the
+Start date (for example 2007-01-01 to test through the 2008 crash).
+
+1. Optional: get a free key at tiingo.com and put it in `tiingo_api_key` (used only for tickers Yahoo gets wrong).
+2. As an admin, open **Strategy Lab** and press **Download 20-year history** in the *20-year price history* panel.
+   It runs in the background (roughly 30–40 minutes) and shows progress; you can leave the page. It is safe to run
+   again — finished tickers are skipped, so a second run just fills gaps.
+3. Rebuild the edge matrix, and use Start date on backtests to test older periods.
+
+The download adds a few hundred MB to `/data`, so HA backups of the add-on get bigger. The ticker list is today's
+S&P 500, so companies that failed or left the index are missing — older years look better than they really were.
 
 ## Enabling FRED Macro Data
 

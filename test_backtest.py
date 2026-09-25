@@ -258,6 +258,54 @@ def test_no_lookahead_exit_rules_truncation():
 
 
 @test
+def test_next_day_limit_fill_rules():
+    """Entries are day limit orders for the session after the signal close."""
+    lim, stop = 101.0, 95.0
+    assert bt.next_day_limit_fill(_bar("d", 100, 102, 99, 101), lim, stop) == (100, ""), \
+        "opens below the limit -> fills at the open"
+    assert bt.next_day_limit_fill(_bar("d", 103, 104, 100.5, 103), lim, stop) == (101.0, ""), \
+        "gaps up but trades back to the limit -> fills AT the limit"
+    assert bt.next_day_limit_fill(_bar("d", 103, 105, 102, 104), lim, stop) == (None, "gap"), \
+        "never trades down to the limit -> no fill"
+    assert bt.next_day_limit_fill(_bar("d", 94, 96, 93, 95), lim, stop) == (None, "through_stop"), \
+        "opening below the planned stop -> the setup is dead, no entry"
+
+
+@test
+def test_time_exit_fills_at_next_open_not_the_deciding_close():
+    """A time stop is only known once a bar has CLOSED; it must sell at the
+    NEXT session's open, holding the overnight gap like a live trader would."""
+    bars = [_bar(f"2020-01-{i + 1:02d}", 100, 101, 99.5, 100) for i in range(6)]
+    bars[4] = _bar("2020-01-05", 97, 98, 96.5, 97.5)       # next session gaps down
+    plain = [{k: v for k, v in b.items() if k not in ("atr", "quadrant")} for b in bars]
+    st = _state(entry=100.0, stop=90.0, target=150.0)
+    rules = [TimeStop(max_bars=3)]
+    pos = OpenPosition(ticker="TST", bars=plain, atr=[1.0] * len(plain),
+                       quadrants={}, state=st, rules=rules, idx=0)
+    advance(rules, dict(plain[0], atr=1.0, quadrant=None), st)
+    fills = walk_position(pos, plain[-1]["date"])
+    assert len(fills) == 1 and fills[0]["kind"] == "time", fills
+    assert fills[0]["date"] == "2020-01-05" and fills[0]["price"] == 97, \
+        f"expected the next session's OPEN (97), got {fills[0]}"
+    assert "next open" in fills[0]["reason"]
+
+
+@test
+def test_trade_plan_never_fills_on_the_signal_bar():
+    """No trade_plan entry may carry the date of the decision that produced it."""
+    r = run(mode="trade_plan")
+    assert r["trade_log"], "fixture should produce trades"
+    # Decisions fall every 5 sessions; a fill is the session AFTER one, so a
+    # fill dated on a decision date would mean a same-close fill.
+    decision_dates = {t["date"] for t in r["trades"]}
+    for t in r["trade_log"]:
+        assert t["entry_date"] not in decision_dates, f"filled on its decision close: {t}"
+    assert any(c["id"] == "fill_convention" for c in r["caveats"])
+    for key in ("entries_missed_gap", "entries_missed_through_stop", "entries_missed_no_session"):
+        assert key in r["metrics"], key
+
+
+@test
 def test_no_lookahead_trailing_stop_uses_prior_bar_level():
     """A bar must never be able to stop itself out on a trail level derived from
     its own close — the level checked on bar t comes from bar t-1's update()."""
@@ -291,7 +339,15 @@ def test_no_lookahead_trailing_stop_uses_prior_bar_level():
 # parameters, notes and available_tickers came back identical, byte for byte.
 # Re-record ONLY on a deliberate, reviewed change to rotation behaviour —
 # regenerate with `python test_backtest.py --record-baseline`.
-_ROTATION_BASELINE_DIGEST = "ef29c7556f5bdb93575c4241965c8812"
+#
+# RE-RECORDED 2026-09-25 (v1.22.0) — deliberate: rotation now trades at the
+# OPEN of the session after each decision instead of the close the decision
+# was computed from (ML4T 3e §16.2, same-bar execution). Reviewed on the real
+# database before re-recording: the tickers selected in every period were
+# identical to the previous engine for four strategies (209/209, 205/205 x3);
+# only fill prices — and therefore returns — changed. Previous digest:
+# ef29c7556f5bdb93575c4241965c8812.
+_ROTATION_BASELINE_DIGEST = "bd7ad0d7281fa598e3b09b9e1a07fe2d"
 _BASELINE_REGIME_FIELDS = ("quadrant", "label", "periods", "pct_of_periods",
                            "avg_period_return", "win_rate", "cum_return")
 

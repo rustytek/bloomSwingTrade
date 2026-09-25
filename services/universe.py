@@ -29,6 +29,12 @@ services/scorecard.py, api/scorecard.py.
 # so a stale list is visible rather than implied.
 UNIVERSE_AS_OF = "2025-01"
 
+# Maintenance, 2026-09-24 (found by the 20-year history backfill — Yahoo had no
+# recent data for these, so they were silently dropped from every backtest):
+#   renamed:  BK -> BNY, MMC -> MRSH  (same companies; Yahoo serves them under the new symbol)
+#   removed:  HOLX, SEE (no data at all), EA, EQR, AVB (last traded 2026-08)
+# No replacements were added — which companies joined the index is not known here.
+
 UNIVERSE_CAVEAT = (
     "The ticker universe is TODAY's S&P 500 / ETF constituent list "
     f"(services/universe.py, curated {UNIVERSE_AS_OF}), not point-in-time index "
@@ -50,7 +56,7 @@ SP500 = [
     "APP","GEV",                                   # added 2024-2025
     # ── Communication Services ───────────────────────────────────────────────
     "GOOGL","GOOG","META","NFLX","DIS","CMCSA","VZ","T","TMUS","CHTR",
-    "WBD","OMC","FOXA","FOX","NWSA","NWS","TTWO","EA",
+    "WBD","OMC","FOXA","FOX","NWSA","NWS","TTWO",
     "MTCH","LYV",
     # removed: PARA (acquired by Skydance 2024), IPG (acquired by Omnicom 2025)
     # ── Consumer Discretionary ──────────────────────────────────────────────
@@ -72,8 +78,8 @@ SP500 = [
     # ── Financials ──────────────────────────────────────────────────────────
     "BRK-B","JPM","V","MA","BAC","WFC","GS","MS","AXP","BLK",
     "SCHW","C","USB","PNC","TFC","COF","AIG","MET","PRU",
-    "AFL","ALL","PGR","TRV","CB","MMC","AON","SPGI","MCO","ICE",
-    "CME","NDAQ","BK","STT","TROW","IVZ","BEN","AMP","RJF",
+    "AFL","ALL","PGR","TRV","CB","MRSH","AON","SPGI","MCO","ICE",
+    "CME","NDAQ","BNY","STT","TROW","IVZ","BEN","AMP","RJF",
     "HBAN","RF","KEY","FITB","CFG","MTB","ZION","WRB","ACGL","AIZ",
     "FIS","GPN","CPAY","SYF","ALLY",
     # removed: DFS (acquired by COF 2024), FI (delisted/invalid)
@@ -81,7 +87,7 @@ SP500 = [
     "LLY","UNH","JNJ","MRK","ABBV","TMO","ABT","DHR","BMY","AMGN",
     "PFE","GILD","REGN","VRTX","CI","HUM","MCK","CVS","ELV","ZBH",
     "BDX","BSX","SYK","MDT","ISRG","EW","RMD","DXCM","IQV","MTD",
-    "A","WAT","HOLX","TECH","BIO","IDXX","PODD","RVTY","DGX","LH",
+    "A","WAT","TECH","BIO","IDXX","PODD","RVTY","DGX","LH",
     "VTRS","MRNA","BIIB","ALNY","INCY","ILMN","CRL",
     "HCA","UHS","MOH","CNC","DVA","STE","HSIC",
     # removed: CTLT (acquired by Novo Holdings 2024), ANSS (acquired by SNPS 2024)
@@ -96,11 +102,11 @@ SP500 = [
     # ── Materials ───────────────────────────────────────────────────────────
     "LIN","APD","SHW","ECL","DD","DOW","NEM","FCX","NUE","STLD",
     "ALB","CF","MOS","FMC","IFF","PPG","RPM","VMC","MLM","SW",
-    "PKG","IP","SEE","AVY","SON","BALL","CCK","OLN","EMN","CE",
+    "PKG","IP","AVY","SON","BALL","CCK","OLN","EMN","CE",
     # removed: WRK (merged into SW / Smurfit WestRock 2024)
     # ── Real Estate ─────────────────────────────────────────────────────────
-    "AMT","PLD","CCI","EQIX","PSA","SPG","O","WELL","DLR","AVB",
-    "EQR","VTR","VICI","CBRE","ARE","BXP","KIM","REG","FRT","WPC",
+    "AMT","PLD","CCI","EQIX","PSA","SPG","O","WELL","DLR",
+    "VTR","VICI","CBRE","ARE","BXP","KIM","REG","FRT","WPC",
     "EXR","INVH","ESS","MAA","UDR","CPT","HST","DOC","SBAC","AMH",
     # removed: SBA (duplicate of SBAC — SBA Communications trades as SBAC)
     # ── Utilities ───────────────────────────────────────────────────────────

@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # Optional Fernet key for encrypting stored broker tokens. Blank = a key
     # file (broker.key) is generated next to the SQLite database on first use.
     broker_encryption_key: str = ""
+    # Optional Tiingo API key (free tier) — fallback source for the 20-year
+    # history backfill when yfinance returns an empty/truncated/holed series.
+    tiingo_api_key: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",

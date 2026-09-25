@@ -183,6 +183,14 @@ class HistoryArchive(Base):
     start_date = Column(String(10), nullable=False)   # earliest bar date covered (YYYY-MM-DD)
     end_date = Column(String(10), nullable=False)     # latest bar date covered
     fetched_at = Column(DateTime, default=utcnow)
+    # ── 20-year backfill bookkeeping (services/long_history.py) ───────────
+    # `requested_start` is how far back we ASKED for. A row whose first bar is
+    # later than that is still complete when the ticker simply listed later —
+    # that is how a young listing is told apart from an unfinished row.
+    source = Column(String(16), nullable=True)        # "yfinance" | "tiingo"
+    requested_start = Column(String(10), nullable=True)
+    issues = Column(Text, nullable=True)              # JSON list of problems found, if any
+    checked_at = Column(DateTime, nullable=True)
 
 
 class AICache(Base):

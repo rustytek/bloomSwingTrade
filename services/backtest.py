@@ -1,6 +1,8 @@
 import json
 import math
+from collections import OrderedDict
 from dataclasses import dataclass, field
+from bisect import bisect_left, bisect_right
 from datetime import date, datetime, timedelta, timezone
 from statistics import mean, pstdev
 
@@ -10,7 +12,9 @@ from sqlalchemy.orm import Session
 from database.models import PortfolioPosition, StockCache, WatchlistItem, WatchlistSnapshot
 from services.indicators import calc_ma, calc_adx, calc_atr
 from services.strategies import STRATEGIES
-from services.regime import QUADRANTS, QUADRANT_INFO, trend_strength_label, classify_quadrant
+from services.regime import (
+    QUADRANTS, QUADRANT_INFO, VIX_CRISIS, trend_strength_label, classify_quadrant,
+)
 from services.exits import (
     ExitRule, PartialProfitTaking, PositionState,
     advance, apply_partial, build_exit_rules, resolve_exit,
@@ -33,6 +37,26 @@ RISK_FREE_RATE = 0.05
 #                fixed-fractional sizing, a max-position-value cap, a finite
 #                number of slots, and per-bar exit evaluation between rebalances.
 MODES = ("rotation", "trade_plan")
+
+# ── Price history depth vs test window ────────────────────────────────────
+# `history` is which DATA the run can draw on:
+#   "5y"  — the rolling StockCache only.
+#   "20y" — services/long_history.py: the 20-year archive spliced onto the
+#           cache (falls back to the cache per ticker until the backfill ran).
+# The TEST WINDOW is separate and capped at MAX_WINDOW_YEARS for Strategy Lab
+# runs: pick where the 5 years sit with start_date (e.g. 2007 → 2012 to test
+# through 2008). The edge matrix passes max_window_years=None — its whole job
+# is to see every regime across all 20 years, and it runs in the job worker.
+HISTORY_MODES = ("5y", "20y")
+PERIOD_YEARS = {"1Y": 1, "2Y": 2, "5Y": 5}
+MAX_WINDOW_YEARS = 5
+# Bars loaded before the window starts, beyond the strategy warm-up, so the
+# ATR (Wilder-smoothed from the first bar it sees) has settled by day one.
+_PRE_WINDOW_EXTRA_BARS = 400
+
+# How many tickers' full bar series the simulation keeps loaded at once. The
+# scan holds ONE ticker at a time; only open positions need full bars later.
+_BAR_LRU_SIZE = 24
 
 # Defaults mirror services/today.py::build_today so a backtest and the live
 # dashboard size the same trade the same way when the user has saved nothing.
@@ -95,18 +119,34 @@ def _load_history(db: Session, ticker: str) -> list[dict]:
         bars = json.loads(row.history_json)
     except Exception:
         return []
+    return _normalize_bars(bars)
+
+
+_INF = (math.inf, -math.inf)
+
+
+def _num(value):
+    """_safe_float with a fast path: JSON already gives finite floats almost
+    always, and the per-field function call dominated a 20-year load."""
+    if type(value) is float and value == value and value not in _INF:
+        return value
+    return _safe_float(value)
+
+
+def _normalize_bars(bars: list[dict]) -> list[dict]:
     out = []
+    append = out.append
     for b in bars:
-        close = _safe_float(b.get("close"))
+        close = _num(b.get("close"))
         if not b.get("date") or not close:
             continue
         # Carry OHLC so high/low-dependent strategies (pullback, breakout) work.
         # Fall back to close when a legacy bar lacks high/low/open.
-        out.append({
+        append({
             "date": b.get("date"),
-            "open": _safe_float(b.get("open")) or close,
-            "high": _safe_float(b.get("high")) or close,
-            "low": _safe_float(b.get("low")) or close,
+            "open": _num(b.get("open")) or close,
+            "high": _num(b.get("high")) or close,
+            "low": _num(b.get("low")) or close,
             "close": close,
             "vol": _safe_float(b.get("vol")) or 0,
         })
@@ -201,11 +241,18 @@ def turnover_cost(holdings: set, prev_holdings: set, top_n: int, cost: float) ->
     return sym_diff / max(top_n, 1) * cost
 
 
+def _bar_date(bar: dict) -> str:
+    return bar["date"]
+
+
+# Bars are always date-sorted ascending, so these lookups binary-search instead
+# of scanning. The scan was ~25% of a universe backtest at 5 years and grows
+# with history length — at 20 years it would dominate.
 def _value_on_or_before(series: list[dict], date: str) -> tuple[int, float] | None:
-    for idx in range(len(series) - 1, -1, -1):
-        if series[idx]["date"] <= date:
-            return idx, series[idx]["close"]
-    return None
+    idx = bisect_right(series, date, key=_bar_date) - 1
+    if idx < 0:
+        return None
+    return idx, series[idx]["close"]
 
 
 def _week_start(value: date | None = None) -> date:
@@ -223,19 +270,17 @@ def _parse_iso_date(value: str | None) -> date | None:
 
 
 def _value_on_or_after(series: list[dict], day: date) -> tuple[int, float, str] | None:
-    target = day.isoformat()
-    for idx, point in enumerate(series):
-        if point["date"] >= target:
-            return idx, point["close"], point["date"]
-    return None
+    idx = bisect_left(series, day.isoformat(), key=_bar_date)
+    if idx >= len(series):
+        return None
+    return idx, series[idx]["close"], series[idx]["date"]
 
 
 def _latest_on_or_before(series: list[dict], day: date) -> tuple[int, float, str] | None:
-    target = day.isoformat()
-    for idx in range(len(series) - 1, -1, -1):
-        if series[idx]["date"] <= target:
-            return idx, series[idx]["close"], series[idx]["date"]
-    return None
+    idx = bisect_right(series, day.isoformat(), key=_bar_date) - 1
+    if idx < 0:
+        return None
+    return idx, series[idx]["close"], series[idx]["date"]
 
 
 def _rank_candidate(series: list[dict], idx: int) -> dict | None:
@@ -408,6 +453,45 @@ class OpenPosition:
     proceeds: float = 0.0           # cash booked back from partials + exit
     fills: list = field(default_factory=list)
     closed: bool = False
+    # (reason, kind) of an exit decided at a close, to be filled at the NEXT
+    # session's open. See DEFER_TO_NEXT_OPEN.
+    pending_exit: tuple | None = None
+
+
+# ── Fill convention (ML4T 3e §16.2: "same-bar execution ... fuses past and
+# future") ────────────────────────────────────────────────────────────────
+# Decisions are made from a bar's CLOSE; the fill happens LATER:
+#   * Entries: a day limit order at the top of the ATR entry zone, working the
+#     next session — exactly what the Weekly Plan tells you to place. Fills at
+#     min(open, limit) if that session trades down to the limit; no fill if it
+#     gaps above and never comes back (counted as a missed entry).
+#   * Exits decided at a close (time stop, regime exit): next session's open.
+#   * Stops / targets / partials are resting orders already working in the
+#     market, so they keep filling intrabar (stop first, gaps at the open).
+DEFER_TO_NEXT_OPEN = ("time", "regime")
+
+
+def next_day_limit_fill(bar: dict, limit: float, stop: float) -> tuple[float | None, str]:
+    """Fill a buy limit order placed after the prior close. Pure.
+
+    Returns (price, "") on a fill, or (None, why) when it does not fill:
+    "gap" — the session never traded down to the limit; "through_stop" — the
+    fill would be at/below the planned stop (the setup was invalidated
+    overnight; nobody enters a trade already past its stop)."""
+    if bar["low"] > limit:
+        return None, "gap"
+    price = min(bar["open"], limit)
+    if price <= stop:
+        return None, "through_stop"
+    return price, ""
+
+
+def _next_open(series: list[dict], idx: int, until: str | None = None) -> float | None:
+    """Open of the session after `idx` (optionally only if it is <= until)."""
+    j = idx + 1
+    if j < len(series) and (until is None or series[j]["date"] <= until):
+        return series[j]["open"]
+    return None
 
 
 def _bar_view(bar: dict, atr, quadrant) -> dict:
@@ -435,9 +519,24 @@ def walk_position(pos: OpenPosition, until_date: str) -> list[dict]:
     while not pos.closed and pos.idx + 1 < len(bars) and bars[pos.idx + 1]["date"] <= until_date:
         pos.idx += 1
         bar = bars[pos.idx]
+        if pos.pending_exit is not None:
+            # Decided at yesterday's close; executed at today's open.
+            reason, kind = pos.pending_exit
+            fills.append({
+                "date": bar["date"], "price": bar["open"], "shares": pos.state.shares,
+                "reason": f"{reason} (filled next open)", "kind": kind, "closed": True,
+            })
+            pos.closed = True
+            break
         atr = pos.atr[pos.idx] if pos.idx < len(pos.atr) else None
         view = _bar_view(bar, atr, pos.quadrants.get(bar["date"]))
         signal = resolve_exit(pos.rules, view, pos.state)
+        if signal is not None and signal.fraction >= 1.0 and signal.kind in DEFER_TO_NEXT_OPEN:
+            # Known only once this bar has closed: sell at the next open. Held
+            # overnight, so a gap moves the fill — as it would live.
+            pos.pending_exit = (signal.reason, signal.kind)
+            advance(pos.rules, view, pos.state)
+            continue
         if signal is not None:
             if signal.fraction < 1.0:
                 rule = next(
@@ -500,6 +599,75 @@ def _trade_record(pos: OpenPosition) -> dict:
     }
 
 
+class _BarLoader:
+    """Loads one ticker's normalized bars on demand, from the 5-year cache,
+    the 20-year archive+cache splice, or a preloaded dict (arbitrary-era
+    archive mode). A small LRU serves the simulation's re-reads of tickers it
+    actually buys; the scan itself never caches."""
+
+    def __init__(self, db: Session, history: str = "5y", preloaded: dict | None = None):
+        self.db = db
+        self.history = history
+        self.preloaded = preloaded
+        # (window_start, bars_to_keep_before_it) — set once the window is known.
+        # Deterministic, so the scan and the simulation see identical series
+        # and a stored bar index means the same bar in both.
+        self.trim_before: tuple[str, int] | None = None
+        self._lru: "OrderedDict[str, list[dict]]" = OrderedDict()
+
+    def load_with_meta(self, ticker: str) -> tuple[list[dict], dict | None]:
+        if self.preloaded is not None:
+            return self.preloaded.get(ticker, []), None
+        if self.history == "20y":
+            from services.long_history import load_long_bars
+            trim = self.trim_before if ticker != "SPY" else None
+            # Trimming the ARCHIVE before the splice avoids rebasing 20 years
+            # of bars to test a 5-year window (the dominant cost when profiled).
+            raw, meta = load_long_bars(self.db, ticker, trim_before=trim)
+            if trim:
+                start, keep = trim
+                cut = bisect_left(raw, start, key=_bar_date) - keep
+                if cut > 0:
+                    raw = raw[cut:]
+            return _normalize_bars(raw), meta
+        return _load_history(self.db, ticker), None
+
+    def load(self, ticker: str) -> list[dict]:
+        hit = self._lru.get(ticker)
+        if hit is not None:
+            self._lru.move_to_end(ticker)
+            return hit
+        bars, _ = self.load_with_meta(ticker)
+        self._lru[ticker] = bars
+        if len(self._lru) > _BAR_LRU_SIZE:
+            self._lru.popitem(last=False)
+        return bars
+
+
+def _keep_top(lst: list, item, k: int, final: bool = False) -> None:
+    """Append `item` and keep only the best `k` by rank score.
+
+    Pruning is a STABLE sort (reverse=True keeps equal scores in insertion
+    order), and tickers are appended in the same order the old all-in-memory
+    loop visited them, so the kept top-k is exactly what sorting the full list
+    would have produced — ties included."""
+    if item is not None:
+        lst.append(item)
+    if final or len(lst) > 4 * k:
+        lst.sort(key=lambda it: it[1]["score"], reverse=True)
+        del lst[k:]
+
+
+def _load_vix(db: Session) -> dict[str, float]:
+    """date -> VIX close from the archive; {} when there is none (tests, or no
+    backfill yet), which leaves the realized-volatility proxy in charge."""
+    try:
+        from services.long_history import load_vix_by_date
+        return load_vix_by_date(db)
+    except Exception:  # noqa: BLE001 — missing table/rows must not break a backtest
+        return {}
+
+
 def data_coverage(loaded: dict[str, list[dict]], used: dict[str, list[dict]],
                   spy: list[dict], warmup: int, rebalance_dates: list[str]) -> dict:
     """What price data the run actually had — so a thin or holed dataset is
@@ -513,54 +681,91 @@ def data_coverage(loaded: dict[str, list[dict]], used: dict[str, list[dict]],
     - `ends_early`: tickers whose history stops > 5 SPY sessions before SPY's
       last bar (stale cache or delisted), so they vanish from the test.
     """
-    spy_dates = [b["date"] for b in spy]
-    spy_last = spy_dates[-1] if spy_dates else None
-    rebal = set(rebalance_dates)
-    dropped = sorted(({"ticker": t, "bars": len(b)} for t, b in loaded.items() if t not in used),
-                     key=lambda d: (d["bars"], d["ticker"]))
-    missing_bars = missing_on_rebalance = 0
-    gap_tickers: list[dict] = []
-    ends_early: list[dict] = []
-    for t, bars in used.items():
+    acc = _Coverage(spy, warmup, rebalance_dates)
+    for t, bars in loaded.items():
+        acc.add(t, bars, t in used)
+    return acc.result()
+
+
+class _Coverage:
+    """Streaming form of data_coverage(): fed one ticker at a time by the
+    per-ticker scan, so the report never needs every history in memory."""
+
+    def __init__(self, spy: list[dict], warmup: int, rebalance_dates: list[str]):
+        self.spy_dates = [b["date"] for b in spy]
+        self.spy_last = self.spy_dates[-1] if self.spy_dates else None
+        self.rebal = set(rebalance_dates)
+        self.rebalance_dates = rebalance_dates
+        self.warmup = warmup
+        self.requested = 0
+        self.used = 0
+        self.dropped: list[dict] = []
+        self.missing_bars = 0
+        self.missing_on_rebalance = 0
+        self.gap_tickers: list[dict] = []
+        self.ends_early: list[dict] = []
+        self.spliced = 0
+        self.splice_problems: list[dict] = []
+
+    def add(self, ticker: str, bars: list[dict], used: bool, splice_meta: dict | None = None) -> None:
+        self.requested += 1
+        if splice_meta is not None:
+            if splice_meta.get("used_archive_bars"):
+                self.spliced += 1
+            elif any(w in (splice_meta.get("reason") or "") for w in ("disagree", "cannot rebase")) \
+                    and len(self.splice_problems) < 25:
+                # Only genuine join failures. "Archive adds nothing" is normal:
+                # young listings, and recent windows whose archive was trimmed.
+                self.splice_problems.append({"ticker": ticker, "reason": splice_meta["reason"]})
+        if not used:
+            self.dropped.append({"ticker": ticker, "bars": len(bars)})
+            return
+        self.used += 1
         if not bars:
-            continue
+            return
         have = {b["date"] for b in bars}
         lo, hi = bars[0]["date"], bars[-1]["date"]
-        miss = [d for d in spy_dates if lo <= d <= hi and d not in have]
+        span = self.spy_dates[bisect_left(self.spy_dates, lo):bisect_right(self.spy_dates, hi)]
+        miss = [d for d in span if d not in have]
         if miss:
-            missing_bars += len(miss)
-            on_rebal = sum(1 for d in miss if d in rebal)
-            missing_on_rebalance += on_rebal
-            gap_tickers.append({"ticker": t, "missing": len(miss), "on_rebalance_dates": on_rebal,
-                                "first_missing": miss[0]})
-        if spy_last and hi < spy_last:
-            behind = sum(1 for d in spy_dates if d > hi)
+            self.missing_bars += len(miss)
+            on_rebal = sum(1 for d in miss if d in self.rebal)
+            self.missing_on_rebalance += on_rebal
+            self.gap_tickers.append({"ticker": ticker, "missing": len(miss),
+                                     "on_rebalance_dates": on_rebal, "first_missing": miss[0]})
+        if self.spy_last and hi < self.spy_last:
+            behind = len(self.spy_dates) - bisect_right(self.spy_dates, hi)
             if behind > 5:
-                ends_early.append({"ticker": t, "last_bar": hi, "sessions_behind": behind})
-    gap_tickers.sort(key=lambda g: (-g["missing"], g["ticker"]))
-    ends_early.sort(key=lambda e: (-e["sessions_behind"], e["ticker"]))
-    first = rebalance_dates[0] if rebalance_dates else None
-    last = rebalance_dates[-1] if rebalance_dates else None
-    years = None
-    if first and last:
-        years = round((date.fromisoformat(last) - date.fromisoformat(first)).days / 365.25, 1)
-    return {
-        "history_first_date": spy_dates[0] if spy_dates else None,
-        "history_last_date": spy_last,
-        "warmup_bars": warmup,
-        "test_first_date": first,
-        "test_last_date": last,
-        "test_years": years,
-        "tickers_requested": len(loaded),
-        "tickers_used": len(used),
-        "dropped": dropped,
-        "tickers_with_gaps": len(gap_tickers),
-        "missing_bars": missing_bars,
-        "missing_on_rebalance_dates": missing_on_rebalance,
-        "gap_examples": gap_tickers[:10],
-        "ends_early": ends_early[:25],
-        "ends_early_count": len(ends_early),
-    }
+                self.ends_early.append({"ticker": ticker, "last_bar": hi, "sessions_behind": behind})
+
+    def result(self) -> dict:
+        dropped = sorted(self.dropped, key=lambda d: (d["bars"], d["ticker"]))
+        gap_tickers = sorted(self.gap_tickers, key=lambda g: (-g["missing"], g["ticker"]))
+        ends_early = sorted(self.ends_early, key=lambda e: (-e["sessions_behind"], e["ticker"]))
+        first = self.rebalance_dates[0] if self.rebalance_dates else None
+        last = self.rebalance_dates[-1] if self.rebalance_dates else None
+        years = None
+        if first and last:
+            years = round((date.fromisoformat(last) - date.fromisoformat(first)).days / 365.25, 1)
+        return {
+            "history_first_date": self.spy_dates[0] if self.spy_dates else None,
+            "history_last_date": self.spy_last,
+            "warmup_bars": self.warmup,
+            "test_first_date": first,
+            "test_last_date": last,
+            "test_years": years,
+            "tickers_requested": self.requested,
+            "tickers_used": self.used,
+            "dropped": dropped,
+            "tickers_with_gaps": len(gap_tickers),
+            "missing_bars": self.missing_bars,
+            "missing_on_rebalance_dates": self.missing_on_rebalance,
+            "gap_examples": gap_tickers[:10],
+            "ends_early": ends_early[:25],
+            "ends_early_count": len(ends_early),
+            "tickers_spliced_with_archive": self.spliced,
+            "splice_problems": self.splice_problems,
+        }
 
 
 def data_quality_caveats(dq: dict) -> list[dict]:
@@ -635,7 +840,15 @@ def run_walk_forward_backtest(
     atr_stop_mult: float | None = None,
     r_multiple: float | None = None,
     exit_rules: str | list[str] | None = None,
+    history: str = "5y",
+    progress=None,
+    max_window_years: float | None = MAX_WINDOW_YEARS,
 ) -> dict:
+    """Walk-forward backtest. `history="20y"` draws on the 20-year archive
+    spliced onto the cache (services/long_history.py). The tested window is
+    capped at `max_window_years` (None = uncapped — the edge matrix, which
+    runs in the job worker). `progress(fraction, detail)` is an optional
+    heartbeat callback."""
     strategy = STRATEGIES.get(strategy_id) or STRATEGIES["momentum_rotation"]
     strategy_meta = {"id": strategy.id, "name": strategy.name}
     mode = mode if mode in MODES else "rotation"
@@ -691,9 +904,23 @@ def run_walk_forward_backtest(
 
     # Warm-up: enough bars for both the regime MA and the strategy's own filters
     warmup = max(regime_ma, strategy.min_bars) + 5
+    history = history if history in HISTORY_MODES else "5y"
+    if history != "5y":
+        # Only non-default depths appear in `parameters`, so a default run's
+        # response stays byte-for-byte what it has always been.
+        params["history"] = history
+
+    def _tick(fraction: float, detail: str) -> None:
+        if progress is None:
+            return
+        try:
+            progress(fraction, detail)
+        except Exception:  # noqa: BLE001 — progress must never sink a run
+            pass
 
     tickers = _source_tickers(db, user_id, source)
 
+    preloaded = None
     if archive:
         # Arbitrary-era mode: fetch/reuse a long-history archive for the exact
         # [start_date, end_date] window (plus a warmup buffer before it).
@@ -708,23 +935,22 @@ def run_walk_forward_backtest(
             load_archived_histories, ensure_archive, shift_days, WARMUP_BUFFER_DAYS,
         )
         buf_start = shift_days(start_date, -WARMUP_BUFFER_DAYS)
-        histories = load_archived_histories(db, tickers, buf_start, end_date)
+        preloaded = load_archived_histories(db, tickers, buf_start, end_date)
         spy = ensure_archive(db, "SPY", buf_start, end_date)
-    else:
-        histories = {ticker: _load_history(db, ticker) for ticker in tickers}
-        spy = _load_history(db, "SPY")
+    loader = _BarLoader(db, history, preloaded)
+    if not archive:
+        spy = loader.load_with_meta("SPY")[0]
+    vix_by_date = _load_vix(db)
 
-    loaded_histories = histories
-    histories = {ticker: bars for ticker, bars in histories.items() if len(bars) >= warmup}
     dates = [b["date"] for b in spy] if len(spy) >= warmup else []
     dates = dates[warmup:: max(1, rebalance_days)]
 
-    # Restrict to the requested window: a period preset (1Y/2Y/all) and/or a
-    # custom start date. A custom start with a period bounds both ends
+    # Restrict to the requested window: a period preset (1Y/2Y/5Y/10Y/20Y/all)
+    # and/or a custom start date. A custom start with a period bounds both ends
     # (start → start+period); a period alone uses the most recent window.
     full_dates = [b["date"] for b in spy]
     latest = full_dates[-1] if full_dates else None
-    years = {"1Y": 1, "2Y": 2}.get((period or "all").upper())
+    years = PERIOD_YEARS.get((period or "all").upper())
 
     def _shift_year(iso: str, yrs: int) -> str:
         from datetime import date as _d
@@ -743,26 +969,137 @@ def run_walk_forward_backtest(
         win_start = _shift_year(latest, -years)
     if end_date:                    # explicit end overrides the period-derived end
         win_end = end_date
+    if max_window_years:
+        # Never test more than max_window_years: anchor at the start when one
+        # is given, else at the end (or the latest bar).
+        cap = int(max_window_years)
+        if win_start:
+            limit = _shift_year(win_start, cap)
+            if not win_end or win_end > limit:
+                win_end = limit
+        else:
+            anchor = win_end or latest
+            if anchor:
+                win_start = _shift_year(anchor, -cap)
     if win_start:
         dates = [d for d in dates if d >= win_start]
     if win_end:
         dates = [d for d in dates if d <= win_end]
+    if win_start and history == "20y" and preloaded is None:
+        # Load each ticker only from shortly before the window: warm-up plus
+        # settling bars. Twenty years of bars for a five-year window would
+        # quadruple the parse cost for nothing.
+        loader.trim_before = (win_start, warmup + _PRE_WINDOW_EXTRA_BARS)
 
-    if len(dates) < 4 or not histories:
+    have_window = len(dates) >= 4
+    if have_window:
+        spy_closes = [b["close"] for b in spy]
+        spy_ma = calc_ma(spy_closes, regime_ma)
+        spy_ma200 = calc_ma(spy_closes, 200)
+        adx_full = calc_adx(
+            [b["high"] for b in spy], [b["low"] for b in spy], spy_closes, 14
+        )["series"]
+        # Rolling 20-day realized volatility — the VIX proxy classify_regime()
+        # falls back to, used on any date without a real VIX close.
+        vol20 = [None] * len(spy_closes)
+        for i in range(20, len(spy_closes)):
+            window = spy_closes[i - 20: i + 1]
+            rets = [(window[j] / window[j - 1] - 1) for j in range(1, len(window))]
+            if rets:
+                vol20[i] = (sum(r * r for r in rets) / len(rets)) ** 0.5 * (252 ** 0.5) * 100
+
+        # The SPY>MA entry gate depends only on SPY, so it is known per date
+        # before any ticker is scanned — and no candidate is computed on a
+        # date where nothing could be bought anyway.
+        regime_ok_at: dict[str, bool] = {}
+        for d in dates:
+            p = _value_on_or_before(spy, d)
+            regime_ok_at[d] = bool(p) and (
+                not spy_regime or (spy_ma[p[0]] is not None and p[1] > spy_ma[p[0]]))
+
+    def _crisis_at(idx: int) -> bool:
+        """Real VIX (live rule: VIX >= VIX_CRISIS) when the archive has that
+        date, else the realized-volatility proxy — never look-ahead."""
+        v = vix_by_date.get(spy[idx]["date"]) if vix_by_date else None
+        if v is not None:
+            return v >= VIX_CRISIS
+        return vol20[idx] is not None and vol20[idx] >= 22.0
+
+    # ── SCAN: one ticker in memory at a time ─────────────────────────────
+    # strategy.candidate(bars, idx) reads only that ticker's bars[:idx+1], so
+    # every candidate can be computed ticker-by-ticker up front with results
+    # identical to computing them date-by-date — without holding the whole
+    # universe (≈1.25 GB at 20 years) in memory. Per date only the top
+    # `k_keep` are kept: rotation takes the top k_sel; trade_plan takes the
+    # top k_sel after skipping names already held (at most max_positions).
+    k_sel = max(1, min(top_n, 20))
+    k_keep = k_sel if mode != "trade_plan" else k_sel + int(max_positions or 0)
+    cands: dict[str, list] = {d: [] for d in dates}
+    coverage = _Coverage(spy, warmup, dates)
+    used_tickers: list[str] = []
+    scan_list = list(preloaded.keys()) if preloaded is not None else tickers
+    pairs = list(zip(dates, dates[1:]))
+    for n, ticker in enumerate(scan_list):
+        if n % 10 == 0:
+            _tick(0.03 + 0.85 * n / max(1, len(scan_list)),
+                  f"Scanning {ticker} ({n + 1}/{len(scan_list)})")
+        bars, splice_meta = loader.load_with_meta(ticker)
+        usable = len(bars) >= warmup
+        coverage.add(ticker, bars, usable, splice_meta)
+        if not usable:
+            continue
+        used_tickers.append(ticker)
+        if not have_window or not strategy.applies_to(ticker):
+            continue
+        if mode == "trade_plan":
+            for start in dates:
+                if not regime_ok_at.get(start):
+                    continue
+                point = _value_on_or_before(bars, start)
+                # Require a bar ON the rebalance date: filling at a stale
+                # close from an earlier session would be a fabricated price.
+                if not point or bars[point[0]]["date"] != start:
+                    continue
+                rank = strategy.candidate(bars, point[0])
+                if rank:
+                    _keep_top(cands[start], (ticker, rank, point[0]), k_keep)
+        else:
+            for start, end in pairs:
+                if not regime_ok_at.get(start):
+                    continue
+                start_point = _value_on_or_before(bars, start)
+                end_point = _value_on_or_before(bars, end)
+                if not start_point or not end_point or end_point[0] <= start_point[0]:
+                    continue
+                rank = strategy.candidate(bars, start_point[0])
+                if rank:
+                    # Traded at the open of the session AFTER each decision
+                    # date (never at the close the decision was made from).
+                    # The final period has no next session: marked at its close.
+                    buy_px = _next_open(bars, start_point[0], until=end)
+                    if buy_px is None:
+                        continue
+                    sell_px = _next_open(bars, end_point[0]) or end_point[1]
+                    _keep_top(cands[start], (ticker, rank, buy_px, sell_px), k_keep)
+    for lst in cands.values():
+        _keep_top(lst, None, k_keep, final=True)
+    _tick(0.9, "Simulating…")
+
+    if not have_window or not used_tickers:
         return {
             "strategy": strategy_meta,
             "source": source,
             "parameters": params,
-            "available_tickers": sorted(histories),
+            "available_tickers": sorted(used_tickers),
             "equity": [],
             "benchmark": [],
             "trades": [],
             "metrics": {},
             "benchmark_metrics": {},
-            "data_quality": data_coverage(loaded_histories, histories, spy, warmup, dates),
+            "data_quality": coverage.result(),
             "notes": [
                 f"Need cached SPY history and at least {warmup} bars for selected tickers "
-                f"(SPY has {len(spy)}; {len(histories)} of {len(loaded_histories)} tickers qualify).",
+                f"(SPY has {len(spy)}; {len(used_tickers)} of {coverage.requested} tickers qualify).",
                 "Tip: use the Full Universe source after the 5-year history backfill completes.",
             ],
         }
@@ -773,27 +1110,11 @@ def run_walk_forward_backtest(
     prev_holdings: set[str] = set()
     cost = cost_bps / 10000
 
-    spy_closes = [b["close"] for b in spy]
-    spy_ma = calc_ma(spy_closes, regime_ma)
-    spy_ma200 = calc_ma(spy_closes, 200)
-    adx_full = calc_adx(
-        [b["high"] for b in spy], [b["low"] for b in spy], spy_closes, 14
-    )["series"]
-    # Rolling 20-day realized volatility — the same VIX-proxy classify_regime()
-    # falls back to, precomputed once so per-period regime tagging is O(1).
-    vol20 = [None] * len(spy_closes)
-    for i in range(20, len(spy_closes)):
-        window = spy_closes[i - 20: i + 1]
-        rets = [(window[j] / window[j - 1] - 1) for j in range(1, len(window))]
-        if rets:
-            vol20[i] = (sum(r * r for r in rets) / len(rets)) ** 0.5 * (252 ** 0.5) * 100
-
     def _quadrant_at(idx: int) -> tuple[str, float | None]:
         """Regime quadrant + ADX at a SPY bar index (no look-ahead: index only)."""
         adx_v = adx_full[idx]["adx"] if adx_full[idx] else None
         above = spy_ma200[idx] is not None and spy_closes[idx] > spy_ma200[idx]
-        crisis = vol20[idx] is not None and vol20[idx] >= 22.0
-        return classify_quadrant(trend_strength_label(adx_v), above, crisis), adx_v
+        return classify_quadrant(trend_strength_label(adx_v), above, _crisis_at(idx)), adx_v
 
     trade_log: list[dict] = []
     tp_stats: dict = {}
@@ -810,7 +1131,8 @@ def run_walk_forward_backtest(
         def _atr_for(ticker: str, bars: list[dict]) -> list:
             series = atr_cache.get(ticker)
             if series is None:
-                # ONCE per ticker for the whole run — never per bar.
+                # Once per held ticker — never per bar. Dropped when the
+                # position closes so memory tracks the open book only.
                 series = calc_atr([b["high"] for b in bars], [b["low"] for b in bars],
                                   [b["close"] for b in bars], ATR_PERIOD)
                 atr_cache[ticker] = series
@@ -821,6 +1143,9 @@ def run_walk_forward_backtest(
         skipped_full_book = 0
         skipped_no_cash = 0
         skipped_no_plan = 0
+        missed_gap = 0            # next session never traded down to the limit
+        missed_through_stop = 0   # would have filled at/below the planned stop
+        missed_no_session = 0     # no next session inside the test window
 
         for i, start in enumerate(dates):
             spy_start = _value_on_or_before(spy, start)
@@ -830,33 +1155,22 @@ def run_walk_forward_backtest(
             regime_ok = not spy_regime or (spy_ma[spy_idx] is not None and spy_start_px > spy_ma[spy_idx])
             quadrant, adx_val = _quadrant_at(spy_idx)
 
-            # ── 1. ENTRIES at the close of `start`.
+            # ── 1. ORDERS decided at the close of `start`.
             # The decision uses strategy.candidate(bars, idx), which only reads
-            # bars[:idx+1], and the fill is THAT bar's close. Nothing later is
-            # visible at this point in the simulation.
+            # bars[:idx+1]. Nothing is FILLED here: each pick becomes a day
+            # limit order for the next session (see DEFER_TO_NEXT_OPEN notes).
             equity_now = cash + sum(
                 p.state.shares * p.bars[p.idx]["close"] for p in open_positions.values()
             )
+            pending: list[tuple] = []
             if regime_ok and len(open_positions) < max_positions:
-                ranked = []
-                for ticker, bars in histories.items():
-                    if ticker in open_positions or not strategy.applies_to(ticker):
-                        continue
-                    point = _value_on_or_before(bars, start)
-                    # Require a bar ON the rebalance date: filling at a stale
-                    # close from an earlier session would be a fabricated price.
-                    if not point or bars[point[0]]["date"] != start:
-                        continue
-                    rank = strategy.candidate(bars, point[0])
-                    if rank:
-                        ranked.append((ticker, rank, point[0]))
-                ranked.sort(key=lambda item: item[1]["score"], reverse=True)
+                ranked = [c for c in cands.get(start, ()) if c[0] not in open_positions]
 
-                for ticker, rank, idx in ranked[: max(1, min(top_n, 20))]:
-                    if len(open_positions) >= max_positions:
+                for ticker, rank, idx in ranked[:k_sel]:
+                    if len(open_positions) + len(pending) >= max_positions:
                         skipped_full_book += 1
                         continue
-                    bars = histories[ticker]
+                    bars = loader.load(ticker)
                     plan = build_trade_plan(
                         bars[: idx + 1], equity_now, risk_pct,
                         bars[idx]["close"], atr_stop_mult, r_multiple,
@@ -864,57 +1178,86 @@ def run_walk_forward_backtest(
                     if not plan or not plan.get("shares"):
                         skipped_no_plan += 1
                         continue
-                    entry_px = float(plan["entry"])
-                    stop_px = float(plan["stop"])
-                    risk_ps = entry_px - stop_px
-                    if risk_ps <= 0 or entry_px <= 0:
-                        skipped_no_plan += 1
-                        continue
-                    shares = int(plan["shares"])
-                    outlay = shares * entry_px * (1 + cost)
-                    if outlay > cash:
-                        shares = int(cash / (entry_px * (1 + cost)))
-                        if shares < 1:
-                            skipped_no_cash += 1
-                            continue
-                        outlay = shares * entry_px * (1 + cost)
-                    cash -= outlay
-
-                    atr_series = _atr_for(ticker, bars)
-                    rules = build_exit_rules(
-                        exit_rules, atr_mult=atr_stop_mult, regimes=strategy.regimes,
-                        # Lets the time stop default to THIS strategy's own
-                        # horizon_days instead of a flat 20 bars.
-                        strategy_id=strategy.id,
-                    )
-                    state = PositionState(
-                        ticker=ticker, entry_date=start, entry_price=entry_px,
-                        entry_idx=idx, shares=shares, initial_shares=shares,
-                        stop=stop_px, initial_stop=stop_px, risk_per_share=risk_ps,
-                        target=float(plan["target"]), strategy=strategy.id,
-                    )
-                    pos = OpenPosition(
-                        ticker=ticker, bars=bars, atr=atr_series,
-                        quadrants=quadrants_by_date, state=state, rules=rules,
-                        idx=idx, entry_value=outlay,
-                    )
-                    # Seed path-dependent rule state (highest close, trail level)
-                    # from the ENTRY bar, so the level checked tomorrow was
-                    # derived from data available today.
-                    advance(rules, _bar_view(bars[idx], atr_series[idx] if idx < len(atr_series) else None,
-                                             quadrants_by_date.get(start)), state)
-                    open_positions[ticker] = pos
+                    pending.append((ticker, idx, plan, bars))
 
             end = dates[i + 1] if i + 1 < len(dates) else None
             if end is None:
+                # Orders placed on the last decision date have no next session
+                # inside the test; they never fill.
+                missed_no_session += len(pending)
                 break
             spy_end = _value_on_or_before(spy, end)
             if not spy_end:
                 continue
             _, spy_end_px = spy_end
 
-            # ── 2. Walk every open position bar-by-bar through `end`.
             exits_this_period = 0
+            # ── 2a. FILL yesterday's orders in the next session.
+            for ticker, idx, plan, bars in pending:
+                fidx = idx + 1
+                if fidx >= len(bars) or bars[fidx]["date"] > end:
+                    missed_no_session += 1
+                    continue
+                bar = bars[fidx]
+                stop_px = float(plan["stop"])
+                entry_px, why = next_day_limit_fill(bar, float(plan["entry_zone"][1]), stop_px)
+                if entry_px is None:
+                    if why == "gap":
+                        missed_gap += 1
+                    else:
+                        missed_through_stop += 1
+                    continue
+                risk_ps = entry_px - stop_px
+                shares = int(plan["shares"])
+                outlay = shares * entry_px * (1 + cost)
+                if outlay > cash:
+                    shares = int(cash / (entry_px * (1 + cost)))
+                    if shares < 1:
+                        skipped_no_cash += 1
+                        continue
+                    outlay = shares * entry_px * (1 + cost)
+                cash -= outlay
+
+                atr_series = _atr_for(ticker, bars)
+                rules = build_exit_rules(
+                    exit_rules, atr_mult=atr_stop_mult, regimes=strategy.regimes,
+                    # Lets the time stop default to THIS strategy's own
+                    # horizon_days instead of a flat 20 bars.
+                    strategy_id=strategy.id,
+                )
+                state = PositionState(
+                    ticker=ticker, entry_date=bar["date"], entry_price=entry_px,
+                    entry_idx=fidx, shares=shares, initial_shares=shares,
+                    stop=stop_px, initial_stop=stop_px, risk_per_share=risk_ps,
+                    target=float(plan["target"]), strategy=strategy.id,
+                )
+                pos = OpenPosition(
+                    ticker=ticker, bars=bars, atr=atr_series,
+                    quadrants=quadrants_by_date, state=state, rules=rules,
+                    idx=fidx, entry_value=outlay,
+                )
+                if bar["low"] <= stop_px:
+                    # The rest of the fill session traded through the stop. The
+                    # intrabar order is unknown, so assume the worst: stopped
+                    # out the same day, and no same-day target credit.
+                    fill = {"date": bar["date"], "price": stop_px, "shares": shares,
+                            "reason": "stop hit on the entry day", "kind": "stop", "closed": True}
+                    pos.fills.append(fill)
+                    pos.closed = True
+                    proceeds = shares * stop_px * (1 - cost)
+                    cash += proceeds
+                    pos.proceeds += proceeds
+                    trade_log.append(_trade_record(pos))
+                    exits_this_period += 1
+                    continue
+                # Seed path-dependent rule state (highest close, trail level)
+                # from the ENTRY bar, so the level checked tomorrow was
+                # derived from data available today.
+                advance(rules, _bar_view(bar, atr_series[fidx] if fidx < len(atr_series) else None,
+                                         quadrants_by_date.get(bar["date"])), state)
+                open_positions[ticker] = pos
+
+            # ── 2b. Walk every open position bar-by-bar through `end`.
             for ticker, pos in list(open_positions.items()):
                 for fill in walk_position(pos, end):
                     proceeds = fill["shares"] * fill["price"] * (1 - cost)
@@ -923,6 +1266,7 @@ def run_walk_forward_backtest(
                 if pos.closed:
                     trade_log.append(_trade_record(pos))
                     open_positions.pop(ticker, None)
+                    atr_cache.pop(ticker, None)
                     exits_this_period += 1
 
             # ── 3. Mark to market.
@@ -980,13 +1324,17 @@ def run_walk_forward_backtest(
             "signals_skipped_full_book": skipped_full_book,
             "signals_skipped_no_cash": skipped_no_cash,
             "signals_skipped_no_plan": skipped_no_plan,
+            # Orders placed but never filled under the next-session limit rule.
+            "entries_missed_gap": missed_gap,
+            "entries_missed_through_stop": missed_through_stop,
+            "entries_missed_no_session": missed_no_session,
             "avg_bars_held": round(mean([t["bars_held"] for t in trade_log]), 1) if trade_log else None,
             "ending_cash_pct": round(cash / (equity[-1]["value"] * account_size) * 100, 1)
                                if equity and equity[-1]["value"] else None,
         }
         rebalance_windows: list = []
     else:
-        rebalance_windows = list(zip(dates, dates[1:]))
+        rebalance_windows = pairs
 
     for start, end in rebalance_windows:
         spy_start = _value_on_or_before(spy, start)
@@ -994,28 +1342,19 @@ def run_walk_forward_backtest(
         if not spy_start or not spy_end:
             continue
         spy_idx, spy_start_px = spy_start
-        _, spy_end_px = spy_end
+        spy_end_idx, spy_end_px = spy_end
+        # Decisions read the close; the SPY GATE is a decision, so it keeps the
+        # close. Returns (strategy and benchmark alike) run open-to-open.
         regime_ok = not spy_regime or (spy_ma[spy_idx] is not None and spy_start_px > spy_ma[spy_idx])
+        spy_buy = _next_open(spy, spy_idx, until=end) or spy_start_px
+        spy_sell = _next_open(spy, spy_end_idx) or spy_end_px
 
         adx_val = adx_full[spy_idx]["adx"] if adx_full[spy_idx] else None
         above_200_here = spy_ma200[spy_idx] is not None and spy_start_px > spy_ma200[spy_idx]
-        crisis_vol_here = vol20[spy_idx] is not None and vol20[spy_idx] >= 22.0
-        quadrant = classify_quadrant(trend_strength_label(adx_val), above_200_here, crisis_vol_here)
+        quadrant = classify_quadrant(trend_strength_label(adx_val), above_200_here, _crisis_at(spy_idx))
 
-        ranked = []
-        if regime_ok:
-            for ticker, bars in histories.items():
-                if not strategy.applies_to(ticker):
-                    continue
-                start_point = _value_on_or_before(bars, start)
-                end_point = _value_on_or_before(bars, end)
-                if not start_point or not end_point or end_point[0] <= start_point[0]:
-                    continue
-                rank = strategy.candidate(bars, start_point[0])
-                if rank:
-                    ranked.append((ticker, rank, start_point[1], end_point[1]))
-        ranked.sort(key=lambda item: item[1]["score"], reverse=True)
-        selected = ranked[: max(1, min(top_n, 20))]
+        ranked = cands.get(start, []) if regime_ok else []
+        selected = ranked[:k_sel]
         holdings = {t for t, *_ in selected}
 
         period_ret = 0.0
@@ -1023,10 +1362,10 @@ def run_walk_forward_backtest(
             period_ret = mean((end_px / start_px - 1) for _, _, start_px, end_px in selected)
         # Round-trip turnover cost, uncapped — see turnover_cost() above.
         period_ret -= turnover_cost(holdings, prev_holdings, top_n, cost)
-        spy_ret = (spy_end_px / spy_start_px - 1) if spy_start_px else 0.0
+        spy_ret = (spy_sell / spy_buy - 1) if spy_buy else 0.0
 
         equity.append({"date": end, "value": round(equity[-1]["value"] * (1 + period_ret), 6)})
-        benchmark.append({"date": end, "value": round(benchmark[-1]["value"] * (spy_end_px / spy_start_px), 6)})
+        benchmark.append({"date": end, "value": round(benchmark[-1]["value"] * (spy_sell / spy_buy), 6)})
         trades.append({
             "date": start,
             "holdings": [
@@ -1141,7 +1480,36 @@ def run_walk_forward_backtest(
                 "deliberately pessimistic; the opposite assumption manufactures winners."
             ),
         })
-    data_quality = data_coverage(loaded_histories, histories, spy, warmup, dates)
+    caveats.append({
+        "id": "fill_convention",
+        "severity": "info",
+        "title": "Trades fill in the session AFTER the decision",
+        "detail": (
+            "Signals are computed from a day's close; nothing is bought or sold at that same "
+            "close. "
+            + ("Rotation holdings are bought and sold at the next session's open (the SPY "
+               "benchmark uses the same open-to-open convention)."
+               if mode == "rotation" else
+               "Entries are day limit orders at the top of the ATR entry zone for the next "
+               "session — filled at the lower of the open and the limit, and not filled at all "
+               "if the stock gaps above it. Time-stop and regime exits sell at the next open; "
+               "stops and targets are resting orders and fill intrabar.")
+        ),
+    })
+    if mode == "trade_plan" and metrics.get("entries_missed_gap"):
+        missed = metrics["entries_missed_gap"] + metrics.get("entries_missed_through_stop", 0)
+        caveats.append({
+            "id": "entries_missed",
+            "severity": "info",
+            "title": f"{missed} order(s) never filled",
+            "detail": (
+                f"{metrics['entries_missed_gap']} gapped above the limit and never traded back "
+                f"down to it; {metrics.get('entries_missed_through_stop', 0)} would have filled at "
+                "or below the planned stop. A backtest that fills every signal at the signal "
+                "close counts these as trades — they are the optimism this convention removes."
+            ),
+        })
+    data_quality = coverage.result()
     caveats.extend(data_quality_caveats(data_quality))
     if metrics.get("trades_taken") is not None and metrics["trades_taken"] < MIN_PERIODS_LOW_CONFIDENCE:
         caveats.append({
@@ -1158,7 +1526,7 @@ def run_walk_forward_backtest(
         "strategy": strategy_meta,
         "source": source,
         "parameters": params,
-        "available_tickers": sorted(histories),
+        "available_tickers": sorted(used_tickers),
         "equity": equity,
         "benchmark": benchmark,
         "trades": trades,
@@ -1174,8 +1542,9 @@ def run_walk_forward_backtest(
             "Hypothetical backtest using cached adjusted daily closes only.",
             f"Strategy: {strategy.name}. {strategy.description}",
             "Modeled as an equal-weight top-N rotation rebalanced on the chosen cadence "
-            "with turnover cost and an optional SPY regime filter. ATR stops/targets are "
-            "NOT simulated intrabar — live trade plans add those on top."
+            "with turnover cost and an optional SPY regime filter, traded at the open of the "
+            "session after each rebalance decision. ATR stops/targets are NOT simulated "
+            "intrabar — live trade plans add those on top."
             if mode == "rotation" else
             "Modeled as the live trade plan: fixed-fractional sizing off current equity, "
             f"{atr_stop_mult}x ATR stop, {r_multiple}R target, a max-position-value cap, at "

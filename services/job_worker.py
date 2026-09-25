@@ -222,10 +222,27 @@ def _daily_report(db, user_id: int, params: dict, tick) -> dict:
     return {"markdown": result.get("markdown"), "model": result.get("model")}
 
 
+def _history_backfill(db, user_id: int, params: dict, tick) -> dict:
+    """Download 20 years of daily history into the archive (yfinance, with a
+    Tiingo fallback when TIINGO_API_KEY is set). Resumable: finished tickers
+    are skipped, so re-running continues where the last run stopped. Progress
+    ticks per ticker, well inside jobs.STALE_AFTER."""
+    import logging
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s: [history worker] %(message)s")
+    from config import get_settings
+    from services.long_history import run_backfill
+    tick(0.01, "Starting the 20-year download…")
+    return run_backfill(db, tiingo_key=(get_settings().tiingo_api_key or "").strip() or None,
+                        force=bool(params.get("force")), progress=tick)
+
+
+
 HANDLERS = {
     "edge_matrix": _edge_matrix,
     "selftest": _selftest,
     "daily_report": _daily_report,
+    "history_backfill": _history_backfill,
 }
 
 

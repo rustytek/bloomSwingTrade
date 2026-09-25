@@ -659,6 +659,27 @@ def test_results_are_strict_json_serializable():
 # ──────────────────────────────────────────────────────────────────────────
 # Runner
 # ──────────────────────────────────────────────────────────────────────────
+@test
+def test_data_coverage_reports_dropped_gaps_and_early_ends():
+    from services.backtest import data_coverage, data_quality_caveats
+    days = [f"2024-01-{d:02d}" for d in range(1, 29)]
+    spy = [{"date": d, "close": 1.0} for d in days]
+    full = [{"date": d, "close": 1.0} for d in days]
+    holed = [b for b in full if b["date"] not in ("2024-01-10", "2024-01-15")]
+    early = full[:10]
+    loaded = {"FULL": full, "HOLE": holed, "EARLY": early, "BROKEN": full[:1]}
+    used = {k: v for k, v in loaded.items() if len(v) >= 5}
+    dq = data_coverage(loaded, used, spy, 5, ["2024-01-05", "2024-01-10", "2024-01-20"])
+    assert [d["ticker"] for d in dq["dropped"]] == ["BROKEN"]
+    assert dq["tickers_with_gaps"] == 1 and dq["missing_bars"] == 2
+    assert dq["missing_on_rebalance_dates"] == 1, "01-10 is a rebalance date"
+    assert [e["ticker"] for e in dq["ends_early"]] == ["EARLY"]
+    ids = {c["id"] for c in data_quality_caveats(dq)}
+    assert {"history_window", "tickers_dropped", "missing_bars", "history_ends_early"} <= ids
+    clean = data_coverage({"FULL": full}, {"FULL": full}, spy, 5, ["2024-01-05", "2024-01-20"])
+    assert {c["id"] for c in data_quality_caveats(clean)} == {"history_window"}
+
+
 def main() -> int:
     if "--record-baseline" in sys.argv:
         print(rotation_fingerprint(run()))

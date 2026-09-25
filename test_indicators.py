@@ -564,6 +564,21 @@ def test_enriched_quote_field_contract():
 # ──────────────────────────────────────────────────────────────────────────
 # Runner
 # ──────────────────────────────────────────────────────────────────────────
+@test
+def test_bad_refetch_never_replaces_good_history():
+    """An empty/truncated Yahoo answer used to overwrite years of cached bars
+    (BK/HOLX/MMC/SEE ended with 0 bars and dropped out of every backtest)."""
+    def bars(n, last_day=28):
+        return [{"date": f"2026-{1 + i // 28:02d}-{1 + i % 28:02d}", "close": 1.0} for i in range(n)]
+    cached = bars(1254)
+    assert md.history_fetch_rejection(cached, []) is not None
+    assert md.history_fetch_rejection(cached, cached[-27:]) is not None, "27 of 1254 bars is truncated"
+    assert md.history_fetch_rejection(cached, cached[:-3]) is not None, "must not move backwards in time"
+    assert md.history_fetch_rejection(cached, cached[1:] + [{"date": "2099-01-01", "close": 1.0}]) is None, \
+        "a normal rolling refetch (drop oldest, add newest) is accepted"
+    assert md.history_fetch_rejection([], bars(10)) is None, "nothing cached: accept anything"
+
+
 def main() -> int:
     passed = failed = 0
     failures = []

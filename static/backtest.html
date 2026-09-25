@@ -710,7 +710,7 @@ function edgeCellHtml(strategyId, q, maxAbs) {
   const tip = [
     q.label || q.id,
     c.verdict_detail ? String(c.verdict_detail) : '',
-    `avg/period ${signed(c.avg_period_return, 2, '%')} · cumulative ${signed(c.cum_return, 2, '%')} · n=${n === null ? '--' : n} · confidence ${conf}`,
+    `avg/period ${signed(c.avg_period_return, 2, '%')} · cumulative ${signed(c.cum_return, 2, '%')} · n=${n === null ? '--' : n} invested periods${N(c.idle_periods) ? ` (+${c.idle_periods} idle, excluded)` : ''} · confidence ${conf}`,
   ].filter(Boolean).join(' — ');
 
   return `<td class="${isNow ? 'col-current' : ''}" style="${bg}">
@@ -718,6 +718,7 @@ function edgeCellHtml(strategyId, q, maxAbs) {
       <div class="c-ret" style="color:${fg};">${signed(c.avg_period_return, 2, '%')}</div>
       <div class="c-win">win ${esc(win)}</div>
       <div class="c-n">n=${n === null ? '--' : esc(n)} · cum ${signed(c.cum_return, 1, '%')}</div>
+      ${N(c.idle_periods) ? `<div class="c-n hint" data-tip="Periods in this regime where the strategy held nothing. They are excluded from n and the averages: a cash period says nothing about how the strategy trades here.">+${esc(c.idle_periods)} idle (in cash)</div>` : ''}
       ${flag}
       <div class="c-badges">${badges}</div>
     </div></td>`;

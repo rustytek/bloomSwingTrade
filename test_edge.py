@@ -185,7 +185,8 @@ def fake_matrix(verdict_by_strategy: dict[str, dict[str, str]], mode="trade_plan
             "id": sid, "name": sid, "tagged_regimes": [], "cells": cells,
             "overall": (overall or {}).get(sid, {}), "error": None,
         }
-    return {"generated_at": "2026-01-01T00:00:00Z", "mode": mode, "strategies": strategies}
+    return {"method_version": em.METHOD_VERSION, "generated_at": "2026-01-01T00:00:00Z",
+            "mode": mode, "strategies": strategies}
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -409,6 +410,49 @@ def test_matrix_cache_roundtrip_and_invalidate():
     em._cache[(999, "__latest__")] = (m, time.time())
     em.invalidate_cache(999)
     assert em.get_cached_matrix(999) is None
+
+
+@test
+def test_old_method_matrix_is_never_served():
+    """A matrix built before METHOD_VERSION 2 scored cash periods as results —
+    it must read as absent, not as evidence."""
+    em.invalidate_cache()
+    old = fake_matrix({"momentum_rotation": {}})
+    old.pop("method_version")
+    em._cache[(998, "__latest__")] = (old, time.time())
+    assert em.get_cached_matrix(998) is None
+    assert not em.is_current(old) and em.is_current(fake_matrix({}))
+
+
+@test
+def test_matrix_builds_without_spy_filter_and_excludes_idle_periods():
+    """The SPY>200MA filter blocks every entry in the bear regimes, so the matrix
+    must run with it OFF, and a period that held nothing must not be scored."""
+    seen = {}
+    real = em.run_walk_forward_backtest
+
+    def fake_run(**kw):
+        seen.update(kw)
+        return {"trades": [
+            {"quadrant": "trending_bear", "holdings": [], "exits": 0, "period_return": 0.0},
+            {"quadrant": "trending_bear", "holdings": [], "exits": 0, "period_return": 0.0},
+            {"quadrant": "trending_bear", "holdings": [{"ticker": "X"}], "exits": 0, "period_return": 2.0},
+            # Exited during the period, empty at its end: that IS a measurement.
+            {"quadrant": "trending_bear", "holdings": [], "exits": 1, "period_return": -1.0},
+        ], "metrics": {}, "data_quality": {"test_first_date": "2022-01-03"}}
+
+    em.run_walk_forward_backtest = fake_run
+    try:
+        m = em.build_edge_matrix(None, 997)
+    finally:
+        em.run_walk_forward_backtest = real
+    assert seen.get("spy_regime") is False, seen
+    c = next(iter(m["strategies"].values()))["cells"]["trending_bear"]
+    assert c["n"] == 2 and c["idle_periods"] == 2, c
+    assert c["avg_period_return"] == 0.5, c
+    assert m["method_version"] == em.METHOD_VERSION and m["data_quality"]
+    assert any(cv["id"] == "no_regime_filter" for cv in m["caveats"])
+    em.invalidate_cache(997)
 
 
 # ──────────────────────────────────────────────────────────────────────────

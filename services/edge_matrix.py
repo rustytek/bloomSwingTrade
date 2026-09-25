@@ -84,6 +84,15 @@ _BACKTEST_PARAMS = set(inspect.signature(run_walk_forward_backtest).parameters)
 _SUPPORTS_TRADE_PLAN = "mode" in _BACKTEST_PARAMS
 DEFAULT_MODE = "trade_plan" if _SUPPORTS_TRADE_PLAN else "rotation"
 
+# Bump whenever the way cells are MEASURED changes, so a matrix built by the
+# old method is never served as if it were current (see is_current()).
+#   2 — builds run with spy_regime=False, and periods that held nothing are
+#       excluded from a cell (reported as `idle`). v1 ran every strategy with
+#       the SPY>200MA entry filter ON, which blocks every entry in exactly the
+#       regimes defined by SPY<200MA — so trending_bear / choppy_volatile cells
+#       were almost entirely cash periods scored as 0% "results".
+METHOD_VERSION = 2
+
 VERDICTS = ("confirmed", "unproven", "mis-tagged", "untagged-edge")
 
 VERDICT_INFO = {
@@ -155,7 +164,10 @@ def classify_verdict(cell: dict, is_tagged: bool) -> str:
 
 
 # ── cell construction ───────────────────────────────────────────────────────
-def _cell_from_returns(quadrant: str, rets: list[float]) -> dict:
+def _cell_from_returns(quadrant: str, rets: list[float], idle: int = 0) -> dict:
+    """`rets` are periods the strategy was actually INVESTED in. `idle` counts
+    periods in this regime where it held nothing — reported, never scored: a
+    cash period says nothing about how the strategy trades in that regime."""
     n = len(rets)
     wins = [r for r in rets if r > 0]
     cum = 1.0
@@ -166,6 +178,7 @@ def _cell_from_returns(quadrant: str, rets: list[float]) -> dict:
         "quadrant": quadrant,
         "label": QUADRANT_INFO[quadrant]["label"],
         "n": n,
+        "idle_periods": idle,
         "avg_period_return": _round(sum(rets) / n, 2) if n else None,
         "win_rate": _round(len(wins) / n * 100, 1) if n else None,
         "win_rate_ci_low": _round(ci_low, 1, 0.0),
@@ -196,10 +209,18 @@ def _run_one(db: Session, user_id: int, strategy_id: str, source: str, kwargs: d
 
     trades = result.get("trades") or []
     by_q: dict[str, list[float]] = {q: [] for q in QUADRANTS}
+    idle: dict[str, int] = {q: 0 for q in QUADRANTS}
     for t in trades:
         q = t.get("quadrant")
+        if q not in by_q:
+            continue
+        # Held nothing all period (and exited nothing during it): cash, not a
+        # measurement of the strategy. Counted separately, never scored.
+        if not t.get("holdings") and not t.get("exits"):
+            idle[q] += 1
+            continue
         r = _num(t.get("period_return"))
-        if q in by_q and r is not None:
+        if r is not None:
             by_q[q].append(r)
 
     metrics = result.get("metrics") or {}
@@ -216,8 +237,9 @@ def _run_one(db: Session, user_id: int, strategy_id: str, source: str, kwargs: d
     }
     return {
         "error": None,
-        "cells": {q: _cell_from_returns(q, rets) for q, rets in by_q.items()},
+        "cells": {q: _cell_from_returns(q, rets, idle[q]) for q, rets in by_q.items()},
         "overall": overall,
+        "data_quality": result.get("data_quality"),
     }
 
 
@@ -235,10 +257,7 @@ def build_edge_matrix(db: Session, user_id: int, source: str = "universe",
     keeps its heartbeat alive and tells the polling page where it has got to. A
     failing callback is swallowed: progress reporting must not sink a build.
     """
-    kwargs = dict(backtest_kwargs)
-    kwargs.setdefault("mode", DEFAULT_MODE)
-    if "mode" not in _BACKTEST_PARAMS:
-        kwargs.pop("mode", None)
+    kwargs = _normalize_kwargs(backtest_kwargs)
 
     def _tick(fraction: float, detail: str) -> None:
         if progress is None:
@@ -251,6 +270,7 @@ def build_edge_matrix(db: Session, user_id: int, source: str = "universe",
     started = time.time()
     strategies: dict[str, dict] = {}
     errors: list[dict] = []
+    data_quality = None
 
     _all = actionable_strategy_ids()
     _total = max(1, len(_all))
@@ -263,6 +283,8 @@ def build_edge_matrix(db: Session, user_id: int, source: str = "universe",
         run = _run_one(db, user_id, sid, source, kwargs)
         if run["error"]:
             errors.append({"strategy": sid, "error": run["error"]})
+        if data_quality is None and run.get("data_quality"):
+            data_quality = run["data_quality"]
 
         cells = {}
         for q in QUADRANTS:
@@ -283,6 +305,9 @@ def build_edge_matrix(db: Session, user_id: int, source: str = "universe",
         }
 
     matrix = {
+        "method_version": METHOD_VERSION,
+        "spy_regime_filter": kwargs.get("spy_regime"),
+        "data_quality": data_quality,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "build_seconds": round(time.time() - started, 1),
         "source": source,
@@ -317,8 +342,22 @@ def build_edge_matrix(db: Session, user_id: int, source: str = "universe",
                     "Reading any single cell as a forecast of future return is not."
                 ),
             },
+            {
+                "id": "no_regime_filter",
+                "severity": "info",
+                "title": "Measured without the SPY 200-day entry filter",
+                "detail": (
+                    "The filter blocks every entry whenever SPY is below its 200-day MA — which "
+                    "is how trending_bear and most of choppy_volatile are defined — so with it on, "
+                    "those cells would only measure cash. Periods a strategy spent holding "
+                    "nothing are excluded from each cell and shown as idle."
+                ),
+            },
         ],
     }
+    if data_quality:
+        from services.backtest import data_quality_caveats
+        matrix["caveats"].extend(data_quality_caveats(data_quality))
     matrix["evidence_regimes"] = evidence_backed_regimes(matrix)
     _cache[_cache_key(user_id, source, kwargs)] = (matrix, time.time())
     _cache[(user_id, "__latest__")] = (matrix, time.time())
@@ -347,29 +386,71 @@ def evidence_backed_regimes(matrix: dict | None) -> dict[str, list[str]]:
     return out
 
 
+def is_current(matrix: dict | None) -> bool:
+    """True when `matrix` was built by the current measurement method."""
+    return isinstance(matrix, dict) and matrix.get("method_version") == METHOD_VERSION
+
+
+def _normalize_kwargs(backtest_kwargs: dict) -> dict:
+    kwargs = dict(backtest_kwargs)
+    kwargs.setdefault("mode", DEFAULT_MODE)
+    if "mode" not in _BACKTEST_PARAMS:
+        kwargs.pop("mode", None)
+    # The matrix measures strategies PER REGIME; the SPY>200MA entry filter
+    # would pre-empt exactly the regimes being measured. See METHOD_VERSION.
+    if "spy_regime" in _BACKTEST_PARAMS:
+        kwargs.setdefault("spy_regime", False)
+    return kwargs
+
+
 # ── cache plumbing (mirrors services/today.py) ──────────────────────────────
 def _cache_key(user_id: int, source: str, kwargs: dict) -> tuple:
     return (user_id, source, tuple(sorted((k, repr(v)) for k, v in kwargs.items())))
 
 
+def _from_job_table(user_id: int) -> dict | None:
+    """The newest successful matrix build from the background_jobs table.
+
+    Builds run in a separate worker process (services/job_worker.py), so they
+    never land in THIS process's `_cache`. Without this, the Playbook's
+    evidence override, the Weekly Plan's verdicts and the Scorecard's expected
+    R never saw a built matrix at all. Read-only; never builds."""
+    try:
+        from database.db import SessionLocal
+        from services import jobs as jobsvc
+    except Exception:  # noqa: BLE001
+        return None
+    db = SessionLocal()
+    try:
+        payload = jobsvc.result_of(jobsvc.latest_done(db, user_id, "edge_matrix"))
+    except Exception:  # noqa: BLE001 — a cache read must never raise into a page
+        payload = None
+    finally:
+        db.close()
+    matrix = payload.get("matrix") if isinstance(payload, dict) else None
+    return matrix if is_current(matrix) else None
+
+
 def get_cached_matrix(user_id: int, source: str | None = None, **backtest_kwargs) -> dict | None:
-    """The cached matrix if one is fresh, else None. Never builds — the build is
-    slow enough that an HTTP handler must be able to say "not computed yet"."""
+    """The cached matrix if one is fresh AND built by the current method, else
+    None. Falls back to the job table (worker-built results). Never builds —
+    the build is slow enough that an HTTP handler must be able to say "not
+    computed yet"."""
     if source is None:
         key = (user_id, "__latest__")
     else:
-        kwargs = dict(backtest_kwargs)
-        kwargs.setdefault("mode", DEFAULT_MODE)
-        if "mode" not in _BACKTEST_PARAMS:
-            kwargs.pop("mode", None)
-        key = _cache_key(user_id, source, kwargs)
+        key = _cache_key(user_id, source, _normalize_kwargs(backtest_kwargs))
     entry = _cache.get(key)
-    if not entry:
-        return None
-    matrix, ts = entry
-    if time.time() - ts > _TTL_SECONDS:
+    if entry:
+        matrix, ts = entry
+        if time.time() - ts <= _TTL_SECONDS and is_current(matrix):
+            return matrix
         _cache.pop(key, None)
+    if source is not None:
         return None
+    matrix = _from_job_table(user_id)
+    if matrix is not None:
+        _cache[key] = (matrix, time.time())
     return matrix
 
 

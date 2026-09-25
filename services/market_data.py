@@ -447,6 +447,44 @@ async def get_quote(ticker: str, db: Session, force_refresh: bool = False) -> Op
     return _attach_cache_metadata(enriched, now)
 
 
+def _cached_bars(row) -> list[dict]:
+    if not row or not row.history_json:
+        return []
+    try:
+        bars = json.loads(row.history_json)
+    except (TypeError, ValueError):
+        return []
+    return bars if isinstance(bars, list) else []
+
+
+# A refetch returning fewer than this share of the cached bars is treated as a
+# bad response, not as the truth. Real history only grows (5y window rolls
+# forward ~1 bar a day), so a legitimate refetch is never much shorter.
+MIN_REFETCH_RATIO = 0.9
+
+
+def history_fetch_rejection(cached: list[dict], fetched: list[dict]) -> str | None:
+    """Why a freshly fetched history must NOT replace the cached one, or None.
+
+    Yahoo occasionally answers with an empty or truncated series (a handful of
+    bars, or the last few weeks only). Accepting that silently deleted years
+    of good history and the ticker then vanished from every backtest. Pure."""
+    if not cached:
+        return None                        # nothing to protect
+    if not fetched:
+        return f"fetch returned no bars (cache has {len(cached)})"
+    if len(fetched) < len(cached) * MIN_REFETCH_RATIO:
+        return (f"fetch returned {len(fetched)} bars vs {len(cached)} cached "
+                f"(< {int(MIN_REFETCH_RATIO * 100)}%) — looks truncated")
+    try:
+        if str(fetched[-1].get("date")) < str(cached[-1].get("date")):
+            return (f"fetch ends {fetched[-1].get('date')}, before the cache's "
+                    f"{cached[-1].get('date')}")
+    except (AttributeError, IndexError):
+        return "fetch returned malformed bars"
+    return None
+
+
 async def get_history(ticker: str, db: Session, period: str = "5y", force_refresh: bool = False) -> list[dict]:
     """Return OHLCV history list, using cache."""
     ticker = ticker.upper()
@@ -470,6 +508,15 @@ async def get_history(ticker: str, db: Session, period: str = "5y", force_refres
     except Exception as e:
         logger.error(f"Failed to fetch history for {ticker}: {e}")
         return []
+
+    cached_bars = _cached_bars(row)
+    rejected = history_fetch_rejection(cached_bars, history)
+    if rejected:
+        # Keep the good cache and do NOT mark it fresh, so the next refresh
+        # cycle retries. Overwriting here is how BK/HOLX/MMC/SEE lost five
+        # years of bars to a single empty Yahoo response.
+        logger.warning(f"Kept cached history for {ticker}: {rejected}")
+        return cached_bars
 
     now = datetime.now(timezone.utc)
     history_json = json.dumps(history)

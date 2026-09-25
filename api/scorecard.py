@@ -90,13 +90,19 @@ async def get_edge_matrix(
     # the container bounces.
     matrix = None
     status = "not_computed"
+    outdated = False
     done = jobsvc.latest_done(db, user.id, EDGE_JOB_KIND, job_key) \
         or jobsvc.latest_done(db, user.id, EDGE_JOB_KIND)
     payload = jobsvc.result_of(done)
     if payload and isinstance(payload.get("matrix"), dict):
-        matrix = payload["matrix"]
-        status = "cached"
-    else:
+        if em.is_current(payload["matrix"]):
+            matrix = payload["matrix"]
+            status = "cached"
+        else:
+            # Built by an older measurement method (see em.METHOD_VERSION) —
+            # never serve it as current evidence.
+            outdated = True
+    if matrix is None:
         matrix = em.get_cached_matrix(user.id, source=source, **kwargs) \
             or em.get_cached_matrix(user.id)
         status = "cached" if matrix else "not_computed"
@@ -118,8 +124,13 @@ async def get_edge_matrix(
         return {
             "status": "not_computed",
             "matrix": None,
+            "outdated": outdated,
             "last_error": (failed.error if failed is not None else None),
             "message": (
+                "The last edge matrix was built with an older method that scored periods spent "
+                "entirely in cash (the SPY 200-day filter blocked every entry in bear regimes) "
+                "as 0% results. It is not shown. Rebuild it to get corrected numbers."
+                if outdated else
                 "The edge matrix has not been computed yet. It runs a full walk-forward "
                 "backtest for every actionable strategy, which takes minutes — call this "
                 "endpoint again with ?refresh=true to start a background build."

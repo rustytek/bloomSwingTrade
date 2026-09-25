@@ -500,6 +500,120 @@ def _trade_record(pos: OpenPosition) -> dict:
     }
 
 
+def data_coverage(loaded: dict[str, list[dict]], used: dict[str, list[dict]],
+                  spy: list[dict], warmup: int, rebalance_dates: list[str]) -> dict:
+    """What price data the run actually had — so a thin or holed dataset is
+    REPORTED instead of silently shaping the result. Pure; no DB.
+
+    - `dropped`: tickers excluded because they had fewer than `warmup` bars
+      (a broken/truncated cache looks exactly like this).
+    - gaps: trading days SPY has but a ticker lacks, INSIDE that ticker's own
+      date span. On a rebalance date a missing bar means the ticker was
+      silently skipped for entry that period.
+    - `ends_early`: tickers whose history stops > 5 SPY sessions before SPY's
+      last bar (stale cache or delisted), so they vanish from the test.
+    """
+    spy_dates = [b["date"] for b in spy]
+    spy_last = spy_dates[-1] if spy_dates else None
+    rebal = set(rebalance_dates)
+    dropped = sorted(({"ticker": t, "bars": len(b)} for t, b in loaded.items() if t not in used),
+                     key=lambda d: (d["bars"], d["ticker"]))
+    missing_bars = missing_on_rebalance = 0
+    gap_tickers: list[dict] = []
+    ends_early: list[dict] = []
+    for t, bars in used.items():
+        if not bars:
+            continue
+        have = {b["date"] for b in bars}
+        lo, hi = bars[0]["date"], bars[-1]["date"]
+        miss = [d for d in spy_dates if lo <= d <= hi and d not in have]
+        if miss:
+            missing_bars += len(miss)
+            on_rebal = sum(1 for d in miss if d in rebal)
+            missing_on_rebalance += on_rebal
+            gap_tickers.append({"ticker": t, "missing": len(miss), "on_rebalance_dates": on_rebal,
+                                "first_missing": miss[0]})
+        if spy_last and hi < spy_last:
+            behind = sum(1 for d in spy_dates if d > hi)
+            if behind > 5:
+                ends_early.append({"ticker": t, "last_bar": hi, "sessions_behind": behind})
+    gap_tickers.sort(key=lambda g: (-g["missing"], g["ticker"]))
+    ends_early.sort(key=lambda e: (-e["sessions_behind"], e["ticker"]))
+    first = rebalance_dates[0] if rebalance_dates else None
+    last = rebalance_dates[-1] if rebalance_dates else None
+    years = None
+    if first and last:
+        years = round((date.fromisoformat(last) - date.fromisoformat(first)).days / 365.25, 1)
+    return {
+        "history_first_date": spy_dates[0] if spy_dates else None,
+        "history_last_date": spy_last,
+        "warmup_bars": warmup,
+        "test_first_date": first,
+        "test_last_date": last,
+        "test_years": years,
+        "tickers_requested": len(loaded),
+        "tickers_used": len(used),
+        "dropped": dropped,
+        "tickers_with_gaps": len(gap_tickers),
+        "missing_bars": missing_bars,
+        "missing_on_rebalance_dates": missing_on_rebalance,
+        "gap_examples": gap_tickers[:10],
+        "ends_early": ends_early[:25],
+        "ends_early_count": len(ends_early),
+    }
+
+
+def data_quality_caveats(dq: dict) -> list[dict]:
+    out = []
+    if dq.get("test_first_date"):
+        out.append({
+            "id": "history_window",
+            "severity": "info",
+            "title": f"Tested {dq['test_first_date']} → {dq.get('test_last_date')} (~{dq.get('test_years')} years)",
+            "detail": (
+                f"The price cache starts {dq.get('history_first_date')}; the first "
+                f"{dq.get('warmup_bars')} bars are warm-up for the 200-day MA and the strategy's own "
+                "lookbacks, so the test starts later than the data. A regime that barely occurred "
+                "in this window cannot be judged from it, however the numbers look."
+            ),
+        })
+    if dq.get("dropped"):
+        names = ", ".join(f"{d['ticker']} ({d['bars']})" for d in dq["dropped"][:12])
+        out.append({
+            "id": "tickers_dropped",
+            "severity": "medium",
+            "title": f"{len(dq['dropped'])} ticker(s) excluded for too little history",
+            "detail": (
+                f"Fewer than {dq.get('warmup_bars')} cached bars: {names}"
+                + (" …" if len(dq["dropped"]) > 12 else "")
+                + ". Recently listed names are expected here; an established company with "
+                "almost no bars means its cached history is broken and it was left out."
+            ),
+        })
+    if dq.get("missing_bars"):
+        out.append({
+            "id": "missing_bars",
+            "severity": "medium" if dq.get("missing_on_rebalance_dates") else "info",
+            "title": f"{dq.get('tickers_with_gaps')} ticker(s) are missing {dq['missing_bars']} trading day(s)",
+            "detail": (
+                "Days SPY traded but the cached history has no bar. Nothing is filled in: "
+                f"on {dq.get('missing_on_rebalance_dates', 0)} (ticker, rebalance date) pair(s) "
+                "the ticker was skipped for entry because there was no real price that day."
+            ),
+        })
+    if dq.get("ends_early_count"):
+        out.append({
+            "id": "history_ends_early",
+            "severity": "medium",
+            "title": f"{dq['ends_early_count']} ticker(s) stop before the end of the test",
+            "detail": (
+                "Their cached history ends more than 5 sessions before SPY's (stale cache or "
+                "delisted), so they drop out of the later part of the test."
+            ),
+        })
+    return out
+
+
 def run_walk_forward_backtest(
     db: Session,
     user_id: int,
@@ -600,6 +714,7 @@ def run_walk_forward_backtest(
         histories = {ticker: _load_history(db, ticker) for ticker in tickers}
         spy = _load_history(db, "SPY")
 
+    loaded_histories = histories
     histories = {ticker: bars for ticker, bars in histories.items() if len(bars) >= warmup}
     dates = [b["date"] for b in spy] if len(spy) >= warmup else []
     dates = dates[warmup:: max(1, rebalance_days)]
@@ -644,9 +759,11 @@ def run_walk_forward_backtest(
             "trades": [],
             "metrics": {},
             "benchmark_metrics": {},
+            "data_quality": data_coverage(loaded_histories, histories, spy, warmup, dates),
             "notes": [
-                f"Need cached SPY history and at least {warmup} bars for selected tickers.",
-                "Tip: use the Full Universe source after the 2-year history backfill completes.",
+                f"Need cached SPY history and at least {warmup} bars for selected tickers "
+                f"(SPY has {len(spy)}; {len(histories)} of {len(loaded_histories)} tickers qualify).",
+                "Tip: use the Full Universe source after the 5-year history backfill completes.",
             ],
         }
 
@@ -1024,6 +1141,8 @@ def run_walk_forward_backtest(
                 "deliberately pessimistic; the opposite assumption manufactures winners."
             ),
         })
+    data_quality = data_coverage(loaded_histories, histories, spy, warmup, dates)
+    caveats.extend(data_quality_caveats(data_quality))
     if metrics.get("trades_taken") is not None and metrics["trades_taken"] < MIN_PERIODS_LOW_CONFIDENCE:
         caveats.append({
             "id": "few_trades",
@@ -1050,6 +1169,7 @@ def run_walk_forward_backtest(
         "mode": mode,
         "trade_log": trade_log,
         "caveats": caveats,
+        "data_quality": data_quality,
         "notes": [
             "Hypothetical backtest using cached adjusted daily closes only.",
             f"Strategy: {strategy.name}. {strategy.description}",

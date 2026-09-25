@@ -13,3 +13,6 @@ docker_logs2.txt
 server.err.log
 server.out.log
 samples/
+
+# Reference material (copyrighted books etc.) - never commit
+Coding notes/

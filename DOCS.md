@@ -51,6 +51,19 @@ Start date (for example 2007-01-01 to test through the 2008 crash).
 The download adds a few hundred MB to `/data`, so HA backups of the add-on get bigger. The ticker list is today's
 S&P 500, so companies that failed or left the index are missing — older years look better than they really were.
 
+**Without the download the edge matrix can't confirm anything.** Since 1.23.0 a verdict (confirmed, mis-tagged,
+untagged-edge) needs the years before 2019 and the years from 2019 on to agree, plus a significance test corrected
+for testing every strategy in every regime at once. With only the 5-year cache there are no pre-2019 years, so every
+cell shows *unproven*. Expect many cells to stay unproven even with 20 years — that is the honest answer.
+
+## How Much to Trust a Backtest (Strategy Lab)
+
+Every walk-forward you run is recorded as a *trial* of that strategy (re-running identical settings doesn't count
+twice). The results panel shows the **Deflated Sharpe**: the chance the Sharpe ratio beats what the best of that many
+random tries would show by luck, with a 95% interval on the Sharpe itself. Above 95% is likely real; below 50% is
+likely luck. Trying many variants and keeping the best raises the bar for all of them — that is the point. The list
+of trials counted is at `/api/backtest/trials`; there is deliberately no way to delete them.
+
 ## Enabling FRED Macro Data
 
 1. Get a free API key from `https://fred.stlouisfed.org`.

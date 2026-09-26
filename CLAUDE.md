@@ -22,7 +22,7 @@ python test_passes.py            # core logic: trade plans, strategies, backtest
 python test_indicators.py        # calculation regressions: indicators / market_data / strategies
 python test_portfolio_risk.py    # correlation, open risk, concentration, edge-weighted sizing
 python test_backtest.py          # backtest engine, exit rules, no-look-ahead, Wilson CI
-python test_edge.py              # edge matrix verdicts, evidence override safety, scorecard
+python test_edge.py              # edge matrix verdicts (holdout + BH), evidence override safety, scorecard, stats, trial log / Deflated Sharpe
 python test_plan_persistence.py  # plan-intent columns, notes backfill, entry_chasing honesty
 python test_jobs.py              # background jobs: worker subprocess, dedupe, stale reaping
 python test_weekly_plan.py       # weekly-plan decisions, risk-aware buy pick, strategy rationale coverage
@@ -31,7 +31,7 @@ python test_fixes.py             # layering (no services->api imports), AI provi
 python test_history.py           # 20-year archive: splice/rebase, yfinance→Tiingo fallback, backfill, 20y engine path, real-VIX regimes, API
 ```
 
-**275 tests across eleven suites** (`python test_broker.py` covers the Robinhood/Trade layer, fully mocked). All are self-contained (no network) except
+**286 tests across eleven suites** (`python test_broker.py` covers the Robinhood/Trade layer, fully mocked). All are self-contained (no network) except
 `test_jobs.py`, which deliberately **launches a real worker subprocess** against a
 throwaway SQLite file in a temp dir — mocking the subprocess would let the very
 layer it guards break while the test still passed. `test_passes.py`
@@ -42,7 +42,7 @@ living in `api/*.py` can be imported without the full web stack.
 
 > **Counting routes:** this FastAPI version stores `_IncludedRouter` lazy references, so
 > `len(app.routes)` UNDERCOUNTS and filtering on `hasattr(r, "path")` silently omits every
-> router-mounted endpoint. Always verify through `app.openapi()["paths"]` (currently 84; the OAuth callback is excluded from the schema).
+> router-mounted endpoint. Always verify through `app.openapi()["paths"]` (currently 85; the OAuth callback is excluded from the schema).
 
 The app runs on HTTPS at `https://localhost:8443`. Swagger docs at `/api/docs`.
 
@@ -83,7 +83,7 @@ React SPA (static/*.html) → FastAPI (main.py)
 | File | Purpose |
 |---|---|
 | `config.py` | Pydantic Settings — all env vars with defaults |
-| `database/models.py` | ORM models: User, WatchlistItem, PortfolioPosition, StockCache, AICache, ReportCache, ClosedTrade, HistoryArchive |
+| `database/models.py` | ORM models: User, WatchlistItem, PortfolioPosition, StockCache, AICache, ReportCache, ClosedTrade, HistoryArchive, BacktestRun |
 | `database/db.py` | SQLAlchemy engine, `get_db()` FastAPI dependency |
 | `auth/deps.py` | `get_current_user` / `get_current_admin` JWT dependencies |
 | `services/market_data.py` | yfinance wrapper, dual-layer cache (in-memory dict + SQLite), indicator calculation; emits the `schema_v: 2` quote contract (see "Quote Field Contract" below) |
@@ -100,6 +100,8 @@ React SPA (static/*.html) → FastAPI (main.py)
 | `services/strategy_rationale.py` | Written **why** for every strategy: `why_it_works`, `best_when`, `fails_when`, and a `regime_fit` sentence per quadrant. `rationale_for(id, quadrant)` adds `fit_now`. Surfaced in `/api/today`'s `strategy_regime_status[].rationale`, the Strategy Lab catalog, and the Weekly Plan. It is opinion, not evidence — the UI always labels it as such next to the edge-matrix verdict. `test_weekly_plan.py` fails if a registered strategy or quadrant has no text |
 | `services/weekly_plan.py` / `api/weekly_plan.py` | `GET /api/weekly-plan` — the decision layer on top of `build_today` (so the two pages can never disagree). See "Weekly Plan" below |
 | `services/edge_matrix.py` | Strategy × regime EVIDENCE matrix — one walk-forward per actionable strategy, bucketed by the `quadrant` already stamped on each rebalance period. Per-cell Wilson CI + `confidence`, and a `verdict` (`confirmed`/`unproven`/`mis-tagged`/`untagged-edge`) saying whether the hand-written `Strategy.regimes` tag is actually supported. 12h per-user cache |
+| `services/stats.py` | Pure-stdlib inference (no scipy in the image): Student-t p-values, AR(1) effective n (ρ clipped to [0, 0.9] — dependence never makes a sample look bigger), Benjamini-Hochberg q-values, Sharpe standard error / PSR / expected-max-Sharpe / Deflated Sharpe |
+| `services/trial_log.py` | Strategy Lab trial log (`backtest_runs`) and the per-run `selection_bias` (Deflated Sharpe) block — see Backtesting |
 | `services/scorecard.py` | Realized (journal) vs expected (edge matrix) per strategy — `drift` plus a sample-size-guarded recommendation — and `execution_quality()` (entry chasing / stop loosening / overstayed horizon / off-regime entries), which returns any metric it cannot compute as explicitly UNAVAILABLE with the field it needs |
 | `api/scorecard.py` | `GET /api/scorecard`, `GET /api/edge-matrix` (cold call returns "not computed yet"; `?refresh=true` builds), `POST /api/edge-matrix/invalidate` |
 | `api/today.py` | `GET /api/today` — daily dashboard |
@@ -242,10 +244,10 @@ the regression.
 `Strategy.regimes` is a hand-written literal — an opinion. The edge matrix turns the backtest into evidence about whether that opinion holds, per quadrant, and the scorecard compares what a strategy was *supposed* to deliver against what the journal says it *did*.
 
 - `GET /api/edge-matrix` — **a cold call deliberately does NOT build**: it returns `{status:"not_computed", matrix:null, message, last_error, strategies[], quadrants[], thresholds{}}` so the page paints instantly. `?refresh=true` **enqueues a background job and returns at once** with `{status:"building", job:{...}}` — it does not build inline (see "Long Builds Are Background Jobs" above; doing so 502'd the whole app). **The payload is NESTED under `matrix`** — `matrix.strategies[id].cells[quadrant]` carries `{n, avg_period_return, win_rate, win_rate_ci_low/high, cum_return, confidence, tagged, verdict, verdict_detail}`, plus `matrix.strategies[id].overall`, `matrix.evidence_regimes` and `matrix.caveats`. Assigning the whole envelope to a variable and reading `.strategies` off it silently returns nothing — that exact bug once made the Playbook's evidence chips invisible even with a fully built matrix.
-- **How cells are measured (`METHOD_VERSION = 3`; 3 = next-session fills, see Backtesting).** Builds run with `spy_regime=False`: the SPY>200MA entry filter blocks every entry whenever SPY is below its 200-day MA — which is how `trending_bear` and most of `choppy_volatile` are *defined* — so with it on (v1) those cells were ~100% cash periods scored as 0% results. A period that held nothing and exited nothing is excluded from its cell and reported as `idle_periods`. `is_current(matrix)` rejects any matrix without the current `method_version`; `GET /api/edge-matrix` reports such a job-table result as `not_computed` with `outdated: true` and a rebuild message instead of serving it. **Bump `METHOD_VERSION` whenever cell measurement changes.**
+- **How cells are measured (`METHOD_VERSION = 4`; 3 = next-session fills, see Backtesting; 4 = holdout + multiple-testing gates, below).** Builds run with `spy_regime=False`: the SPY>200MA entry filter blocks every entry whenever SPY is below its 200-day MA — which is how `trending_bear` and most of `choppy_volatile` are *defined* — so with it on (v1) those cells were ~100% cash periods scored as 0% results. A period that held nothing and exited nothing is excluded from its cell and reported as `idle_periods`. `is_current(matrix)` rejects any matrix without the current `method_version`; `GET /api/edge-matrix` reports such a job-table result as `not_computed` with `outdated: true` and a rebuild message instead of serving it. **Bump `METHOD_VERSION` whenever cell measurement changes.**
 - **`get_cached_matrix(user_id)` falls back to the job table.** Builds run in the worker process, so they never land in the web process's `_cache`; before this fallback the Playbook evidence override, the Weekly Plan verdicts and the Scorecard's expected R never saw a built matrix (only the Strategy Lab, which reads the job table, did).
 - The matrix carries `data_quality` (from the first strategy's run) and its caveats, plus a `no_regime_filter` caveat.
-- Verdicts: `confirmed` / `unproven` / `mis-tagged` / `untagged-edge`. **A thin cell never produces a confident verdict** — a low-`n` losing cell is `unproven`, not `mis-tagged`. `evidence_regimes` carries only `confirmed` and `untagged-edge` cells forward: it answers "what has the data shown", not "what do we still believe".
+- Verdicts: `confirmed` / `unproven` / `mis-tagged` / `untagged-edge`. **A thin cell never produces a confident verdict** — a low-`n` losing cell is `unproven`, not `mis-tagged`. **Since v4 (ML4T gap 2a) the sign of a cell is only a candidate** (`judge_cell` → `(verdict, verdict_reason)`): it stands only if (1) its mean is significant after a **Benjamini-Hochberg** correction across every judged cell (`FDR_Q` 0.10; `apply_verdicts()` sets `q_value`; the t-test in `services/stats.py::mean_test` uses an AR(1) **effective n**, reported as `n_effective`), and (2) both the **discovery** segment (before `HOLDOUT_START`, 2019-01-01) and the **holdout** segment (2019+) have ≥ `MIN_SEGMENT_PERIODS` periods with a mean of the same sign. Each side of the split holds a bear market (2008/2011/2015-16/2018 vs 2020/2022). Without the 20-year archive there is no discovery segment, every cell is `unproven`, and a high-severity `no_discovery_segment` caveat says so. Measured on the real 20-year DB when introduced: see the note in `ML4T_GAPS.md`. The holdout is only out-of-sample while the hand-written `Strategy.regimes` tags are **not edited because of it** (`holdout_integrity` caveat) — don't "fix" a tag from a matrix number without telling the user it spends the holdout. `evidence_regimes` carries only `confirmed` and `untagged-edge` cells forward: it answers "what has the data shown", not "what do we still believe".
 - `GET /api/scorecard` — `{scorecard, execution_quality}`. Only a **trade_plan-mode** matrix yields a per-trade expectancy; a rotation-mode matrix returns no `expected_r` rather than converting a period return into a pseudo-R.
 - `execution_quality` splits into `ranked[]` (computable, sorted by `r_cost` descending) and `unavailable[]` (each with `reason` + `needs`). **UI contract: an unavailable metric must never render as `0` or as a dash.** "Not measurable yet" and "measured, found nothing" have to be visually distinct — see `static/scorecard.html`. A missing field is not a clean bill of health.
 
@@ -305,6 +307,8 @@ This distinction is the point: **`rotation` measures a different system than the
 
 **Data coverage is reported, never hidden.** Every walk-forward response (including the "not enough data" early return) carries `data_quality` from `services/backtest.py::data_coverage()`: cache and test windows (`test_years`), `dropped` tickers (fewer than `warmup` bars — a broken cache looks exactly like this), `missing_bars` / `missing_on_rebalance_dates` (days SPY traded but a ticker has no bar *inside its own span*; nothing is filled in, the ticker is just skipped for entry that period), and `ends_early` tickers. `data_quality_caveats()` turns these into structured caveats (`history_window`, `tickers_dropped`, `missing_bars`, `history_ends_early`) that the Strategy Lab renders with the rest. The window matters: with a 5-year cache and ~220–265 warm-up bars, tests start mid/late 2022 — after most of the 2022 bear market — so bear-regime cells are thin by construction.
 
+**Selection bias — trial log + Deflated Sharpe (ML4T gap 2b).** Every run carries `sharpe_inference` (`services/backtest.py::sharpe_inference`: per-period and annualized Sharpe, a skew/kurtosis-aware 95% CI, `psr_vs_zero`) — a top-level key, deliberately **outside `metrics`** so the frozen rotation digest is untouched. `GET /api/backtest/walk-forward` then calls `services/trial_log.py::annotate()`, which upserts the run into `backtest_runs` (`BacktestRun`, unique per user × strategy × md5 of the parameters — an identical re-run bumps `runs`, a different window or setting is a new trial) and attaches `selection_bias` (`trials`, `luck_hurdle_sharpe_annual` = expected max Sharpe of that many skill-less trials, `deflated_sharpe`, `label` likely_real ≥ 0.95 / inconclusive / likely_luck < 0.50) plus a `selection_bias` caveat unless likely_real. `annotate` never raises into the request. `GET /api/backtest/trials` lists them; **there is intentionally no delete** — hiding tries defeats the correction. Edge-matrix builds are not trials (fixed method).
+
 **Sample-size honesty.** Every `regime_breakdown` row carries a Wilson 95% interval (`win_rate_ci_low`/`win_rate_ci_high`) and a `confidence` label from the module constants `MIN_PERIODS_LOW_CONFIDENCE` (30) / `MIN_PERIODS_HIGH_CONFIDENCE` (100). Every response carries a structured top-level `caveats` list (`{id, severity, title, detail}`) covering survivorship bias (the universe is *today's* S&P 500 constituents, which inflates every result), which mode produced the result, and — in rotation mode — that stops/targets are not simulated. These are structured for the UI to render, not prose buried in `notes`.
 
 **Cost & risk-free conventions.** Turnover cost is charged via `services/backtest.py::turnover_cost()`: `symmetric_difference` counts both sells and buys, so the round-trip charge is `(len(sym_diff) / top_n) * cost`, **uncapped** — a full rotation costs `2 × cost`, twice a 50% rotation. (It was previously clipped at `1.0 × cost`, which charged a complete rotation the same as a half one.) Sharpe and Sortino in `_metrics` subtract the module constant `RISK_FREE_RATE = 0.05`, de-annualized to the rebalance period as `(1 + rf)**(1/ppy) - 1`. **This must stay in sync with the same 5% rate in `services/indicators.py::compute_performance_metrics`**, or cross-page Sharpe comparisons become meaningless.
@@ -344,6 +348,9 @@ Vanilla JS + Fetch API in `static/` — no build step. Files are served directly
 The in-memory cache `_cache` uses `_cache_get(key)` which returns `None` on miss. Always use **truthy** checks (`if cached:`) — not `if cached is not None` — for list-typed caches (VIX, sectors, ETF groups). An empty `[]` from a failed previous fetch will otherwise block re-fetches until the 6-hour TTL expires. Macro data uses a dict so `if cached is not None` is acceptable there.
 
 Sector ETF data (`get_sector_data`) uses individual `yf.Ticker().history()` calls via a `ThreadPoolExecutor`, not `yf.download()`. The bulk `yf.download()` approach was removed due to breaking changes in newer yfinance versions where MultiIndex column access patterns changed.
+
+### ML4T Gap Tracker
+`ML4T_GAPS.md` tracks the ten design gaps found against *Machine Learning for Trading* (3e). They are worked one at a time, in order, only when the user asks; update the status table there whenever one is started or shipped.
 
 ## Configuration
 

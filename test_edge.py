@@ -162,11 +162,16 @@ class FakeDB:
         return _FakeQuery([])
 
 
-def cell(n, avg, cum, ci_low=60.0, quadrant="trending_bull"):
+def cell(n, avg, cum, ci_low=60.0, quadrant="trending_bull", q_value=0.01,
+         disc_avg="same", hold_avg="same", seg_n=20):
+    """A cell that, by default, clears the v4 gates (significant, and both
+    segments agreeing in sign) — so each test varies exactly one thing."""
     return {
         "quadrant": quadrant, "label": "x", "n": n, "avg_period_return": avg,
         "win_rate": 55.0, "win_rate_ci_low": ci_low, "win_rate_ci_high": 90.0,
-        "cum_return": cum, "confidence": em.cell_confidence(n),
+        "cum_return": cum, "confidence": em.cell_confidence(n), "q_value": q_value,
+        "discovery": {"n": seg_n, "avg_period_return": avg if disc_avg == "same" else disc_avg},
+        "holdout": {"n": seg_n, "avg_period_return": avg if hold_avg == "same" else hold_avg},
     }
 
 
@@ -330,6 +335,119 @@ def test_verdict_edge_cases_are_conservative():
     # NaN must never become a confident verdict.
     assert em.classify_verdict(cell(60, float("nan"), 30.0), True) == "unproven"
     assert em.classify_verdict(cell(60, 0.8, float("inf")), True) == "unproven"
+
+
+@test
+def test_verdict_needs_multiple_testing_significance():
+    """Gap 2: a positive cell that is not significant after the BH correction
+    across the whole matrix is unproven — and so is one never tested (q None)."""
+    for verdict_tagged, c in (
+        (True, cell(60, 0.8, 30.0, q_value=0.30)),
+        (True, cell(60, -0.6, -18.0, q_value=0.30)),
+        (False, cell(40, 0.6, 22.0, ci_low=58.0, q_value=0.30)),
+        (True, cell(60, 0.8, 30.0, q_value=None)),
+    ):
+        v, why = em.judge_cell(c, verdict_tagged)
+        assert v == "unproven" and "noise" in why, (v, why)
+    assert em.classify_verdict(cell(60, 0.8, 30.0, q_value=em.FDR_Q), True) == "confirmed"
+
+
+@test
+def test_verdict_needs_discovery_and_holdout_to_agree():
+    # Holdout points the other way -> not confirmed, and not demoted either.
+    v, why = em.judge_cell(cell(60, 0.8, 30.0, hold_avg=-0.2), True)
+    assert v == "unproven" and "holdout" in why, (v, why)
+    v, why = em.judge_cell(cell(60, -0.6, -18.0, disc_avg=0.1), True)
+    assert v == "unproven" and "discovery" in why, (v, why)
+    # A zero segment mean is not agreement.
+    assert em.classify_verdict(cell(60, 0.8, 30.0, hold_avg=0.0), True) == "unproven"
+    # A segment too thin to speak cannot confirm.
+    v, why = em.judge_cell(cell(60, 0.8, 30.0, seg_n=em.MIN_SEGMENT_PERIODS - 1), True)
+    assert v == "unproven" and "periods" in why, (v, why)
+    # A cell without segments (built without dates) is never confident.
+    bare = cell(60, 0.8, 30.0)
+    bare.pop("discovery"); bare.pop("holdout")
+    assert em.classify_verdict(bare, True) == "unproven"
+
+
+@test
+def test_cell_splits_discovery_and_holdout_by_date():
+    rets = [1.0, 2.0, -1.0, 3.0]
+    dates = ["2012-03-05", "2018-12-24", em.HOLDOUT_START, "2023-06-05"]
+    c = em._cell_from_returns("trending_bull", rets, 0, dates)
+    assert c["discovery"]["n"] == 2 and c["discovery"]["avg_period_return"] == 1.5, c
+    assert c["holdout"]["n"] == 2 and c["holdout"]["avg_period_return"] == 1.0, c
+    assert c["q_value"] is None and 0.0 <= c["p_value"] <= 1.0
+    json.dumps(c, allow_nan=False)
+
+
+@test
+def test_apply_verdicts_corrects_across_the_whole_matrix():
+    """One strong cell among many noise cells survives; the same cell's raw
+    p-value is inflated by the number of cells judged (BH)."""
+    strong = cell(60, 0.8, 30.0)
+    strong.update({"p_value": 0.001, "q_value": None, "tagged": True})
+    noise = []
+    for i in range(9):
+        c = cell(60, 0.3, 5.0)
+        c.update({"p_value": 0.04 + i * 0.01, "q_value": None, "tagged": True})
+        noise.append(c)
+    thin = cell(5, 0.9, 5.0)
+    thin.update({"p_value": 0.0001, "q_value": None, "tagged": True})
+    strategies = {"s": {"cells": {"a": strong, "t": thin, **{f"n{i}": c for i, c in enumerate(noise)}}}}
+    tested = em.apply_verdicts(strategies)
+    assert tested == 10, tested                      # the thin cell is not a test
+    assert thin["q_value"] is None and thin["verdict"] == "unproven"
+    assert strong["q_value"] == 0.01 and strong["verdict"] == "confirmed", strong
+    # 0.04 alone would pass at q=0.10; among ten tests it does not.
+    assert noise[0]["q_value"] > em.FDR_Q and noise[0]["verdict"] == "unproven", noise[0]
+    assert all("verdict_reason" in c for c in [strong, thin, *noise])
+
+
+@test
+def test_matrix_without_pre_holdout_history_confirms_nothing():
+    real = em.run_walk_forward_backtest
+
+    def fake_run(**kw):
+        trades = [{"date": f"2023-{1 + i // 4:02d}-{1 + (i % 4) * 7:02d}", "quadrant": "trending_bull",
+                   "holdings": [{"ticker": "X"}], "exits": 0, "period_return": 1.0 + (i % 3)}
+                  for i in range(40)]
+        return {"trades": trades, "metrics": {}, "data_quality": {}}
+
+    em.run_walk_forward_backtest = fake_run
+    try:
+        m = em.build_edge_matrix(None, 996)
+    finally:
+        em.run_walk_forward_backtest = real
+    ids = {c["id"] for c in m["caveats"]}
+    assert "no_discovery_segment" in ids and "multiple_testing" in ids, ids
+    verdicts = {c["verdict"] for s in m["strategies"].values() for c in s["cells"].values()}
+    assert verdicts == {"unproven"}, verdicts
+    assert m["tests_corrected_for"] >= 1 and m["holdout_start"] == em.HOLDOUT_START
+    json.dumps(m, allow_nan=False)
+    em.invalidate_cache(996)
+
+
+@test
+def test_stats_student_t_and_bh_match_reference_values():
+    from services import stats
+    assert approx(stats.t_two_sided_p(2.228, 10), 0.05, 1e-3)
+    assert approx(stats.t_two_sided_p(2.0, 10), 0.0734, 1e-3)
+    assert approx(stats.t_two_sided_p(1.96, 1e6), 0.05, 1e-3)
+    assert stats.t_two_sided_p(0.0, 5) == 1.0
+    q = stats.bh_adjust([0.01, 0.04, 0.03, 0.2])
+    assert [round(x, 4) for x in q] == [0.04, 0.0533, 0.0533, 0.2], q
+
+
+@test
+def test_effective_n_shrinks_for_autocorrelation_and_never_grows():
+    from services import stats
+    trending = [1.0 + 0.1 * i for i in range(40)]            # strongly autocorrelated
+    n_eff, rho = stats.effective_n(trending)
+    assert rho > 0.5 and n_eff < 20, (n_eff, rho)
+    alternating = [1.0, -1.0] * 20                            # negative autocorrelation
+    n_eff, rho = stats.effective_n(alternating)
+    assert rho == 0.0 and n_eff == 40, (n_eff, rho)
 
 
 @test
@@ -691,6 +809,115 @@ def test_universe_caveat_is_disclosed():
     assert UNIVERSE_AS_OF
     out = sc.build_scorecard(FakeDB([]), 99)
     assert UNIVERSE_CAVEAT in out["caveats"]
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 4. Gap 2b — Sharpe inference, trial log, Deflated Sharpe
+# ──────────────────────────────────────────────────────────────────────────
+def _equity(returns, start=100.0):
+    eq, v = [{"date": "2020-01-06", "value": start}], start
+    for i, r in enumerate(returns):
+        v *= 1 + r
+        eq.append({"date": f"2020-{1 + (i // 4) % 12:02d}-{6 + (i % 4) * 5:02d}", "value": v})
+    return eq
+
+
+def _trial_db():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from database.db import Base
+    import database.models  # noqa: F401 — registers the tables
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(bind=engine)
+    return sessionmaker(bind=engine)()
+
+
+def _fake_result(strategy, sharpe_annual, params):
+    return {
+        "mode": "rotation", "parameters": {"strategy": strategy, **params},
+        "equity": [{"date": "2021-01-04", "value": 1.0}, {"date": "2025-12-29", "value": 2.0}],
+        "metrics": {"cagr": 10.0},
+        "sharpe_inference": {"periods": 250, "periods_per_year": 50.4,
+                             "sharpe_period": sharpe_annual / math.sqrt(50.4),
+                             "sharpe_annual": sharpe_annual, "skew": 0.0, "kurtosis": 3.0},
+        "caveats": [],
+    }
+
+
+@test
+def test_sharpe_inference_ci_contains_point_and_widens_with_fat_tails():
+    from services.backtest import sharpe_inference
+    import random
+    rng = random.Random(7)
+    calm = [0.004 + rng.gauss(0, 0.02) for _ in range(200)]
+    si = sharpe_inference(_equity(calm), 50.4)
+    assert si["ci95_low"] < si["sharpe_annual"] < si["ci95_high"], si
+    assert 0.0 <= si["psr_vs_zero"] <= 1.0
+    # Same Sharpe, fatter tails or negative skew -> a larger standard error.
+    from services.stats import sharpe_se
+    base = sharpe_se(0.15, 200, 0.0, 3.0)
+    assert sharpe_se(0.15, 200, 0.0, 9.0) > base
+    assert sharpe_se(0.15, 200, -2.0, 3.0) > base
+    assert sharpe_inference(_equity([0.01]), 50.4) is None
+    json.dumps(si, allow_nan=False)
+
+
+@test
+def test_deflated_sharpe_falls_as_trials_grow():
+    from services import stats
+    sr, n = 0.15, 250
+    one = stats.deflated_sharpe(sr, n, 0.0, 3.0, 1, 0.0)
+    assert approx(one, stats.probabilistic_sharpe(sr, 0.0, n, 0.0, 3.0), 1e-12)
+    ten = stats.deflated_sharpe(sr, n, 0.0, 3.0, 10, 0.01)
+    hundred = stats.deflated_sharpe(sr, n, 0.0, 3.0, 100, 0.01)
+    assert one > ten > hundred, (one, ten, hundred)
+    assert approx(stats.expected_max_sharpe(10, 1.0), 1.5746, 1e-3)
+
+
+@test
+def test_trial_log_counts_distinct_configurations_only():
+    from services import trial_log
+    db = _trial_db()
+    r1 = trial_log.annotate(db, 1, _fake_result("momentum_rotation", 1.0, {"top_n": 5}))
+    assert r1["selection_bias"]["trials"] == 1, r1["selection_bias"]
+    # Re-running the identical configuration is NOT a new trial.
+    r1b = trial_log.annotate(db, 1, _fake_result("momentum_rotation", 1.0, {"top_n": 5}))
+    assert r1b["selection_bias"]["trials"] == 1
+    # A different window/parameter IS one — and it raises the bar.
+    r2 = trial_log.annotate(db, 1, _fake_result("momentum_rotation", 0.2, {"top_n": 3}))
+    r3 = trial_log.annotate(db, 1, _fake_result("momentum_rotation", 1.0, {"top_n": 7}))
+    assert r3["selection_bias"]["trials"] == 3
+    assert r3["selection_bias"]["deflated_sharpe"] < r1["selection_bias"]["deflated_sharpe"]
+    assert r3["selection_bias"]["luck_hurdle_sharpe_annual"] > 0
+    # Other strategies and other users are separate searches.
+    other = trial_log.annotate(db, 1, _fake_result("pullback_50ma", 1.0, {"top_n": 5}))
+    assert other["selection_bias"]["trials"] == 1
+    assert trial_log.annotate(db, 2, _fake_result("momentum_rotation", 1.0, {"top_n": 5}))["selection_bias"]["trials"] == 1
+    rows = trial_log.list_trials(db, 1, "momentum_rotation")
+    assert len(rows) == 3 and max(r["runs"] for r in rows) == 2, rows
+    json.dumps(r3["selection_bias"], allow_nan=False)
+
+
+@test
+def test_trial_log_flags_luck_and_never_breaks_a_finished_run():
+    from services import trial_log
+    db = _trial_db()
+    weak = trial_log.annotate(db, 1, _fake_result("breakout_volume", 0.05, {"top_n": 5}))
+    assert weak["selection_bias"]["label"] != "likely_real"
+    assert any(c["id"] == "selection_bias" for c in weak["caveats"])
+    # No Sharpe (e.g. not enough data): nothing recorded, result untouched.
+    bare = {"parameters": {"strategy": "breakout_volume"}, "sharpe_inference": None}
+    assert "selection_bias" not in trial_log.annotate(db, 1, bare)
+
+    class Broken:
+        def query(self, *a, **k):
+            raise RuntimeError("db is down")
+
+        def rollback(self):
+            pass
+
+    out = trial_log.annotate(Broken(), 1, _fake_result("breakout_volume", 1.0, {}))
+    assert "error" in out["selection_bias"] and out["metrics"]["cagr"] == 10.0
 
 
 # ──────────────────────────────────────────────────────────────────────────

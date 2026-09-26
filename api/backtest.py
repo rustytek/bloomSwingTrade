@@ -13,6 +13,7 @@ from services.backtest import (
     run_walk_forward_backtest,
 )
 from services.strategies import STRATEGIES, strategy_catalog
+from services import trial_log
 
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
@@ -70,7 +71,7 @@ def walk_forward(
     # can sit anywhere in the last 20 years — but the TESTED window is capped
     # at MAX_WINDOW_YEARS inside the engine. Each ticker is loaded only from
     # shortly before the window, so a run costs about what a 5-year run always has.
-    return run_walk_forward_backtest(
+    result = run_walk_forward_backtest(
         db=db,
         user_id=user.id,
         strategy_id=strategy,
@@ -93,6 +94,22 @@ def walk_forward(
         exit_rules=exit_rules,
         history="20y",
     )
+    # Every run is a trial: record it and deflate the Sharpe for the search
+    # (ML4T gap 2b). Never raises — see trial_log.annotate.
+    return trial_log.annotate(db, user.id, result)
+
+
+@router.get("/trials")
+def trials(
+    strategy: str | None = Query(None, pattern=_STRATEGY_PATTERN),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Every distinct Strategy Lab configuration this user has tried — the
+    trial count behind the Deflated Sharpe Ratio. Read-only: there is
+    deliberately no delete, since hiding tries would defeat the correction."""
+    rows = trial_log.list_trials(db, user.id, strategy)
+    return {"trials": rows, "count": len(rows)}
 
 
 @router.get("/cockpit")

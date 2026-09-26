@@ -713,14 +713,28 @@ function edgeCellHtml(strategyId, q, maxAbs) {
     flag = `<div class="low-flag" title="Wide confidence interval — do not lean on this">low confidence</div>`;
   }
 
+  // Out-of-time check (METHOD_VERSION 4): the periods before the holdout
+  // start and the holdout itself, side by side, plus the corrected q-value.
+  const hs = String(EDGE.holdout_start || '2019-01-01').slice(0, 4);
+  const seg = (s) => (s && N(s.n)) ? `${signed(s.avg_period_return, 2, '%')} (n=${esc(s.n)})` : '--';
+  const oot = (c.discovery || c.holdout)
+    ? `<div class="c-n hint" data-tip="Average return per period before ${esc(hs)} (discovery) and from ${esc(hs)} on (holdout). A verdict needs both to point the same way.">pre-${esc(hs)} ${seg(c.discovery)} · ${esc(hs)}+ ${seg(c.holdout)}</div>`
+    : '';
+  const qv = N(c.q_value);
+  const sig = qv !== null
+    ? `<div class="c-n hint" data-tip="False-discovery-adjusted p-value across all ${esc(EDGE.tests_corrected_for ?? '')} judged cells (Benjamini-Hochberg). A verdict needs q ≤ ${esc(EDGE.fdr_q ?? 0.1)}. Effective n ${esc(c.n_effective ?? '--')} after correcting for correlated periods.">q=${num(qv, 2)}${Number(qv) <= Number(EDGE.fdr_q ?? 0.1) ? ' ✓' : ''}</div>`
+    : '';
+  const vtip = [c.verdict_detail || verdict, c.verdict_reason ? 'Why: ' + c.verdict_reason : ''].filter(Boolean).join(' — ');
+
   const badges = [
-    verdict ? `<span class="vbadge ${vcls} hint" data-tip="${esc(c.verdict_detail || verdict)}">${esc(verdict)}</span>` : '',
+    verdict ? `<span class="vbadge ${vcls} hint" data-tip="${esc(vtip)}">${esc(verdict)}</span>` : '',
     c.tagged ? `<span class="vbadge hint" data-tip="This strategy is declared for this regime in services/strategies.py.">tagged</span>` : '',
   ].join('');
 
   const tip = [
     q.label || q.id,
     c.verdict_detail ? String(c.verdict_detail) : '',
+    c.verdict_reason ? 'Why: ' + String(c.verdict_reason) : '',
     `avg/period ${signed(c.avg_period_return, 2, '%')} · cumulative ${signed(c.cum_return, 2, '%')} · n=${n === null ? '--' : n} invested periods${N(c.idle_periods) ? ` (+${c.idle_periods} idle, excluded)` : ''} · confidence ${conf}`,
   ].filter(Boolean).join(' — ');
 
@@ -730,6 +744,8 @@ function edgeCellHtml(strategyId, q, maxAbs) {
       <div class="c-win">win ${esc(win)}</div>
       <div class="c-n">n=${n === null ? '--' : esc(n)} · cum ${signed(c.cum_return, 1, '%')}</div>
       ${N(c.idle_periods) ? `<div class="c-n hint" data-tip="Periods in this regime where the strategy held nothing. They are excluded from n and the averages: a cash period says nothing about how the strategy trades here.">+${esc(c.idle_periods)} idle (in cash)</div>` : ''}
+      ${oot}
+      ${sig}
       ${flag}
       <div class="c-badges">${badges}</div>
     </div></td>`;
@@ -746,7 +762,7 @@ function edgeEvidenceNote() {
       + '</div>';
   }).join('');
   if (!items) return '';
-  return `<div class="panel-desc" style="margin:14px 0 4px;"><strong style="color:#ccc;">Regimes earned from the data</strong> — only "confirmed" and "untagged-edge" cells count. This is what the evidence shows, not what the code declares.</div>${items}`;
+  return `<div class="panel-desc" style="margin:14px 0 4px;"><strong style="color:#ccc;">Regimes earned from the data</strong> — only "confirmed" and "untagged-edge" cells count, and each had to be significant after correcting for ${esc(EDGE.tests_corrected_for ?? 'all')} simultaneous tests and hold up both before and after ${esc(String(EDGE.holdout_start || '2019').slice(0, 4))}. This is what the evidence shows, not what the code declares.</div>${items}`;
 }
 
 /* ── Caveats (shared renderer: backtest run + matrix) ───────────────────── */
@@ -834,7 +850,24 @@ function renderStats(bt) {
     statCard('Sharpe', num(m.sharpe, 2), `Win rate ${pctv(m.win_rate, 1)}`, (m.sharpe ?? 0) > 1 ? 'up' : 'warn', 'Risk-adjusted return. Above 1 is decent, above 2 is strong, negative means returns did not justify volatility.'),
     statCard('Sortino', num(m.sortino, 2), `SPY ${num(b.sortino, 2)}`, (m.sortino ?? 0) > 1 ? 'up' : 'warn', 'Like Sharpe, but only downside volatility counts as risk. Better for asymmetric strategies whose many small wins inflate plain volatility.'),
     statCard('Exposure', pctv(m.exposure, 1), N(m.avg_invested_return) !== null ? `avg ${signed(m.avg_invested_return, 2, '%')} per invested period` : 'time in the market', '', 'Share of rebalance periods the strategy actually held positions. Low exposure with a solid average per-period return means the strategy earned its results while mostly sitting safely in cash.'),
+    sharpeTrustCard(bt),
   ].join('');
+}
+
+// ML4T gap 2b: how far the Sharpe can be trusted, after allowing for skew,
+// fat tails and the number of variants of this strategy the user has tried.
+function sharpeTrustCard(bt) {
+  const si = bt.sharpe_inference, sb = bt.selection_bias;
+  if (!si) return statCard('Deflated Sharpe', '--', 'not enough periods', '', 'Needs at least a few rebalance periods with some volatility.');
+  const ci = `95% CI ${num(si.ci95_low, 2)} to ${num(si.ci95_high, 2)}`;
+  if (!sb || sb.error || N(sb.deflated_sharpe) === null) {
+    return statCard('P(Sharpe > 0)', pctv(Number(si.psr_vs_zero) * 100, 0), ci, Number(si.psr_vs_zero) >= 0.95 ? 'up' : 'warn',
+      'Probability the true Sharpe is above zero, allowing for skew and fat tails. The run was not logged as a trial, so it is not deflated for how many variants were tried.');
+  }
+  const cls = sb.label === 'likely_real' ? 'up' : (sb.label === 'likely_luck' ? 'down' : 'warn');
+  return statCard('Deflated Sharpe', pctv(Number(sb.deflated_sharpe) * 100, 0),
+    `${sb.trials} trial${sb.trials === 1 ? '' : 's'} · luck hurdle ${num(sb.luck_hurdle_sharpe_annual, 2)} · ${ci}`, cls,
+    (sb.detail || '') + ' Above 95% is likely real; below 50% is likely luck. See GET /api/backtest/trials for every configuration counted.');
 }
 
 function renderPlanMetrics(bt) {

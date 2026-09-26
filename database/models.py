@@ -193,6 +193,32 @@ class HistoryArchive(Base):
     checked_at = Column(DateTime, nullable=True)
 
 
+class BacktestRun(Base):
+    """One row per distinct Strategy Lab configuration a user has tried
+    (services/trial_log.py). The count of rows per (user, strategy) is the
+    number of trials behind the Deflated Sharpe Ratio — ML4T 3e §7.4/§16.7:
+    the best of many tries looks good by luck, so every try is recorded.
+    Re-running an identical configuration updates its row instead of adding
+    one; rows are never deleted by the app (deleting would hide the search)."""
+    __tablename__ = "backtest_runs"
+    __table_args__ = (UniqueConstraint("user_id", "strategy", "params_key", name="uq_backtest_run"),)
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    strategy = Column(String(64), nullable=False)
+    mode = Column(String(16), nullable=False)
+    params_key = Column(String(32), nullable=False)   # md5 of the sorted parameters
+    params_json = Column(Text, nullable=False)
+    window_start = Column(String(10), nullable=True)
+    window_end = Column(String(10), nullable=True)
+    periods = Column(Integer, nullable=True)
+    sharpe_annual = Column(Float, nullable=True)
+    cagr = Column(Float, nullable=True)
+    runs = Column(Integer, default=1)                  # times this exact configuration was run
+    first_run_at = Column(DateTime, default=utcnow)
+    last_run_at = Column(DateTime, default=utcnow)
+
+
 class AICache(Base):
     __tablename__ = "ai_cache"
 

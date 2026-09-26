@@ -222,6 +222,44 @@ def _metrics(equity: list[dict], periods_per_year: float = 252 / 5) -> dict:
     }
 
 
+def sharpe_inference(equity: list[dict], periods_per_year: float = 252 / 5) -> dict | None:
+    """How much the run's Sharpe ratio can be trusted (ML4T 3e §16.7).
+
+    Uses the same per-period excess returns as `_metrics`. The standard error
+    allows for skew and fat tails (Mertens), so a strategy with rare big losses
+    gets a wider interval than a normal-returns formula would give it.
+    `psr_vs_zero` is the probability the true Sharpe is above zero; the
+    Deflated Sharpe Ratio (which also allows for how many variants were tried)
+    is added by services/trial_log.py, since only it knows that number.
+    Kept OUT of `metrics` so the frozen rotation digest is unaffected."""
+    from services.stats import moments, probabilistic_sharpe, sharpe_se
+    returns = [curr["value"] / prev["value"] - 1
+               for prev, curr in zip(equity, equity[1:]) if prev["value"] > 0]
+    n = len(returns)
+    if n < 3:
+        return None
+    rf_period = (1 + RISK_FREE_RATE) ** (1 / periods_per_year) - 1
+    excess = [r - rf_period for r in returns]
+    vol = pstdev(excess)
+    if vol <= 0:
+        return None
+    sr = mean(excess) / vol
+    skew, kurt = moments(excess)
+    se = sharpe_se(sr, n, skew, kurt)
+    scale = math.sqrt(periods_per_year)
+    return {
+        "periods": n,
+        "periods_per_year": round(periods_per_year, 4),
+        "sharpe_period": round(sr, 6),
+        "sharpe_annual": round(sr * scale, 3),
+        "ci95_low": round((sr - WILSON_Z_95 * se) * scale, 3),
+        "ci95_high": round((sr + WILSON_Z_95 * se) * scale, 3),
+        "psr_vs_zero": round(probabilistic_sharpe(sr, 0.0, n, skew, kurt), 4),
+        "skew": round(skew, 3),
+        "kurtosis": round(kurt, 3),
+    }
+
+
 def turnover_cost(holdings: set, prev_holdings: set, top_n: int, cost: float) -> float:
     """Round-trip transaction cost for rotating `prev_holdings` into `holdings`.
 
@@ -1535,6 +1573,7 @@ def run_walk_forward_backtest(
         "regime_breakdown": regime_breakdown,
         "strategy_regimes": strategy.regimes,
         "mode": mode,
+        "sharpe_inference": sharpe_inference(equity, ppy),
         "trade_log": trade_log,
         "caveats": caveats,
         "data_quality": data_quality,

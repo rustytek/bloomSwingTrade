@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 
 from services.backtest import run_walk_forward_backtest, wilson_interval
 from services.regime import QUADRANTS, QUADRANT_INFO
+from services.stats import bh_adjust, mean_test
 from services.strategies import STRATEGIES
 from services.universe import UNIVERSE_AS_OF, UNIVERSE_CAVEAT
 
@@ -71,6 +72,25 @@ MIN_PERIODS_PROMOTE = 30
 UNTAGGED_MIN_AVG_RETURN = 0.25   # percent, mean per-period return
 UNTAGGED_MIN_CI_LOW = 50.0       # percent, Wilson 95% lower bound on win rate
 
+# ── Out-of-time confirmation and multiple testing (ML4T gap 2) ─────────────
+# The matrix tests every strategy in every quadrant — 32+ cells — so with a
+# "positive mean on 20 periods" bar several cells pass or fail by luck alone,
+# and the history that produced the verdict is the only history it was judged
+# on. Since METHOD_VERSION 4 a confident verdict needs all three of:
+#   1. the full-sample mean distinguishable from zero after a Benjamini-
+#      Hochberg correction across every judged cell (FDR_Q), using an AR(1)
+#      effective sample size (services/stats.py::mean_test);
+#   2. the DISCOVERY segment (before HOLDOUT_START) pointing the same way;
+#   3. the HOLDOUT segment (HOLDOUT_START onward) pointing the same way.
+# The split puts a bear market on each side: discovery holds 2008, 2011,
+# 2015-16 and late 2018; the holdout holds the 2020 crash and 2022.
+# The holdout stays meaningful only while the hand-written Strategy.regimes
+# tags are not edited in response to it — change a tag because of a holdout
+# number and the holdout is spent (it becomes in-sample).
+HOLDOUT_START = "2019-01-01"
+MIN_SEGMENT_PERIODS = 8          # per segment; below it the segment can't agree or disagree
+FDR_Q = 0.10                     # Benjamini-Hochberg false-discovery rate
+
 # Cache: mirrors the per-user TTL pattern in services/today.py. The matrix is
 # expensive (8 strategies x a full walk-forward over ~450 tickers), so the TTL
 # is long and the API exposes an explicit refresh instead of rebuilding on read.
@@ -94,7 +114,11 @@ DEFAULT_MODE = "trade_plan" if _SUPPORTS_TRADE_PLAN else "rotation"
 #   3 — fills moved to the session AFTER each decision (next-day limit entries,
 #       next-open time/regime exits, open-to-open rotation). v2 cells were
 #       measured with same-close fills and overstate breakout/momentum edges.
-METHOD_VERSION = 3
+#   4 — verdicts need a Benjamini-Hochberg-significant mean (AR(1) effective
+#       n) AND agreement in both the discovery and the holdout segment (see
+#       HOLDOUT_START). v3 confirmed any cell with a positive mean on 20
+#       periods, uncorrected for testing 32 cells on one history.
+METHOD_VERSION = 4
 
 VERDICTS = ("confirmed", "unproven", "mis-tagged", "untagged-edge")
 
@@ -132,12 +156,18 @@ def cell_confidence(n: int) -> str:
 
 
 # ── verdicts ────────────────────────────────────────────────────────────────
-def classify_verdict(cell: dict, is_tagged: bool) -> str:
-    """One of VERDICTS for a single (strategy, quadrant) cell.
+def judge_cell(cell: dict, is_tagged: bool) -> tuple[str, str]:
+    """(verdict, reason) for one (strategy, quadrant) cell.
 
     Hard rule: a thin cell NEVER produces a confident verdict. A low-n losing
     cell is "unproven", not "mis-tagged" — we do not strip a strategy out of the
     user's playbook on eleven periods of noise.
+
+    Since METHOD_VERSION 4 the sign of the cell is only the CANDIDATE verdict;
+    it stands only if the mean survives the multiple-testing correction
+    (`q_value` <= FDR_Q, set by build_edge_matrix across all judged cells) and
+    both the discovery and the holdout segment point the same way. `reason`
+    says which gate stopped it, for the UI.
     """
     n = int(cell.get("n") or 0)
     avg = _num(cell.get("avg_period_return"))
@@ -145,39 +175,83 @@ def classify_verdict(cell: dict, is_tagged: bool) -> str:
     ci_low = _num(cell.get("win_rate_ci_low"))
 
     if n < MIN_PERIODS_JUDGE or avg is None or cum is None:
-        return "unproven"
+        return "unproven", f"only {n} invested periods — {MIN_PERIODS_JUDGE} needed before judging"
 
     if is_tagged:
         if avg > 0 and cum > 0:
-            return "confirmed"
-        if n >= MIN_PERIODS_DEMOTE and avg < 0 and cum < 0:
-            return "mis-tagged"
-        # Mixed signs / dead flat: honest answer is "we can't tell".
-        return "unproven"
+            candidate, sign = "confirmed", 1
+        elif n >= MIN_PERIODS_DEMOTE and avg < 0 and cum < 0:
+            candidate, sign = "mis-tagged", -1
+        else:
+            # Mixed signs / dead flat: honest answer is "we can't tell".
+            return "unproven", "average and compounded return disagree in sign"
+    else:
+        if (
+            n >= MIN_PERIODS_PROMOTE
+            and avg >= UNTAGGED_MIN_AVG_RETURN
+            and cum > 0
+            and ci_low is not None
+            and ci_low >= UNTAGGED_MIN_CI_LOW
+        ):
+            candidate, sign = "untagged-edge", 1
+        else:
+            return "unproven", "not strong enough to add an untagged regime"
 
-    if (
-        n >= MIN_PERIODS_PROMOTE
-        and avg >= UNTAGGED_MIN_AVG_RETURN
-        and cum > 0
-        and ci_low is not None
-        and ci_low >= UNTAGGED_MIN_CI_LOW
-    ):
-        return "untagged-edge"
-    return "unproven"
+    q = _num(cell.get("q_value"))
+    if q is None or q > FDR_Q:
+        shown = "n/a" if q is None else f"{q:.2f}"
+        return "unproven", (f"not distinguishable from noise after correcting for every cell "
+                            f"tested (q={shown}, need <= {FDR_Q:.2f})")
+
+    for key, label in (("discovery", f"before {HOLDOUT_START[:4]}"),
+                       ("holdout", f"{HOLDOUT_START[:4]} onward")):
+        seg = cell.get(key) or {}
+        seg_n = int(seg.get("n") or 0)
+        seg_avg = _num(seg.get("avg_period_return"))
+        if seg_n < MIN_SEGMENT_PERIODS or seg_avg is None:
+            return "unproven", (f"{key} segment ({label}) has {seg_n} periods — "
+                                f"{MIN_SEGMENT_PERIODS} needed to confirm out of time")
+        if seg_avg * sign <= 0:
+            return "unproven", f"{key} segment ({label}) points the other way ({seg_avg:+.2f}%/period)"
+
+    return candidate, "significant after multiple-testing correction; discovery and holdout agree"
+
+
+def classify_verdict(cell: dict, is_tagged: bool) -> str:
+    """One of VERDICTS for a single cell — see judge_cell for the rules."""
+    return judge_cell(cell, is_tagged)[0]
 
 
 # ── cell construction ───────────────────────────────────────────────────────
-def _cell_from_returns(quadrant: str, rets: list[float], idle: int = 0) -> dict:
-    """`rets` are periods the strategy was actually INVESTED in. `idle` counts
-    periods in this regime where it held nothing — reported, never scored: a
-    cash period says nothing about how the strategy trades in that regime."""
+def _segment(rets: list[float]) -> dict:
+    n = len(rets)
+    cum = 1.0
+    for r in rets:
+        cum *= (1 + r / 100.0)
+    return {
+        "n": n,
+        "avg_period_return": _round(sum(rets) / n, 2) if n else None,
+        "win_rate": _round(sum(1 for r in rets if r > 0) / n * 100, 1) if n else None,
+        "cum_return": _round((cum - 1) * 100, 2) if n else None,
+    }
+
+
+def _cell_from_returns(quadrant: str, rets: list[float], idle: int = 0,
+                       dates: list[str] | None = None) -> dict:
+    """`rets` are periods the strategy was actually INVESTED in, in date order.
+    `idle` counts periods in this regime where it held nothing — reported,
+    never scored: a cash period says nothing about how the strategy trades in
+    that regime. `dates` (ISO, parallel to `rets`) enables the discovery /
+    holdout split; without it the cell has no segments and cannot be judged
+    out of time."""
     n = len(rets)
     wins = [r for r in rets if r > 0]
     cum = 1.0
     for r in rets:
         cum *= (1 + r / 100.0)
     ci_low, ci_high = wilson_interval(len(wins), n) if n else (0.0, 100.0)
-    return {
+    test = mean_test(rets)
+    cell = {
         "quadrant": quadrant,
         "label": QUADRANT_INFO[quadrant]["label"],
         "n": n,
@@ -188,7 +262,32 @@ def _cell_from_returns(quadrant: str, rets: list[float], idle: int = 0) -> dict:
         "win_rate_ci_high": _round(ci_high, 1, 100.0),
         "cum_return": _round((cum - 1) * 100, 2) if n else None,
         "confidence": cell_confidence(n),
+        "t_stat": _round(test["t_stat"], 2),
+        "p_value": _round(test["p_value"], 4, 1.0),
+        "n_effective": _round(test["n_eff"], 1, 0.0),
+        "q_value": None,   # set across the whole matrix by build_edge_matrix
     }
+    if dates is not None and len(dates) == n:
+        cell["discovery"] = _segment([r for r, d in zip(rets, dates) if str(d) < HOLDOUT_START])
+        cell["holdout"] = _segment([r for r, d in zip(rets, dates) if str(d) >= HOLDOUT_START])
+    return cell
+
+
+def apply_verdicts(strategies: dict) -> int:
+    """Benjamini-Hochberg across every judged cell in the matrix, then the
+    verdict of every cell. Mutates `strategies` in place; returns how many
+    cells the correction covered (reported, so the UI can say "of N tests")."""
+    judged = [
+        c for entry in strategies.values() for c in (entry.get("cells") or {}).values()
+        if int(c.get("n") or 0) >= MIN_PERIODS_JUDGE and _num(c.get("p_value")) is not None
+    ]
+    for c, q in zip(judged, bh_adjust([_num(c.get("p_value")) for c in judged])):
+        c["q_value"] = _round(q, 4, 1.0)
+    for entry in strategies.values():
+        for c in (entry.get("cells") or {}).values():
+            c["verdict"], c["verdict_reason"] = judge_cell(c, bool(c.get("tagged")))
+            c["verdict_detail"] = VERDICT_INFO[c["verdict"]]
+    return len(judged)
 
 
 def actionable_strategy_ids() -> list[str]:
@@ -215,6 +314,7 @@ def _run_one(db: Session, user_id: int, strategy_id: str, source: str, kwargs: d
 
     trades = result.get("trades") or []
     by_q: dict[str, list[float]] = {q: [] for q in QUADRANTS}
+    dates_q: dict[str, list[str]] = {q: [] for q in QUADRANTS}
     idle: dict[str, int] = {q: 0 for q in QUADRANTS}
     for t in trades:
         q = t.get("quadrant")
@@ -228,6 +328,7 @@ def _run_one(db: Session, user_id: int, strategy_id: str, source: str, kwargs: d
         r = _num(t.get("period_return"))
         if r is not None:
             by_q[q].append(r)
+            dates_q[q].append(str(t.get("date") or ""))
 
     metrics = result.get("metrics") or {}
     overall = {
@@ -243,7 +344,7 @@ def _run_one(db: Session, user_id: int, strategy_id: str, source: str, kwargs: d
     }
     return {
         "error": None,
-        "cells": {q: _cell_from_returns(q, rets, idle[q]) for q, rets in by_q.items()},
+        "cells": {q: _cell_from_returns(q, rets, idle[q], dates_q[q]) for q, rets in by_q.items()},
         "overall": overall,
         "data_quality": result.get("data_quality"),
     }
@@ -305,9 +406,7 @@ def build_edge_matrix(db: Session, user_id: int, source: str = "universe",
             cell = run["cells"].get(q) or _cell_from_returns(q, [])
             cell = dict(cell)
             cell["tagged"] = q in tagged
-            cell["verdict"] = classify_verdict(cell, cell["tagged"])
-            cell["verdict_detail"] = VERDICT_INFO[cell["verdict"]]
-            cells[q] = cell
+            cells[q] = cell   # verdicts come after every strategy has run (apply_verdicts)
 
         strategies[sid] = {
             "id": sid,
@@ -318,8 +417,17 @@ def build_edge_matrix(db: Session, user_id: int, source: str = "universe",
             "error": run["error"],
         }
 
+    tests_corrected = apply_verdicts(strategies)
+    discovery_periods = sum(
+        int(((c.get("discovery") or {}).get("n")) or 0)
+        for entry in strategies.values() for c in entry["cells"].values()
+    )
+
     matrix = {
         "method_version": METHOD_VERSION,
+        "holdout_start": HOLDOUT_START,
+        "fdr_q": FDR_Q,
+        "tests_corrected_for": tests_corrected,
         "spy_regime_filter": kwargs.get("spy_regime"),
         "data_quality": data_quality,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -336,6 +444,9 @@ def build_edge_matrix(db: Session, user_id: int, source: str = "universe",
             "min_periods_promote": MIN_PERIODS_PROMOTE,
             "untagged_min_avg_return": UNTAGGED_MIN_AVG_RETURN,
             "untagged_min_ci_low": UNTAGGED_MIN_CI_LOW,
+            "min_segment_periods": MIN_SEGMENT_PERIODS,
+            "fdr_q": FDR_Q,
+            "holdout_start": HOLDOUT_START,
         },
         "errors": errors,
         "caveats": [
@@ -367,8 +478,42 @@ def build_edge_matrix(db: Session, user_id: int, source: str = "universe",
                     "nothing are excluded from each cell and shown as idle."
                 ),
             },
+            {
+                "id": "multiple_testing",
+                "severity": "info",
+                "title": f"Verdicts are corrected for {tests_corrected} simultaneous tests",
+                "detail": (
+                    f"Testing every strategy in every regime means some cells look good or bad by "
+                    f"luck alone. A cell is only confirmed, mis-tagged or promoted when its average "
+                    f"return is significant at a {FDR_Q:.0%} false-discovery rate (Benjamini-Hochberg) "
+                    f"using a sample size shrunk for correlation between consecutive periods, AND the "
+                    f"periods before {HOLDOUT_START[:4]} and from {HOLDOUT_START[:4]} on both point the "
+                    f"same way. Expect many cells to stay unproven — that is the honest answer."
+                ),
+            },
+            {
+                "id": "holdout_integrity",
+                "severity": "info",
+                "title": f"The {HOLDOUT_START[:4]}+ holdout only counts while the regime tags are left alone",
+                "detail": (
+                    "The regime tags on each strategy are hand-written, not fitted to this data, which is "
+                    "what lets the later segment act as an out-of-time check. Editing a tag because of a "
+                    "number in this matrix spends the holdout: after that, the check is in-sample."
+                ),
+            },
         ],
     }
+    if discovery_periods == 0:
+        matrix["caveats"].append({
+            "id": "no_discovery_segment",
+            "severity": "high",
+            "title": f"No history before {HOLDOUT_START[:4]} — nothing can be confirmed",
+            "detail": (
+                f"Every tested period falls on or after {HOLDOUT_START}, so there is no earlier segment "
+                "to check the holdout against and every cell stays unproven. Download the 20-year "
+                "history (panel above, admin) and rebuild the matrix."
+            ),
+        })
     if data_quality:
         from services.backtest import data_quality_caveats
         matrix["caveats"].extend(data_quality_caveats(data_quality))

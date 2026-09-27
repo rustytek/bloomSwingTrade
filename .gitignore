@@ -16,3 +16,4 @@ samples/
 
 # Reference material (copyrighted books etc.) - never commit
 Coding notes/
+.claude/worktrees/

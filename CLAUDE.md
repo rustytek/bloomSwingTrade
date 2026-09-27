@@ -27,7 +27,7 @@ python test_plan_persistence.py  # plan-intent columns, notes backfill, entry_ch
 python test_jobs.py              # background jobs: worker subprocess, dedupe, stale reaping
 python test_weekly_plan.py       # weekly-plan decisions, risk-aware buy pick, strategy rationale coverage
 python test_broker.py            # Robinhood OAuth/MCP (mocked), order validation, paper safety, fill sync
-python test_fixes.py             # layering (no services->api imports), AI provider fail-loud, CORS, stub hygiene
+python test_fixes.py             # layering (no services->api imports), AI provider fail-loud, CORS, stub hygiene, AI output validation
 python test_history.py           # 20-year archive: splice/rebase, yfinance→Tiingo fallback, backfill, 20y engine path, real-VIX regimes, API
 ```
 
@@ -88,6 +88,7 @@ React SPA (static/*.html) → FastAPI (main.py)
 | `auth/deps.py` | `get_current_user` / `get_current_admin` JWT dependencies |
 | `services/market_data.py` | yfinance wrapper, dual-layer cache (in-memory dict + SQLite), indicator calculation; emits the `schema_v: 2` quote contract (see "Quote Field Contract" below) |
 | `services/universe.py` | ~530 tickers: S&P 500 constituents (curated 2025-01; BK→BNY and MMC→MRSH renamed, HOLX/SEE/EA/EQR/AVB removed 2026-09-24 after the backfill found no data) + ETF lists |
+| `services/ai_validation.py` | Checks LLM output against the numbers the app put in the prompt (ML4T gap 10) — see "AI Output Validation" below |
 | `services/ai_service.py` | Abstract `AIService` base + Mock/LiteLLM implementations. `get_ai_service()` returns the mock **only** for `AI_PROVIDER=none`; `anthropic`/`openai` (not implemented) and unknown providers **raise** rather than silently serving mock output |
 | `services/indicators.py` | Technical indicators; includes `calc_atr(highs, lows, closes, period=14)` (Wilder-smoothed) and `calc_adx(highs, lows, closes, period=14)` (Wilder ADX/+DI/-DI — trend-strength gauge behind `services/regime.py`; **the DI series is offset by `period`, not 1** — getting that wrong silently yields look-ahead values). `compute_performance_metrics` returns **both** `ann_ret` (full-history annualized %, the figure Sharpe/Sortino/Calmar/Info Ratio/Treynor are computed from) and `ann_ret_1m` (21-bar annualized %); both annualize over `n-1` return periods |
 | `services/regime.py` | ADX + 200MA + VIX/realized-vol market regime classifier — see "Market Regime" below |
@@ -409,6 +410,15 @@ program instead of asking the user to copy logs:
 - **SSL**: Auto-generated self-signed cert on first run, stored in `./ssl/` (or `/data/ssl/` in HAOS). Persists across restarts.
 - **Database**: `./data/swingtrader.db` (SQLite, **WAL mode** since 1.23.1 — `database/db.py::configure_sqlite` sets `journal_mode=WAL`, `busy_timeout` 30 s, `synchronous=NORMAL` on every connection). Survives all restarts. Back up with the add-on stopped, or copy `swingtrader.db` **together with** `swingtrader.db-wal`/`-shm` — the newest commits can live in the `-wal` file until a checkpoint. WAL exists because the web app and several job-worker processes share the file: on 2026-09-26 the 20-year backfill held the write lock past SQLite's 5 s default and a daily-report worker got `database is locked` while recording its own failure, leaving job 15 stuck as `running` (pinned by `test_jobs.py::test_another_process_writing_does_not_lock_out_readers_or_writers`).
 - **Scheduler**: APScheduler runs daily report generation at 05:30 local time using the configured AI provider.
+
+## AI Output Validation (`services/ai_validation.py`)
+
+The app computes every indicator and the model only narrates — but nothing used to check the narration. Every AI output is now **annotated, never rewritten**, with a `validation` block `{version, checked, verified, contradicted, unverifiable, score, pass, issues[{severity, kind, ticker, claim, expected}]}`:
+- **Daily report** — `services/report_service.py::validate_report()` runs on the model's text (before the model stamp) with facts from `_gather_context`'s portfolio/watchlist rows; any ticker that appears anywhere in the prompt counts as known. Stored in `ReportCache.validation_json` (`_ensure_columns`; NULL = generated before validation — the UI says "claims not checked", never "clean"), passed through the `daily_report` job result, and returned by `POST /api/ai/daily-report`, `GET /api/ai/report/latest` and `/report/{id}`. `market-chat` and the per-ticker `/analysis`, `/signals` and `/chat` endpoints return one too. `/signals` **drops** malformed items (bad `type`/`strength` enum, missing text, not an object) instead of showing them; each drop is an `invalid_item` issue.
+- **Checks:** tickers not in the prompt (`unknown_ticker`, warn); price ±2 %, RSI ±3 pts, day change / P&L % (±0.5 pt or 10 %), distance from the 50/200-day MA (±1.5 pt or 10 %) — in prose (claim attributed to the nearest preceding known ticker in the sentence, or the endpoint's ticker) and in markdown tables (row ticker × column header); "above/below the 50/200-day" vs the sign of `vs_ma50`/`vs_ma200`, and "oversold"/"overbought" vs RSI (`contradiction`). Negated/conditional phrasing ("needs to reclaim", "if it falls below", "not oversold") is skipped. A metric the prompt did not include is `unverifiable` (info), never "wrong". `pass` is false only when something **contradicts** the data (severity high).
+- **Cannot catch:** opinions, forecasts and reasoning quality; numbers not attributable to one ticker; metrics the app never computed (support/resistance, most fundamentals); company names instead of symbols; common-word tickers (`ALL`, `IT`, `ON`, …) unless written `$ALL` or present in the prompt.
+- **Never fails the caller:** every entry point used by the app is a `safe_*` wrapper; an internal error becomes a single `validator_error` issue (`pass: null`). Pinned by `test_fixes.py` (including a full `generate_daily_report` run with a crashing validator).
+- **UI:** `static/report.html` shows a claim-check panel above the report (findings open by default when something contradicts the data) and on chat answers that have findings; the screener's AI panel (`static/index.html` `ClaimCheck`) does the same for the per-ticker analysis. Tickers in findings are clickable.
 
 ## Adding New AI Providers
 

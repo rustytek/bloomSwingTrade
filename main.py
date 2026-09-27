@@ -249,6 +249,7 @@ def ensure_schema_migrations():
         })
         _ensure_columns(conn, "report_cache", {
             "model": "VARCHAR(128)",
+            "validation_json": "TEXT",
         })
         _ensure_columns(conn, "history_archive", {
             "source": "VARCHAR(16)",

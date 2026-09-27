@@ -107,6 +107,9 @@ placeholder text silently). Route those models through LiteLLM instead.
 
 The AI panel in the stock detail view will populate automatically once configured.
 
+### Checking what the AI says
+Every AI report, chat answer and stock analysis is checked against the numbers SwingTrader gave the model. A box above the text tells you how many claims **contradicted the data** (for example a wrong price or RSI, or "above the 200-day" when the stock is below it) and how many **could not be verified** (a ticker the model was never given, or a number the app does not calculate). The model's text is never edited — the box lists each finding with what the data actually says. Opinions and forecasts are not checked. Reports generated before this check existed say "Claims not checked".
+
 ## Trading with Robinhood (Trade tab)
 
 The **Trade** tab sends the orders you tick in the **Weekly Plan** to Robinhood using Robinhood's official

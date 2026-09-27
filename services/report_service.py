@@ -617,6 +617,14 @@ Do not add new sections. Return only the completed markdown — no preamble."""
     logger.info("Daily report LLM completed user_id=%s model=%s markdown_chars=%s",
                 user_id, resolved_model, len(markdown or ""))
 
+    # Check the model's claims against the numbers it was given (ML4T gap 10).
+    # Runs on the model's own text, before the stamp; never alters it and
+    # never fails the report (the safe_* wrappers turn errors into an issue).
+    validation = validate_report(markdown, ctx, (system_prompt or _SYSTEM_PROMPT) + "\n" + user_msg)
+    logger.info("Daily report validation user_id=%s checked=%s contradicted=%s unverifiable=%s",
+                user_id, validation.get("checked"), validation.get("contradicted"),
+                validation.get("unverifiable"))
+
     # Stamp the generating model into the report itself so it travels with the
     # markdown (saved .md, history, any viewer).
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -640,6 +648,7 @@ Do not add new sections. Return only the completed markdown — no preamble."""
             report_markdown=markdown,
             triggered_by=triggered_by,
             model=resolved_model,
+            validation_json=json.dumps(validation, default=str),
         ))
         db.commit()
         logger.info("Daily report persisted user_id=%s triggered_by=%s model=%s",
@@ -647,7 +656,21 @@ Do not add new sections. Return only the completed markdown — no preamble."""
     except Exception as e:
         logger.warning("Could not persist report to DB: %s", e)
 
-    return {"markdown": markdown, "model": resolved_model}
+    return {"markdown": markdown, "model": resolved_model, "validation": validation}
+
+
+def validate_report(markdown: str, ctx: dict, prompt_text: str) -> dict:
+    """Validation block for a daily report. `ctx` is _gather_context's output
+    (the portfolio/watchlist rows whose numbers were in the prompt);
+    `prompt_text` is everything the model was sent, so any ticker it contains
+    counts as known. Never raises."""
+    from services import ai_validation
+    try:
+        facts = ai_validation.build_facts((ctx or {}).get("portfolio"), (ctx or {}).get("watchlist"))
+        known = ai_validation.tickers_in_text(prompt_text or "") | set(facts)
+    except Exception as exc:  # noqa: BLE001
+        return ai_validation.error_block(exc)
+    return ai_validation.safe_validate_text(markdown or "", facts, known)
 
 
 # ── Out-of-process entry point ────────────────────────────────────────────────

@@ -131,6 +131,21 @@
 
     /* ── Markdown ── */
     .md { max-width: 860px; line-height: 1.75; }
+    /* AI claim check (services/ai_validation.py) — always above the report text */
+    .claims { max-width: 860px; margin: 0 0 16px; padding: 10px 12px; border-radius: 6px; border: 1px solid #2a2a2a; background: #111; font-size: 12px; }
+    .claims.bad { border-color: #5a1f1f; background: #1a0f0f; }
+    .claims.warn { border-color: #4a3a12; background: #16130a; }
+    .claims.ok { border-color: #1f4a30; background: #0d1610; }
+    .claims .c-head { font-weight: 700; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+    .claims .c-sub { color: #888; font-size: 11px; margin-top: 3px; }
+    .claims details { margin-top: 6px; }
+    .claims summary { cursor: pointer; color: #aaa; font-size: 11px; }
+    .claims ul { margin: 6px 0 0 16px; padding: 0; }
+    .claims li { margin: 4px 0; line-height: 1.45; }
+    .claims .sev-high { color: #e5484d; font-weight: 700; }
+    .claims .sev-warn { color: #f0a500; font-weight: 700; }
+    .claims .sev-info { color: #888; font-weight: 700; }
+    .claims q { color: #bbb; font-style: italic; }
     .md h1 { font-size: 18px; font-weight: 700; color: #fff; border-bottom: 1px solid #1e1e1e; padding-bottom: 10px; margin-bottom: 20px; font-family: 'JetBrains Mono', monospace; }
     .md h2 { font-size: 13px; font-weight: 700; color: #f0a500; margin: 26px 0 10px; text-transform: uppercase; letter-spacing: .07em; }
     .md h3 { font-size: 12px; font-weight: 600; color: #ddd; margin: 14px 0 6px; }
@@ -190,6 +205,7 @@
             <div class="empty-title">No report loaded</div>
             <div class="empty-sub">Click <strong>Generate Report</strong> to create today's analysis, or select a past report from the sidebar.</div>
           </div>
+          <div id="reportValidation" style="display:none;"></div>
           <div class="md" id="reportContent" style="display:none;"></div>
         </div>
 
@@ -316,6 +332,7 @@
   const genStatus         = document.getElementById('genStatus');
   const emptyState        = document.getElementById('emptyState');
   const reportContent     = document.getElementById('reportContent');
+  const reportValidation  = document.getElementById('reportValidation');
   const sidebarList       = document.getElementById('sidebarList');
   const chatPanel         = document.getElementById('chatPanel');
   const chatMsgs          = document.getElementById('chatMsgs');
@@ -350,6 +367,49 @@
 
   // " · <model>" suffix when a model name is known (older reports may lack one).
   function modelTag(m) { return m ? ' · ' + m : ''; }
+
+  // ── AI claim check (ML4T gap 10) ──────────────────────────────────────────
+  // The report is the model's text, unchanged; this panel says which of its
+  // claims matched the numbers it was given, which contradicted them, and which
+  // could not be checked. Everything shown here came from model output or the
+  // data, so it is escaped.
+  function claimCheckHtml(v, what) {
+    if (!v) {
+      return `<div class="claims"><div class="c-head" style="color:#888;">Claims not checked</div>`
+        + `<div class="c-sub">This ${esc(what)} was generated before AI output was checked against the data. Treat every number in it as unverified.</div></div>`;
+    }
+    const issues = Array.isArray(v.issues) ? v.issues : [];
+    const bad = Number(v.contradicted || 0);
+    const unv = Number(v.unverifiable || 0);
+    const errored = issues.some(i => i.kind === 'validator_error');
+    const cls = bad ? 'bad' : (unv || errored ? 'warn' : 'ok');
+    let head;
+    if (errored) head = '<span class="sev-warn">Claim check did not run</span>';
+    else if (bad) head = `<span class="sev-high">${bad} claim${bad === 1 ? '' : 's'} contradicted the data</span>`;
+    else if (unv) head = `<span class="sev-warn">${unv} claim${unv === 1 ? '' : 's'} could not be verified</span>`;
+    else head = `<span style="color:#3fbf7f;">All ${Number(v.checked || 0)} checked claims matched the data</span>`;
+    if (bad && unv) head += ` <span class="sev-warn">· ${unv} could not be verified</span>`;
+    const sub = `${Number(v.verified || 0)} of ${Number(v.checked || 0)} numeric/ticker claims matched the numbers the model was given. `
+      + 'The text is shown exactly as the model wrote it — nothing was corrected. Opinions and forecasts are not checked.';
+    const order = { high: 0, warn: 1, info: 2 };
+    const items = issues.slice().sort((a, b) => (order[a.severity] ?? 3) - (order[b.severity] ?? 3)).map(i => {
+      const sev = ['high', 'warn', 'info'].includes(i.severity) ? i.severity : 'info';
+      const label = { high: 'Contradicts data', warn: 'Unverified', info: 'Not checkable' }[sev];
+      const tk = i.ticker ? tickerLink(i.ticker) + ' ' : '';
+      const claim = i.claim ? ` <q>${esc(String(i.claim).slice(0, 200))}</q>` : '';
+      return `<li><span class="sev-${sev}">${label}</span> ${tk}${esc(String(i.kind || '').replace(/_/g, ' '))}:${claim}`
+        + (i.expected ? ` <span class="muted">— data: ${esc(i.expected)}</span>` : '') + '</li>';
+    }).join('');
+    const list = items
+      ? `<details${bad ? ' open' : ''}><summary>Show ${issues.length} finding${issues.length === 1 ? '' : 's'}</summary><ul>${items}</ul></details>`
+      : '';
+    return `<div class="claims ${cls}"><div class="c-head">${head}</div><div class="c-sub">${esc(sub)}</div>${list}</div>`;
+  }
+
+  function renderClaimCheck(v) {
+    reportValidation.innerHTML = claimCheckHtml(v, 'report');
+    reportValidation.style.display = '';
+  }
 
   function renderMarkdown(md) {
     currentMarkdown = md;
@@ -482,7 +542,10 @@
         appendMsg('assistant', '⚠️ ' + (err.detail || res.statusText));
       } else {
         const data = await res.json();
-        appendMsg('assistant', safeMarkdown(data.answer), true);
+        const v = data.validation;
+        // Only flag chat answers that have findings; a clean answer stays uncluttered.
+        const note = v && Array.isArray(v.issues) && v.issues.length ? claimCheckHtml(v, 'answer') : '';
+        appendMsg('assistant', note + safeMarkdown(data.answer), true);
       }
     } catch (e) {
       document.getElementById('thinkingBubble')?.remove();
@@ -525,6 +588,7 @@
       if (!res.ok) throw new Error(res.statusText);
       const data = await res.json();
       renderMarkdown(data.markdown);
+      renderClaimCheck(data.validation);
       currentDate = new Date(data.generated_at).toISOString().slice(0,10).replace(/-/g,'');
       setStatus('Loaded · ' + new Date(data.generated_at).toLocaleString() + modelTag(data.model), 'ok');
       document.querySelectorAll('.s-item').forEach(i => i.classList.remove('active'));
@@ -539,6 +603,7 @@
       const data = await res.json();
       if (!data.markdown) return;
       renderMarkdown(data.markdown);
+      renderClaimCheck(data.validation);
       currentDate = new Date(data.generated_at).toISOString().slice(0,10).replace(/-/g,'');
       setStatus('Last generated ' + new Date(data.generated_at).toLocaleString() + ' · ' + data.triggered_by + modelTag(data.model), 'ok');
     } catch (e) { console.warn('loadLatest', e); }
@@ -559,6 +624,7 @@
       <div class="empty-title" style="color:#f0a500;margin-top:8px">Generating…</div>
       <div class="empty-sub">${modelName} is analysing your portfolio,<br>watchlist, and correlations.</div>`;
     reportContent.style.display = 'none';
+    reportValidation.style.display = 'none';
 
     try {
       const res = await fetch('/api/ai/daily-report', {
@@ -571,6 +637,7 @@
       }
       const data = await res.json();
       renderMarkdown(data.markdown);
+      renderClaimCheck(data.validation);
       currentDate = new Date(data.generated_at).toISOString().slice(0,10).replace(/-/g,'');
       setStatus('Generated at ' + new Date(data.generated_at).toLocaleString() + modelTag(data.model), 'ok');
       await loadHistory();

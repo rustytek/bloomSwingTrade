@@ -7,6 +7,7 @@ from database.db import get_db
 from database.models import User, ReportCache
 from auth.deps import get_current_user
 from services import market_data
+from services import ai_validation
 from services.ai_service import AIService, ai_service
 from services.tickers import normalize_ticker
 from config import get_settings
@@ -339,7 +340,11 @@ async def analyze_stock(
         raise HTTPException(status_code=404, detail=f"No data for {ticker}")
 
     analysis = await svc.analyze_stock(ticker, data)
-    return {"ticker": ticker, "analysis": analysis}
+    # Annotate, never rewrite: the model's claims checked against `data`,
+    # the quote it was given (ML4T gap 10).
+    validation = ai_validation.safe_validate_analysis(
+        analysis, ticker, ai_validation.build_facts({**data, "ticker": ticker}))
+    return {"ticker": ticker, "analysis": analysis, "validation": validation}
 
 
 @router.get("/{ticker}/signals")
@@ -364,7 +369,11 @@ async def get_signals(
         "vol_r", "p52w", "ann_ret_1m", "chg_pct", "score"
     ]}
     signals = await svc.generate_signals(ticker, technicals)
-    return {"ticker": ticker, "signals": signals}
+    # Malformed items (bad type/strength, missing text, not an object) are
+    # dropped rather than shown half-formed; `validation` lists each drop.
+    facts = ai_validation.build_facts({**technicals, "ticker": ticker, "price": data.get("price")})
+    signals, validation = ai_validation.safe_validate_signals(signals, ticker, facts)
+    return {"ticker": ticker, "signals": signals, "validation": validation}
 
 
 @router.post("/{ticker}/chat")
@@ -378,7 +387,10 @@ async def chat(
     ticker = normalize_ticker(ticker)
     data = await market_data.get_quote(ticker, db) or {}
     answer = await svc.chat(ticker, req.question, data)
-    return {"ticker": ticker, "question": req.question, "answer": answer}
+    validation = ai_validation.safe_validate_text(
+        answer if isinstance(answer, str) else "",
+        ai_validation.build_facts({**data, "ticker": ticker}), [ticker], default_ticker=ticker)
+    return {"ticker": ticker, "question": req.question, "answer": answer, "validation": validation}
 
 
 @router.get("/sector/{sector}/summary")
@@ -393,6 +405,19 @@ async def sector_summary(
 
 
 # ── Daily Report Endpoints ────────────────────────────────────────────────────
+
+def stored_validation(report) -> dict | None:
+    """The report's saved validation block, or None for a report generated
+    before validation existed (the UI says \"not validated\", never \"clean\")."""
+    import json
+    raw = getattr(report, "validation_json", None)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+
 
 @router.get("/models")
 async def list_models(user: User = Depends(get_current_user)):
@@ -520,6 +545,7 @@ async def generate_report(
     return {
         "markdown": result["markdown"],
         "model": result["model"],
+        "validation": result.get("validation"),
         "generated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
     }
 
@@ -537,12 +563,14 @@ def get_latest_report(
         .first()
     )
     if not report:
-        return {"markdown": None, "generated_at": None, "triggered_by": None, "model": None}
+        return {"markdown": None, "generated_at": None, "triggered_by": None, "model": None,
+                "validation": None}
     return {
         "markdown": report.report_markdown,
         "generated_at": report.generated_at.isoformat(),
         "triggered_by": report.triggered_by,
         "model": report.model,
+        "validation": stored_validation(report),
     }
 
 
@@ -658,7 +686,10 @@ async def market_chat(
         raise HTTPException(status_code=503, detail=f"LLM error: {e}")
 
     logger.info("Market chat completed user_id=%s model=%s answer_chars=%s", user.id, req.model or "(default)", len(answer or ""))
-    return {"answer": answer}
+    facts = ai_validation.build_facts(portfolio_data, watchlist_data)
+    validation = ai_validation.safe_validate_text(
+        answer or "", facts, ai_validation.tickers_in_text(system + "\n" + user_msg) | set(facts))
+    return {"answer": answer, "validation": validation}
 
 
 @router.get("/report/{report_id}")
@@ -681,4 +712,5 @@ def get_report_by_id(
         "generated_at": report.generated_at.isoformat(),
         "triggered_by": report.triggered_by,
         "model": report.model,
+        "validation": stored_validation(report),
     }

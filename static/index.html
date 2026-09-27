@@ -745,9 +745,39 @@
       </svg>;
     }
 
+    /* ── AI claim check (services/ai_validation.py, ML4T gap 10) ──
+       The analysis is shown exactly as the model wrote it; this box says which of
+       its claims matched the quote it was given, which contradicted it, and which
+       could not be checked. JSX escapes every string. */
+    function ClaimCheck({ v, onTicker }) {
+      if (!v) return null;
+      const issues = Array.isArray(v.issues) ? v.issues : [];
+      const bad = Number(v.contradicted || 0), unv = Number(v.unverifiable || 0);
+      const errored = issues.some(i => i.kind === 'validator_error');
+      const col = bad ? '#ff4d4d' : (unv || errored ? '#f0a500' : '#00d26a');
+      const head = errored ? 'Claim check did not run'
+        : bad ? `${bad} claim${bad === 1 ? '' : 's'} contradicted the data${unv ? ` · ${unv} could not be verified` : ''}`
+        : unv ? `${unv} claim${unv === 1 ? '' : 's'} could not be verified`
+        : `All ${v.checked || 0} checked claims matched the data`;
+      const label = { high: 'Contradicts data', warn: 'Unverified', info: 'Not checkable' };
+      return <div style={{ marginBottom: 12, padding: '8px 10px', borderRadius: 4, border: `1px solid ${col}55`, background: '#0d0d0d', fontSize: 11 }}>
+        <div style={{ color: col, fontWeight: 700 }}>{head}</div>
+        <div style={{ color: '#666', marginTop: 2 }}>{v.verified || 0} of {v.checked || 0} claims matched the quote the model was given. Text shown unedited; opinions are not checked.</div>
+        {issues.length > 0 && <div style={{ marginTop: 6 }}>
+          {issues.map((i, k) => <div key={k} style={{ marginTop: 3, color: '#aaa', lineHeight: 1.45 }}>
+            <span style={{ color: i.severity === 'high' ? '#ff4d4d' : i.severity === 'warn' ? '#f0a500' : '#777', fontWeight: 700 }}>{label[i.severity] || 'Note'}</span>
+            {i.ticker && <> <span className="ticker-link" onClick={() => onTicker && onTicker(i.ticker)}>{i.ticker}</span></>}
+            {' '}{String(i.kind || '').replace(/_/g, ' ')}{i.claim ? <>: <i style={{ color: '#888' }}>"{String(i.claim).slice(0, 160)}"</i></> : null}
+            {i.expected && <span style={{ color: '#666' }}> — data: {i.expected}</span>}
+          </div>)}
+        </div>}
+      </div>;
+    }
+
     /* ── AI Panel ── */
     function AIPanel({ ticker, stock }) {
       const [analysis, setAnalysis] = useState(null);
+      const [validation, setValidation] = useState(null);
       const [loading, setLoading] = useState(false);
       const load = async () => {
         setLoading(true);
@@ -757,6 +787,7 @@
             const d = await r.json();
             // Support both flat {summary,...} and wrapped {ticker, analysis:{summary,...}}
             setAnalysis(d.analysis || d);
+            setValidation(d.validation || null);
           }
         } catch (e) { }
         setLoading(false);
@@ -805,6 +836,7 @@
             <span className="mono" style={{ fontSize: 12, color: '#f0a500', fontWeight: 700 }}>{analysis.ai_score}/10</span>
           </div>}
         </div>
+        <ClaimCheck v={validation} onTicker={t => typeof openTickerDetail === 'function' && openTickerDetail(t)} />
         {/* Summary */}
         <div style={{ color: '#aaa', fontSize: 12, lineHeight: 1.7, marginBottom: 14, padding: '10px 12px', background: '#0d0d0d', borderRadius: 4, border: '1px solid #1a1a1a' }}>
           {analysis?.summary || '—'}

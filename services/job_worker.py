@@ -219,7 +219,8 @@ def _daily_report(db, user_id: int, params: dict, tick) -> dict:
 
     result = asyncio.run(_go())
     tick(0.99, "Saving report…")
-    return {"markdown": result.get("markdown"), "model": result.get("model")}
+    return {"markdown": result.get("markdown"), "model": result.get("model"),
+            "validation": result.get("validation")}
 
 
 def _history_backfill(db, user_id: int, params: dict, tick) -> dict:

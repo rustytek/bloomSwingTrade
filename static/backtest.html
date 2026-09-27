@@ -743,7 +743,7 @@ function edgeCellHtml(strategyId, q, maxAbs) {
       <div class="c-ret" style="color:${fg};">${signed(c.avg_period_return, 2, '%')}</div>
       <div class="c-win">win ${esc(win)}</div>
       <div class="c-n">n=${n === null ? '--' : esc(n)} · cum ${signed(c.cum_return, 1, '%')}</div>
-      ${N(c.episodes) !== null ? `<div class="c-n hint" data-tip="Separate stays in this regime the periods came from. Weeks inside one episode move together, so significance and the win-rate interval use an effective sample of ${esc(c.n_effective ?? '--')}, not n=${n === null ? '--' : esc(n)}.">${esc(c.episodes)} episode${Number(c.episodes) === 1 ? '' : 's'} · n<sub>eff</sub> ${num(c.n_effective, 0)}</div>` : ''}
+      ${N(c.episodes) !== null ? `<div class="c-n hint" data-tip="Separate stays in this regime the periods came from${N(c.episodes_raw) !== null ? ` (${esc(c.episodes_raw)} before merging stays interrupted by ${esc((EDGE.thresholds || {}).episode_merge_gap_periods ?? 4)} periods or fewer of another regime)` : ''}. Weeks inside one episode move together, so significance and the win-rate interval use an effective sample of ${esc(c.n_effective ?? '--')}, not n=${n === null ? '--' : esc(n)}.">${esc(c.episodes)} episode${Number(c.episodes) === 1 ? '' : 's'} · n<sub>eff</sub> ${num(c.n_effective, 0)}</div>` : ''}
       ${N(c.idle_periods) ? `<div class="c-n hint" data-tip="Periods in this regime where the strategy held nothing. They are excluded from n and the averages: a cash period says nothing about how the strategy trades here.">+${esc(c.idle_periods)} idle (in cash)</div>` : ''}
       ${oot}
       ${sig}

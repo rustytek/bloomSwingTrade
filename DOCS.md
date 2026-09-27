@@ -57,8 +57,9 @@ for testing every strategy in every regime at once. With only the 5-year cache t
 cell shows *unproven*. Expect many cells to stay unproven even with 20 years — that is the honest answer.
 
 **Weeks are not independent samples.** A regime cell's weeks come in *episodes* — unbroken stays in that
-regime. Twenty weeks of one bear market are one bear market, not twenty. Each cell shows how many episodes it came
-from and the *effective* sample size the tests actually use; a cell built from a single episode can never be
+regime. Twenty weeks of one bear market are one bear market, not twenty, and a stay briefly interrupted (a month or
+less of another regime) still counts as one. Each cell shows how many episodes it came from and the *effective*
+sample size the tests actually use; a cell built from a single episode can never be
 confirmed, and its win-rate range is correspondingly wide.
 
 ## How Much to Trust a Backtest (Strategy Lab)

@@ -101,19 +101,37 @@ def effective_n(xs: list[float]) -> tuple[float, float]:
     return len(xs) * (1.0 - rho) / (1.0 + rho), rho
 
 
-def episode_ids(labels: list) -> list[int]:
-    """Episode number for every position of a label sequence: a new episode
-    starts whenever the label differs from the previous position's. Used on
-    the full run's per-period quadrant sequence, so an episode is one
-    unbroken stay in a regime — periods the strategy sat idle inside that stay
-    are part of the same episode (they do not break it); a period in another
-    regime does."""
-    out, ep, prev = [], -1, object()
-    for lab in labels:
-        if lab != prev:
-            ep += 1
-            prev = lab
-        out.append(ep)
+def episode_ids(labels: list, merge_gap: int = 0) -> list[int]:
+    """Episode number for every position of a label sequence.
+
+    A RUN is a maximal stretch of one label. With `merge_gap=0` every run is
+    its own episode. With `merge_gap=k`, a run joins the previous episode of
+    the SAME label when at most k positions of other labels separate them —
+    hysteresis for a classifier that flickers across a threshold: a bull
+    market interrupted by two weeks of "choppy" is still one bull market.
+    Merging is per label, so the interrupting blip stays its own episode of
+    its own label (and chains with that label's other runs only if they are
+    also within k). Used on the full run's per-period quadrant sequence, so
+    periods the strategy sat idle inside a stay are part of it."""
+    runs: list[list] = []            # [label, start, end_exclusive]
+    for i, lab in enumerate(labels):
+        if runs and runs[-1][0] == lab:
+            runs[-1][2] = i + 1
+        else:
+            runs.append([lab, i, i + 1])
+    out: list[int] = [0] * len(labels)
+    last: dict = {}                  # label -> (episode id, end of its last run)
+    next_id = 0
+    for lab, start, end in runs:
+        prev = last.get(lab)
+        # start - prev_end = number of other-label positions in between (>= 1).
+        if prev is not None and start - prev[1] <= merge_gap:
+            ep = prev[0]
+        else:
+            ep, next_id = next_id, next_id + 1
+        for i in range(start, end):
+            out[i] = ep
+        last[lab] = (ep, end)
     return out
 
 

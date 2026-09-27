@@ -948,8 +948,64 @@ def test_episode_ids_break_on_regime_change_not_on_idle_periods():
         em.run_walk_forward_backtest = real
     bull = run["cells"]["trending_bull"]
     assert bull["n"] == 3 and bull["idle_periods"] == 1, bull
-    assert bull["episodes"] == 2, bull          # the idle week kept episode 1 whole
+    # Raw: the idle week kept the first stay whole; the choppy week split it.
+    assert bull["episodes_raw"] == 2, bull
+    # Merged: one week of choppy (<= EPISODE_MERGE_GAP_PERIODS) is a flicker.
+    assert bull["episodes"] == 1, bull
     assert run["cells"]["choppy_calm"]["episodes"] == 1
+
+
+@test
+def test_episode_hysteresis_merges_flicker_but_not_real_changes():
+    from services import stats
+    k = em.EPISODE_MERGE_GAP_PERIODS
+    assert 2 <= k <= 8, k                       # about a month at the 5-day cadence
+    # ADX flicker: bull, a 2-week choppy blip, bull again -> ONE bull episode;
+    # the blip is its own (single) choppy episode.
+    seq = ["bull"] * 10 + ["chop"] * 2 + ["bull"] * 10
+    ids = stats.episode_ids(seq, k)
+    assert len({ids[i] for i in range(22) if seq[i] == "bull"}) == 1, ids
+    assert len({ids[i] for i in range(22) if seq[i] == "chop"}) == 1, ids
+    assert len(set(stats.episode_ids(seq))) == 3         # raw: 3 runs
+    # Interruption exactly at the limit still merges; one longer does not.
+    at = ["bull"] * 5 + ["chop"] * k + ["bull"] * 5
+    assert len({i for i, s in zip(stats.episode_ids(at, k), at) if s == "bull"}) == 1
+    over = ["bull"] * 5 + ["chop"] * (k + 1) + ["bull"] * 5
+    assert len({i for i, s in zip(stats.episode_ids(over, k), over) if s == "bull"}) == 2
+    # A real regime change (no return to the old regime) is never merged away.
+    change = ["bull"] * 20 + ["bear"] * 20
+    ids = stats.episode_ids(change, k)
+    assert ids[0] != ids[-1] and len(set(ids)) == 2, ids
+    # Several short blips of the SAME other regime close together chain up.
+    blips = ["bull"] * 6 + ["chop"] + ["bull"] * 2 + ["chop"] + ["bull"] * 6
+    ids = stats.episode_ids(blips, k)
+    assert len({i for i, s in zip(ids, blips) if s == "chop"}) == 1, ids
+    assert len({i for i, s in zip(ids, blips) if s == "bull"}) == 1, ids
+
+
+@test
+def test_merged_episodes_drive_the_cluster_test_and_both_counts_are_reported():
+    real = em.run_walk_forward_backtest
+    k = em.EPISODE_MERGE_GAP_PERIODS
+    pattern = (["trending_bull"] * 12 + ["choppy_calm"] * 2) * 6     # one flickering bull market
+
+    def fake_run(**kw):
+        return {"trades": [{"date": "2012-01-02", "quadrant": q, "exits": 0,
+                            "holdings": [{"ticker": "X"}], "period_return": 1.0 + (i % 3) * 0.1}
+                           for i, q in enumerate(pattern)],
+                "metrics": {}, "data_quality": {}}
+
+    em.run_walk_forward_backtest = fake_run
+    try:
+        run = em._run_one(None, 994, "momentum_rotation", "universe", {})
+    finally:
+        em.run_walk_forward_backtest = real
+    bull = run["cells"]["trending_bull"]
+    assert bull["episodes_raw"] == 6 and bull["episodes"] == 1, bull
+    # 72 strongly positive weeks from ONE merged episode: never significant.
+    assert bull["p_value"] == 1.0 and bull["n_effective"] == 1.0, bull
+    json.dumps(run["cells"], allow_nan=False)
+    assert k == em.EPISODE_MERGE_GAP_PERIODS
 
 
 @test

@@ -347,10 +347,18 @@ class BrokerOrder(Base):
     quantity = Column(Float, nullable=False)
     limit_price = Column(Float, nullable=False)
     time_in_force = Column(String(8), nullable=False, default="gfd")
-    # simulated | queued | unconfirmed | confirmed | partially_filled | filled
-    # | cancelled | rejected | failed
+    # simulated | sending | unknown | queued | unconfirmed | confirmed
+    # | partially_filled | filled | cancelled | rejected | failed
+    # `sending` = written before the network call; `unknown` = the place call
+    # timed out / broke after it may have reached Robinhood. Both block
+    # re-placing the same ticker+side until resolved (ML4T gap 8).
     status = Column(String(24), nullable=False, index=True)
     broker_order_id = Column(String(64), nullable=True, index=True)
+    # Client-generated UUID, stored BEFORE any network call and sent to the
+    # place tool when its schema has an idempotency field (ref_id etc.).
+    client_order_id = Column(String(64), nullable=True, index=True)
+    # user|side|ticker|qty|limit|plan_item_id — "the same logical order".
+    dedupe_key = Column(String(200), nullable=True, index=True)
     filled_quantity = Column(Float, nullable=True)
     avg_fill_price = Column(Float, nullable=True)
     plan_json = Column(Text, nullable=True)

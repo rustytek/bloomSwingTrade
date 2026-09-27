@@ -62,6 +62,10 @@
     .status.filled { color:#3fbf7f; border-color:#1d3a28; }
     .status.failed, .status.rejected { color:#ff8a8d; border-color:#4a1418; }
     .status.simulated { color:#9fb3d9; border-color:#22304f; }
+    .status.unknown, .status.sending { color:#f0c060; border-color:#3a3110; font-weight:700; }
+    .msgs .a { color:#f0c060; }
+    .ack-box { border:1px solid #3a3110; background:#1a1608; border-radius:6px; padding:10px 12px; margin-top:12px; font-size:12.5px; color:#f0d9a0; }
+    .ack-box ul { margin:6px 0 8px 18px; padding:0; }
     .status.hs-good { color:#3fbf7f; border-color:#1d3a28; }
     .status.hs-warn { color:#f0c060; border-color:#3a3110; }
     .status.hs-info { color:#9fb3d9; border-color:#22304f; }
@@ -422,8 +426,14 @@
         <td class="mono">${trMoney(r.limit_price)}</td>
         <td class="mono">${trMoney(r.last_price)}</td>
         <td class="mono">${trMoney(r.est_value)}</td>
-        <td><div class="msgs">${(r.errors || []).map((x) => `<div class="e">${esc(x)}</div>`).join('')}${(r.warnings || []).map((x) => `<div class="w">${esc(x)}</div>`).join('')}${r.broker_review ? `<div class="r"><b>Robinhood review:</b> ${esc(r.broker_review)}</div>` : ''}${!(r.errors || []).length && !(r.warnings || []).length && !r.broker_review ? '<span class="muted">OK</span>' : ''}</div></td>
+        <td><div class="msgs">${(r.errors || []).map((x) => `<div class="e">${esc(x)}</div>`).join('')}${(r.warnings || []).map((x) => `<div class="w">${esc(x)}</div>`).join('')}${r.ok && (r.needs_ack || []).length ? '<div class="a">⚠ Needs your acknowledgement (see below).</div>' : ''}${r.broker_review ? `<div class="r"><b>Robinhood review:</b> ${esc(r.broker_review)}</div>` : ''}${!(r.errors || []).length && !(r.warnings || []).length && !r.broker_review && !(r.needs_ack || []).length ? '<span class="muted">OK</span>' : ''}</div></td>
       </tr>`).join('');
+    // Live only: holdings mismatch (or unreadable holdings) must be
+    // acknowledged before anything is placed — the server enforces it too.
+    const needsAck = live && !!t.needs_ack;
+    const ackBox = needsAck ? `<div class="ack-box"><b>Your SwingTrader portfolio and Robinhood disagree.</b>
+        <ul>${(t.ack_items || []).map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
+        <label class="confirm-line" style="margin-top:4px;color:#f0d9a0;"><input type="checkbox" id="holdAck" onchange="trPlaceGate()"> <span>I've read this and want to place these orders anyway.</span></label></div>` : '';
     el.innerHTML = `
       ${live ? '<div class="note bad"><b>LIVE</b> — these will be real orders in your Robinhood Agentic account.</div>' : '<div class="note info"><b>Paper mode</b> — these will be simulated. Nothing is sent and your portfolio stays as it is.</div>'}
       ${(p.notes || []).map((n) => `<div class="note warn">${esc(n)}</div>`).join('')}
@@ -437,7 +447,8 @@
         <div class="kv"><span class="k">Selling</span><span class="v">${trMoney(t.sell_total)}</span></div>
         <div class="kv"><span class="k">Buying power</span><span class="v">${t.buying_power_known ? trMoney(t.buying_power) : 'unknown — Robinhood will check'}</span></div>
       </div>
-      ${live ? `<label class="confirm-line"><input type="checkbox" id="placeAck" onchange="document.getElementById('placeBtn').disabled=!this.checked||${okCount === 0}"> <span>I understand these are real orders with real money.</span></label>` : ''}
+      ${ackBox}
+      ${live ? `<label class="confirm-line"><input type="checkbox" id="placeAck" onchange="trPlaceGate()"> <span>I understand these are real orders with real money.</span></label>` : ''}
       <div class="row-actions">
         <button class="btn btn-primary" id="placeBtn" type="button" onclick="trPlace()" ${okCount === 0 || live ? 'disabled' : ''}>${live ? 'Place' : 'Simulate'} ${okCount} order${okCount === 1 ? '' : 's'}</button>
         ${t.error_count ? `<span class="muted" style="font-size:12px;">${t.error_count} order${t.error_count === 1 ? '' : 's'} with problems will be skipped.</span>` : ''}
@@ -445,14 +456,25 @@
       </div>`;
   }
 
+  function trPlaceGate() {
+    const btn = document.getElementById('placeBtn');
+    if (!btn || !TR_PREVIEW) return;
+    const t = TR_PREVIEW.totals || {};
+    const live = TR_PREVIEW.mode === 'live';
+    const money = (document.getElementById('placeAck') || {}).checked;
+    const hold = !(live && t.needs_ack) || (document.getElementById('holdAck') || {}).checked;
+    btn.disabled = !(t.ok_count > 0) || (live && !(money && hold));
+  }
+
   async function trPlace() {
     const live = TR_PREVIEW && TR_PREVIEW.mode === 'live';
     if (live && !(document.getElementById('placeAck') || {}).checked) return;
+    const acknowledge = !!(document.getElementById('holdAck') || {}).checked;
     const btn = document.getElementById('placeBtn');
     const msg = document.getElementById('placeMsg');
     btn.disabled = true; msg.innerHTML = '<span class="spinner"></span>' + (live ? 'Sending to Robinhood…' : 'Simulating…');
     try {
-      const r = await api('/api/broker/orders', trJson('POST', { orders: TR_PREVIEWED, confirm: !!live }));
+      const r = await api('/api/broker/orders', trJson('POST', { orders: TR_PREVIEWED, confirm: !!live, acknowledge }));
       TR_PREVIEW = null;
       trRenderReview(r);
       await trLoadHistory();
@@ -465,7 +487,9 @@
       <td class="mono">${esc(x.shares ?? '--')} @ ${trMoney(x.limit_price)}</td>
       <td>${x.status ? `<span class="status ${esc(x.status)}">${esc(x.status)}</span>` : '<span class="status failed">skipped</span>'}</td>
       <td class="msgs">${esc(x.message || (x.errors || []).join(' '))}</td></tr>`).join('');
-    return `<div class="note ${r.mode === 'live' ? 'good' : 'info'}">${r.mode === 'live' ? `Sent ${r.placed || 0} order(s) to Robinhood. If Robinhood asks, approve them in its app. Use <b>Check fills</b> below to update your portfolio.` : `Simulated ${r.placed || 0} order(s). Nothing was sent; your portfolio is unchanged.`}</div>
+    const tErr = ((r.totals || {}).errors || []).map((n) => `<div class="note bad">${esc(n)}</div>`).join('');
+    const unknown = r.unknown ? `<div class="note warn"><b>${r.unknown} order${r.unknown === 1 ? '' : 's'} with an unknown outcome.</b> Robinhood didn't confirm ${r.unknown === 1 ? 'it' : 'them'} — ${r.unknown === 1 ? 'it' : 'they'} may or may not have been placed. Check the Robinhood app, then press <b>Check fills</b> or use <b>Mark filled / Mark cancelled</b> in Order history. SwingTrader won't send another order for the same ticker and side until then.</div>` : '';
+    return `${tErr}${unknown}<div class="note ${r.mode === 'live' ? 'good' : 'info'}">${r.mode === 'live' ? `Sent ${r.placed || 0} order(s) to Robinhood. If Robinhood asks, approve them in its app. Use <b>Check fills</b> below to update your portfolio.` : `Simulated ${r.placed || 0} order(s). Nothing was sent; your portfolio is unchanged.`}</div>
       <div class="table-wrap"><table><thead><tr><th>Ticker</th><th>Side</th><th>Order</th><th>Status</th><th>Message</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
@@ -479,14 +503,17 @@
     el.innerHTML = `<table><thead><tr><th>When</th><th>Mode</th><th>Order</th><th>Status</th><th>Filled</th><th></th></tr></thead><tbody>${orders.map((o) => {
       const msgs = o.broker_messages || {};
       const detail = [o.error, msgs.result, msgs.cancel].filter(Boolean).map((t) => `<div class="msgs r">${esc(String(t).slice(0, 600))}</div>`).join('');
-      const actions = o.open ? `<button class="btn btn-sm" type="button" onclick="trCancel(${o.id})">Cancel</button>
+      const actions = o.outcome_unknown ? `<div class="muted" style="font-size:10.5px;margin-bottom:3px;">Check the Robinhood app first.</div>
+          <button class="btn btn-sm" type="button" onclick="trResolve(${o.id}, 'filled', ${Number(o.limit_price)}, ${Number(o.quantity)})">Mark filled</button>
+          <button class="btn btn-sm" type="button" onclick="trResolve(${o.id}, 'cancelled')">Mark cancelled</button>`
+        : o.open ? `<button class="btn btn-sm" type="button" onclick="trCancel(${o.id})">Cancel</button>
           ${o.mode === 'live' ? `<button class="btn btn-sm" type="button" onclick="trResolve(${o.id}, 'filled', ${Number(o.limit_price)}, ${Number(o.quantity)})">Mark filled</button>
           <button class="btn btn-sm" type="button" onclick="trResolve(${o.id}, 'cancelled')">Mark cancelled</button>` : ''}` : '';
       return `<tr>
         <td class="muted" style="font-size:11px;">${o.created_at ? esc(new Date(o.created_at + (o.created_at.endsWith('Z') || o.created_at.includes('+') ? '' : 'Z')).toLocaleString()) : '--'}</td>
         <td>${o.mode === 'live' ? '<b style="color:#ff8a8d;">live</b>' : '<span class="muted">paper</span>'}</td>
         <td><span class="side ${o.side === 'sell' ? 'sell' : 'buy'}">${esc(String(o.side).toUpperCase())}</span> ${tickerLink(o.ticker)} <span class="mono">${esc(o.quantity)} @ ${trMoney(o.limit_price)}</span>${detail}</td>
-        <td><span class="status ${esc(o.status)}">${esc(o.status)}</span>${o.applied_to_portfolio ? '<div class="muted" style="font-size:10.5px;">in portfolio</div>' : ''}</td>
+        <td><span class="status ${esc(o.status)}">${o.outcome_unknown ? 'outcome unknown' : esc(o.status)}</span>${o.applied_to_portfolio ? '<div class="muted" style="font-size:10.5px;">in portfolio</div>' : ''}</td>
         <td class="mono">${o.filled_quantity ? esc(o.filled_quantity) + ' @ ' + trMoney(o.avg_fill_price) : '--'}</td>
         <td style="white-space:nowrap;">${actions}</td></tr>`;
     }).join('')}</tbody></table>`;

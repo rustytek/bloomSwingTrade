@@ -14,6 +14,21 @@ Safety model, in order of importance:
   4. ROBINHOOD REVIEWS EVERY LIVE ORDER FIRST. review_equity_order runs before
      place_equity_order and its words are shown verbatim.
   5. FILLS REACH THE PORTFOLIO EXACTLY ONCE (BrokerOrder.applied_to_portfolio).
+  6. NEVER THE SAME ORDER TWICE (ML4T gap 8). Every live order row is written
+     with a client UUID BEFORE the network call (status `sending`); a place
+     call that times out or breaks after it may have reached Robinhood leaves
+     the row `unknown`. While any `sending`/`unknown`/open order exists for a
+     ticker+side, another is refused; an identical order already filled today
+     is refused too. The UUID is passed to Robinhood when the place tool's
+     schema has an idempotency field (ref_id, client_order_id, …).
+  7. THE BOOK MUST MATCH BEFORE LIVE TRADING. Live preview/place compare
+     Robinhood's holdings with SwingTrader's portfolio: a sell whose ticker is
+     `shares_differ` or `swingtrader_only` is blocked; buys while holdings
+     disagree (`shares_differ` / `robinhood_only`, or holdings unreadable)
+     need an explicit acknowledgement.
+  8. NO SIZING OFF A STALE PRICE. Live orders need a quote younger than
+     QUOTE_MAX_AGE_OPEN_S while the market is open, or taken after the last
+     close when it is shut. Preview refreshes stale quotes; place refuses them.
 
 Network calls run in a worker thread (anyio.to_thread) — they are short I/O
 bounded by per-request timeouts, not CPU work, so they don't need the
@@ -27,6 +42,7 @@ import json
 import re
 import secrets
 import time
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -43,6 +59,15 @@ MAX_SHARES = 100_000
 LIMIT_BAND = 0.15          # limit must be within ±15% of the last price
 OAUTH_STATE_TTL = 600      # seconds
 TERMINAL = {"filled", "cancelled", "canceled", "rejected", "failed", "simulated", "expired"}
+# A live order whose placement outcome we never saw. Non-terminal: blocks
+# re-placing the same ticker+side until sync or a manual resolve settles it.
+UNRESOLVED = {"sending", "unknown"}
+# Live orders are sized/sanity-checked off the cached quote. While the market
+# is open it must be at most this old; when shut, taken after the last close.
+QUOTE_MAX_AGE_OPEN_S = 20 * 60
+# Holdings-comparison statuses (compare_holdings) that gate live orders.
+HOLDINGS_SELL_BLOCK = ("shares_differ", "swingtrader_only")
+HOLDINGS_BUY_ACK = ("shares_differ", "robinhood_only")
 PLAN_KEYS = ("stop", "target", "strategy", "strategy_name", "planned_entry",
              "planned_entry_high", "thesis", "invalidation", "time_stop_days")
 _TICKER_RE = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,14}$")
@@ -65,18 +90,86 @@ def _now() -> datetime:
 
 # ── Quote source (swappable in tests) ──────────────────────────────────────
 
-async def _app_quotes(tickers: list[str], db: Session) -> dict[str, float]:
+async def _app_quotes(tickers: list[str], db: Session, refresh: bool = False) -> dict[str, dict]:
+    """{TICKER: {"price": float, "as_of": iso-str|None}}. `refresh=True`
+    re-fetches (used by a live preview when a cached quote is too old)."""
     from services import market_data
-    out: dict[str, float] = {}
+    out: dict[str, dict] = {}
     try:
-        for q in await market_data.get_batch(tickers, db):
+        if refresh:
+            quotes = [await market_data.get_quote(t, db, force_refresh=True) for t in tickers]
+        else:
+            quotes = await market_data.get_batch(tickers, db)
+        for q in quotes:
             if q and q.get("ticker") and q.get("price"):
-                out[q["ticker"].upper()] = float(q["price"])
+                out[q["ticker"].upper()] = {"price": float(q["price"]),
+                                            "as_of": q.get("last_updated_iso")}
     except Exception:  # noqa: BLE001 — a quote outage becomes "no price", handled per order
         pass
     return out
 
 QUOTE_SOURCE: Callable = _app_quotes
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str) and value:
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _split_quotes(raw: dict) -> tuple[dict[str, float], dict[str, datetime | None]]:
+    """Accepts {T: price} or {T: {"price", "as_of"}} -> (prices, as_of)."""
+    prices: dict[str, float] = {}
+    as_of: dict[str, datetime | None] = {}
+    for t, v in (raw or {}).items():
+        if isinstance(v, dict):
+            p, ts = v.get("price"), _parse_ts(v.get("as_of"))
+        else:
+            p, ts = v, None
+        try:
+            p = float(p)
+        except (TypeError, ValueError):
+            continue
+        if p > 0:
+            prices[str(t).upper()] = p
+            as_of[str(t).upper()] = ts
+    return prices, as_of
+
+
+def quote_staleness(as_of: datetime | None, now: datetime | None = None,
+                    market_open: bool | None = None, last_close: datetime | None = None) -> str | None:
+    """None when a quote is fresh enough to size a LIVE order, else why not.
+
+    Market open: at most QUOTE_MAX_AGE_OPEN_S old. Market shut: taken at or
+    after the most recent NYSE close (services/market_data's own freshness
+    rule — a price from before the close is not the closing price). Unknown
+    timestamp = stale: an order is never sized off a price of unknown age."""
+    if as_of is None:
+        return "has no timestamp"
+    now = now or _now()
+    as_of = as_of if as_of.tzinfo else as_of.replace(tzinfo=timezone.utc)
+    if market_open is None or (not market_open and last_close is None):
+        from services import market_data
+        if market_open is None:
+            market_open = market_data.is_market_open()
+        if not market_open and last_close is None:
+            last_close = market_data._last_market_close()
+    if market_open:
+        age = (now - as_of).total_seconds()
+        if age > QUOTE_MAX_AGE_OPEN_S:
+            return (f"is {int(age // 60)} min old (the market is open; live orders need a price "
+                    f"under {QUOTE_MAX_AGE_OPEN_S // 60} min old)")
+        return None
+    if as_of < last_close:
+        return "was taken before the last market close"
+    return None
 
 
 # ── Account row helpers ────────────────────────────────────────────────────
@@ -564,15 +657,36 @@ def _clean_plan(plan: Any) -> dict:
 
 
 def validate_orders(orders: list[dict], quotes: dict[str, float], held: dict[str, float],
-                    buying_power: float | None, strict_quotes: bool) -> tuple[list[dict], dict]:
-    """Pure validation. Returns (rows, totals). Never raises on bad input."""
+                    buying_power: float | None, strict_quotes: bool,
+                    stale: dict[str, str] | None = None,
+                    holdings: dict[str, dict] | None = None,
+                    holdings_unknown: bool = False) -> tuple[list[dict], dict]:
+    """Pure validation. Returns (rows, totals). Never raises on bad input.
+
+    `stale` ({TICKER: reason}) marks quotes too old to size a live order —
+    an error when strict (live), a warning otherwise. `holdings` is the
+    compare_holdings() result keyed by _key(ticker) (live only): sells of a
+    `shares_differ`/`swingtrader_only` ticker are errors, and buys while any
+    ticker is `shares_differ`/`robinhood_only` — or when `holdings_unknown` —
+    carry `needs_ack` items the user must acknowledge before placing."""
     rows: list[dict] = []
     seen: set[tuple[str, str]] = set()
     batch_errors: list[str] = []
+    stale = stale or {}
     if not orders:
         batch_errors.append("No orders selected.")
     if len(orders) > MAX_ORDERS:
         batch_errors.append(f"At most {MAX_ORDERS} orders per batch (got {len(orders)}).")
+    mismatched = sorted(k for k, h in (holdings or {}).items() if h.get("status") in HOLDINGS_BUY_ACK)
+    buy_ack = None
+    if holdings_unknown:
+        buy_ack = ("Robinhood holdings could not be read, so SwingTrader can't confirm its portfolio "
+                   "matches your account — sizing and risk checks use SwingTrader's numbers.")
+    elif mismatched:
+        buy_ack = ("SwingTrader's portfolio doesn't match Robinhood for "
+                   + ", ".join(mismatched[:8]) + (" …" if len(mismatched) > 8 else "")
+                   + " — sizing and risk checks use SwingTrader's numbers. Reconcile in the "
+                   "Holdings panel, or acknowledge to trade anyway.")
 
     for i, o in enumerate(orders or []):
         o = o if isinstance(o, dict) else {}
@@ -627,6 +741,10 @@ def validate_orders(orders: list[dict], quotes: dict[str, float], held: dict[str
                 errors.append(f"No current price for {ticker}, so the limit can't be sanity-checked.")
             else:
                 warnings.append(f"No current price for {ticker}; limit not sanity-checked.")
+        if last and ticker in stale:
+            msg = (f"The price for {ticker} {stale[ticker]} — press Preview to refresh prices "
+                   "before placing.")
+            (errors if strict_quotes else warnings).append(msg)
 
         if side == "sell" and shares is not None and ticker:
             have = held.get(ticker, 0.0)
@@ -635,12 +753,26 @@ def validate_orders(orders: list[dict], quotes: dict[str, float], held: dict[str
             elif shares > have + 1e-9:
                 errors.append(f"Selling {shares} but only {have:g} held.")
 
+        h = (holdings or {}).get(_key(ticker)) if ticker else None
+        if side == "sell" and h and h.get("status") in HOLDINGS_SELL_BLOCK:
+            if h["status"] == "shares_differ":
+                errors.append(f"Robinhood holds {h.get('robinhood_shares') or 0:g} {ticker} but SwingTrader "
+                              f"records {h.get('swingtrader_shares') or 0:g} — reconcile in the Holdings "
+                              "panel before selling.")
+            else:
+                errors.append(f"Your Robinhood Agentic account holds no {ticker} (SwingTrader records "
+                              f"{h.get('swingtrader_shares') or 0:g}) — it may be held at another broker; "
+                              "sell it there.")
+        needs_ack = []
+        if buy_ack and (side == "buy" or holdings_unknown):
+            needs_ack.append(buy_ack)
+
         est = round(shares * limit, 2) if (shares and limit) else None
         rows.append({
             "index": i, "plan_item_id": o.get("plan_item_id"), "ticker": ticker, "side": side,
             "shares": shares, "limit_price": limit, "time_in_force": tif, "last_price": last,
             "est_value": est, "ok": not errors, "errors": errors, "warnings": warnings,
-            "plan": _clean_plan(o.get("plan")),
+            "needs_ack": needs_ack, "plan": _clean_plan(o.get("plan")),
         })
 
     buy_total = round(sum(r["est_value"] or 0 for r in rows if r["ok"] and r["side"] == "buy"), 2)
@@ -667,46 +799,136 @@ def validate_orders(orders: list[dict], quotes: dict[str, float], held: dict[str
     totals = {
         "buy_total": buy_total, "sell_total": sell_total, "buying_power": buying_power,
         "buying_power_known": buying_power is not None,
-        "ok_count": sum(1 for r in rows if r["ok"]),
-        "error_count": sum(1 for r in rows if not r["ok"]),
         "errors": batch_errors, "warnings": batch_warnings,
-        "ok": not batch_errors and all(r["ok"] for r in rows),
     }
+    _recount(totals, rows)
     return rows, totals
 
 
-async def _context(db: Session, user: User, orders: list[dict]):
-    """(acct, mode, quotes, held, buying_power, notes) for validation."""
+def _recount(totals: dict, rows: list[dict]) -> dict:
+    """Refresh the row-derived totals after rows were changed in place."""
+    totals["ok_count"] = sum(1 for r in rows if r["ok"])
+    totals["error_count"] = sum(1 for r in rows if not r["ok"])
+    totals["ok"] = not totals["errors"] and all(r["ok"] for r in rows)
+    items: list[str] = []
+    for r in rows:
+        if r["ok"]:
+            for m in r.get("needs_ack") or []:
+                if m not in items:
+                    items.append(m)
+    totals["needs_ack"] = bool(items)
+    totals["ack_items"] = items
+    return totals
+
+
+def _dedupe_key(user_id: int, r: dict) -> str:
+    return (f"{user_id}|{r['side']}|{r['ticker']}|{r['shares']}|{float(r['limit_price']):.4f}"
+            f"|{r.get('plan_item_id') or ''}")[:200]
+
+
+def duplicate_blocks(db: Session, user: User, rows: list[dict]) -> None:
+    """Refuse live orders that could duplicate one already sent (gap 8).
+
+    Per ok row, against this user's LIVE order log for the same ticker+side:
+      * an unresolved (`sending`/`unknown`) order  -> blocked until resolved
+      * any still-open order                        -> blocked (cancel it first)
+      * an identical order (same dedupe key) filled today -> blocked
+    A terminal failure (failed/rejected/cancelled/expired) never blocks."""
+    tickers = sorted({r["ticker"] for r in rows if r["ok"] and r.get("ticker")})
+    if not tickers:
+        return
+    prior = (db.query(BrokerOrder)
+             .filter(BrokerOrder.user_id == user.id, BrokerOrder.mode == "live",
+                     BrokerOrder.ticker.in_(tickers))
+             .order_by(BrokerOrder.id.desc()).all())
+    today = _now().date()
+    for r in rows:
+        if not r["ok"]:
+            continue
+        key = _dedupe_key(user.id, r)
+        for o in prior:
+            if o.ticker != r["ticker"] or o.side != r["side"]:
+                continue
+            msg = None
+            if o.status in UNRESOLVED:
+                msg = (f"An earlier {o.side} order for {o.ticker} (#{o.id}) has an unknown outcome — it may "
+                       "have reached Robinhood. Check the Robinhood app, then press Check fills or use "
+                       "Mark filled / Mark cancelled before placing again.")
+            elif o.status not in TERMINAL:
+                msg = (f"You already have an open {o.side} order for {o.ticker} (#{o.id}, {o.status}). "
+                       "Cancel it before placing another.")
+            elif (o.status == "filled" and o.dedupe_key == key and o.created_at is not None
+                  and o.created_at.date() == today):
+                msg = (f"An identical {o.side} order for {o.ticker} (#{o.id}) already filled today — "
+                       "not placing it twice.")
+            if msg:
+                r["ok"] = False
+                r["errors"].append(msg)
+                break
+
+
+async def _context(db: Session, user: User, orders: list[dict], refresh_stale: bool = False) -> dict:
+    """Everything validate_orders needs: acct, mode, quotes, stale, held,
+    buying power, the holdings comparison (live) and notes. `refresh_stale`
+    (preview only) re-fetches quotes too old for a live order."""
     acct = get_account(db, user.id)
     mode = (acct.mode if acct else "paper") or "paper"
+    live = mode == "live" and is_connected(acct)
     tickers = sorted({str((o or {}).get("ticker") or "").upper().strip().replace("/", "-")
                       for o in orders if isinstance(o, dict)} - {""})
-    quotes = await QUOTE_SOURCE(tickers, db) if tickers else {}
+    quotes, as_of = _split_quotes(await QUOTE_SOURCE(tickers, db) if tickers else {})
     notes: list[str] = []
-    if mode == "live" and is_connected(acct):
+    stale: dict[str, str] = {}
+    if live:
+        stale = {t: why for t in quotes if (why := quote_staleness(as_of.get(t)))}
+        if stale and refresh_stale:
+            fresh, fresh_as_of = _split_quotes(await QUOTE_SOURCE(sorted(stale), db, refresh=True))
+            quotes.update(fresh)
+            as_of.update(fresh_as_of)
+            stale = {t: why for t in quotes if (why := quote_staleness(as_of.get(t)))}
+            refreshed = [t for t in fresh if t not in stale]
+            if refreshed:
+                notes.append("Refreshed prices for " + ", ".join(refreshed) + ".")
+    holdings: dict[str, dict] | None = None
+    holdings_unknown = False
+    if live:
         snap = await _live_account(db, acct)
         bp = snap.get("buying_power")
         if snap.get("positions") is not None:
             held = {p["ticker"].replace(".", "-"): p["shares"] for p in snap["positions"]}
+            holdings = {r["ticker"]: r for r in compare_holdings(snap["positions"], _st_positions(db, user))}
         else:
             paper = _paper_account(db, user)
             held = {p["ticker"]: p["shares"] for p in paper["positions"]}
+            holdings_unknown = True
             notes.append("Robinhood positions could not be read; sells were checked against your "
-                         "SwingTrader portfolio instead.")
+                         "SwingTrader portfolio instead, and every order needs your acknowledgement.")
         if bp is None:
             notes.append("Robinhood buying power could not be read; Robinhood will check it.")
     else:
         paper = _paper_account(db, user)
         held = {p["ticker"]: p["shares"] for p in paper["positions"]}
         bp = paper["buying_power"]
-    return acct, mode, quotes, held, bp, notes
+        notes.append("Paper mode: holdings are compared with Robinhood and price freshness is enforced "
+                     "only for live orders (paper makes no Robinhood calls).")
+    return {"acct": acct, "mode": mode, "live": live, "quotes": quotes, "stale": stale, "held": held,
+            "bp": bp, "holdings": holdings, "holdings_unknown": holdings_unknown, "notes": notes}
+
+
+def _validate(orders: list[dict], ctx: dict) -> tuple[list[dict], dict]:
+    return validate_orders(orders, ctx["quotes"], ctx["held"], ctx["bp"],
+                           strict_quotes=(ctx["mode"] == "live"), stale=ctx["stale"],
+                           holdings=ctx["holdings"], holdings_unknown=ctx["holdings_unknown"])
 
 
 async def preview(db: Session, user: User, orders: list[dict]) -> dict:
     async with _lock(user.id):
-        acct, mode, quotes, held, bp, notes = await _context(db, user, orders)
-        rows, totals = validate_orders(orders, quotes, held, bp, strict_quotes=(mode == "live"))
-        if mode == "live" and is_connected(acct):
+        ctx = await _context(db, user, orders, refresh_stale=True)
+        acct, mode, notes = ctx["acct"], ctx["mode"], ctx["notes"]
+        rows, totals = _validate(orders, ctx)
+        if ctx["live"]:
+            duplicate_blocks(db, user, rows)
+            _recount(totals, rows)
             account_number = acct.account_number
 
             def fn(s: mcp.McpSession, tools: list[dict]):
@@ -733,9 +955,7 @@ async def preview(db: Session, user: User, orders: list[dict]) -> dict:
                         r["errors"].append("Robinhood review: " + (res["text"] or "rejected"))
 
             await _live(db, acct, fn)
-            totals["ok_count"] = sum(1 for r in rows if r["ok"])
-            totals["error_count"] = sum(1 for r in rows if not r["ok"])
-            totals["ok"] = not totals["errors"] and all(r["ok"] for r in rows)
+            _recount(totals, rows)
     return {"mode": mode, "orders": rows, "totals": totals, "notes": notes}
 
 
@@ -750,15 +970,20 @@ def _new_order(user: User, mode: str, r: dict, status_: str) -> BrokerOrder:
     )
 
 
-async def place(db: Session, user: User, orders: list[dict], confirm: bool) -> dict:
+async def place(db: Session, user: User, orders: list[dict], confirm: bool,
+                acknowledge: bool = False) -> dict:
     async with _lock(user.id):
-        acct, mode, quotes, held, bp, notes = await _context(db, user, orders)
+        ctx = await _context(db, user, orders)
+        acct, mode, notes = ctx["acct"], ctx["mode"], ctx["notes"]
         if mode == "live":
             if not is_connected(acct):
                 raise ValueError("Live mode, but Robinhood is not connected. Reconnect or switch to paper.")
             if not confirm:
                 raise ValueError("Live orders need confirm: true.")
-        rows, totals = validate_orders(orders, quotes, held, bp, strict_quotes=(mode == "live"))
+        rows, totals = _validate(orders, ctx)
+        if mode == "live":
+            duplicate_blocks(db, user, rows)
+            _recount(totals, rows)
         if totals["errors"] and not any(r["ok"] for r in rows):
             return {"mode": mode, "results": rows, "totals": totals, "notes": notes, "placed": 0}
 
@@ -776,48 +1001,104 @@ async def place(db: Session, user: User, orders: list[dict], confirm: bool) -> d
             return {"mode": mode, "results": rows, "totals": totals, "notes": notes,
                     "placed": sum(1 for r in rows if r.get("order_id"))}
 
+        if totals["needs_ack"] and not acknowledge:
+            totals["ok"] = False
+            totals["errors"] = totals["errors"] + [
+                "Nothing was placed: acknowledge the holdings warning(s) first — tick "
+                "\u201cI understand\u201d and place again."]
+            return {"mode": mode, "results": rows, "totals": totals, "notes": notes, "placed": 0,
+                    "needs_ack": True}
+
+        # Write every order row BEFORE any network call, with its client id.
+        # If the process dies mid-call the row stays `sending`, which blocks a
+        # re-placement exactly like `unknown` does.
+        by_index: dict[int, BrokerOrder] = {}
+        for r in rows:
+            if not r["ok"]:
+                continue
+            o = _new_order(user, "live", r, "sending")
+            o.client_order_id = str(uuid.uuid4())
+            o.dedupe_key = _dedupe_key(user.id, r)
+            db.add(o)
+            db.flush()
+            r["order_id"] = o.id
+            r["client_order_id"] = o.client_order_id
+            by_index[r["index"]] = o
+        db.commit()
+
         account_number = acct.account_number
+        outcomes: dict[int, dict] = {}
+        inflight: dict = {"index": None}
 
         def fn(s: mcp.McpSession, tools: list[dict]):
             review = mcp.find_tool(tools, "review")
             placer = mcp.find_tool(tools, "place")
-            outcomes = []
             for r in rows:
-                if not r["ok"]:
-                    outcomes.append(None)
+                if r["index"] not in by_index:
                     continue
+                i = r["index"]
                 if not placer:
-                    outcomes.append({"error": "Robinhood exposes no order-placement tool."})
+                    outcomes[i] = {"error": "Robinhood exposes no order-placement tool."}
                     continue
                 fields = _order_fields(r, account_number)
+                rev_text = None
                 try:
-                    rev_text = None
                     if review:
                         rev = s.call_tool(review["name"], mcp.map_arguments(review, fields))
                         rev_text = rev["text"]
                         if not rev["ok"]:
-                            outcomes.append({"error": "Robinhood review rejected the order: "
-                                             + (rev["text"] or "no reason given"), "review": rev_text})
+                            outcomes[i] = {"error": "Robinhood review rejected the order: "
+                                           + (rev["text"] or "no reason given"), "review": rev_text}
                             continue
-                    res = s.call_tool(placer["name"], mcp.map_arguments(placer, fields))
-                except mcp.MappingError as exc:
-                    outcomes.append({"error": str(exc)})
-                    continue
+                    place_args = mcp.map_arguments(placer, dict(fields, client_order_id=r["client_order_id"]))
                 except mcp.ReauthRequired:
                     raise
-                except mcp.BrokerError as exc:
-                    outcomes.append({"error": str(exc)})
+                except mcp.BrokerError as exc:   # incl. MappingError; a review never places anything
+                    outcomes[i] = {"error": str(exc), "review": rev_text}
                     continue
-                outcomes.append({"review": rev_text, "text": res["text"], "ok": res["ok"],
-                                 "parsed": mcp.parse_order(res["data"])})
-            return outcomes
+                inflight["index"] = i
+                try:
+                    res = s.call_tool(placer["name"], place_args)
+                except mcp.OutcomeUnknown as exc:
+                    inflight["index"] = None
+                    outcomes[i] = {"unknown": str(exc), "review": rev_text}
+                    continue
+                except mcp.ReauthRequired:
+                    # 401: Robinhood rejected the call — the order was not accepted.
+                    inflight["index"] = None
+                    raise
+                except mcp.BrokerError as exc:
+                    # Rejected with an HTTP error before being acted on.
+                    inflight["index"] = None
+                    outcomes[i] = {"error": str(exc), "review": rev_text}
+                    continue
+                inflight["index"] = None
+                outcomes[i] = {"review": rev_text, "text": res["text"], "ok": res["ok"],
+                               "parsed": mcp.parse_order(res["data"])}
+            return None
 
-        outcomes = await _live(db, acct, fn)
-        for r, out in zip(rows, outcomes):
-            if out is None:
+        fatal: Exception | None = None
+        try:
+            await _live(db, acct, fn)
+        except Exception as exc:  # noqa: BLE001 — record every row's fate, then re-raise
+            fatal = exc
+        for r in rows:
+            o = by_index.get(r["index"])
+            if o is None:
                 continue
-            o = _new_order(user, "live", r, "failed")
-            if out.get("error") or not out.get("ok"):
+            out = outcomes.get(r["index"])
+            if out is None:
+                if fatal is not None and inflight["index"] == r["index"]:
+                    out = {"unknown": f"The connection failed while this order was being sent ({fatal})."}
+                else:
+                    out = {"error": "Not sent: " + (str(fatal) if fatal else "no outcome recorded.")}
+            if out.get("unknown"):
+                o.status = "unknown"
+                o.error = (f"Robinhood did not confirm this order ({out['unknown']}). It MAY have been "
+                           "placed. Check the Robinhood app, then press Check fills or use Mark filled / "
+                           f"Mark cancelled. SwingTrader won't place another {o.side} for {o.ticker} "
+                           "until then.")[:1000]
+            elif out.get("error") or not out.get("ok"):
                 o.error = (out.get("error") or ("Robinhood: " + (out.get("text") or "order rejected")))[:1000]
                 o.status = "failed"
             else:
@@ -828,17 +1109,17 @@ async def place(db: Session, user: User, orders: list[dict], confirm: bool) -> d
                 o.filled_quantity = parsed["filled_quantity"]
                 o.avg_fill_price = parsed["avg_fill_price"]
             o.response_json = json.dumps({"review": out.get("review"), "result": out.get("text")})[:4000]
-            db.add(o)
-            db.flush()
-            r["order_id"] = o.id
             r["status"] = o.status
             r["message"] = o.error or out.get("text") or ""
             r["ok"] = o.status != "failed"
             if o.status in TERMINAL and (o.filled_quantity or 0) > 0:
                 apply_fill(db, o, commit=False)
         db.commit()
+        if fatal is not None:
+            raise fatal
     return {"mode": "live", "results": rows, "totals": totals, "notes": notes,
-            "placed": sum(1 for r in rows if r.get("status") not in (None, "failed"))}
+            "placed": sum(1 for r in rows if r.get("status") not in (None, "failed")),
+            "unknown": sum(1 for r in rows if r.get("status") == "unknown")}
 
 
 # ── Order log, sync, cancel, manual resolve ───────────────────────────────
@@ -853,6 +1134,7 @@ def order_to_dict(o: BrokerOrder) -> dict:
         "side": o.side, "order_type": o.order_type, "quantity": o.quantity,
         "limit_price": o.limit_price, "time_in_force": o.time_in_force, "status": o.status,
         "open": o.status not in TERMINAL, "broker_order_id": o.broker_order_id,
+        "outcome_unknown": o.status in UNRESOLVED, "client_order_id": o.client_order_id,
         "filled_quantity": o.filled_quantity, "avg_fill_price": o.avg_fill_price,
         "error": o.error, "broker_messages": resp, "applied_to_portfolio": bool(o.applied_to_portfolio),
         "created_at": o.created_at.isoformat() if o.created_at else None,
@@ -951,15 +1233,17 @@ async def sync(db: Session, user: User) -> dict:
         return {"checked": 0, "updated": 0,
                 "notes": notes + ["Robinhood is not connected — reconnect to check fills."]}
 
-    snapshot = [(o.id, o.broker_order_id) for o in open_orders]
+    snapshot = [(o.id, o.broker_order_id, o.client_order_id) for o in open_orders]
 
     def fn(s: mcp.McpSession, tools: list[dict]):
         t = mcp.find_tool(tools, "order")
         if not t:
             return None
         out = {}
-        for oid, bid in snapshot:
+        for oid, bid, cid in snapshot:
             if not bid:
+                if cid:
+                    out[oid] = _reconcile_by_client_id(s, t, cid, acct.account_number)
                 continue
             try:
                 r = s.call_tool(t["name"], mcp.map_arguments(t, {"order_id": bid,
@@ -986,10 +1270,19 @@ async def sync(db: Session, user: User) -> dict:
     by_id = {o.id: o for o in open_orders}
     for oid, parsed in results.items():
         o = by_id[oid]
+        if parsed.get("unresolved"):
+            notes.append(f"{o.ticker} #{o.id}: outcome still unknown — {parsed['unresolved']} Check the "
+                         "Robinhood app, then use Mark filled / Mark cancelled.")
+            continue
         if parsed.get("error"):
             notes.append(f"{o.ticker}: {parsed['error']}")
             continue
         changed = False
+        if not o.broker_order_id and parsed.get("broker_order_id"):
+            o.broker_order_id = parsed["broker_order_id"]
+            changed = True
+        if o.status in UNRESOLVED and not parsed.get("status"):
+            parsed["status"] = "submitted"
         if parsed.get("status") and parsed["status"] != o.status:
             o.status = parsed["status"]
             changed = True
@@ -1004,6 +1297,49 @@ async def sync(db: Session, user: User) -> dict:
                 notes.append(n)
     db.commit()
     return {"checked": len(results), "updated": updated, "notes": notes}
+
+
+_CLIENT_ID_KEYS = ("client_order_id", "ref_id", "idempotency_key", "client_id",
+                   "client_ref_id", "external_id", "request_id")
+
+
+def _find_by_client_id(data: Any, cid: str, depth: int = 0):
+    """The order record carrying our client id, anywhere in a tool result."""
+    if depth > 6:
+        return None
+    if isinstance(data, dict):
+        if any(str(data.get(k) or "") == str(cid) for k in _CLIENT_ID_KEYS):
+            return data
+        for v in data.values():
+            m = _find_by_client_id(v, cid, depth + 1)
+            if m is not None:
+                return m
+    elif isinstance(data, list):
+        for v in data:
+            m = _find_by_client_id(v, cid, depth + 1)
+            if m is not None:
+                return m
+    return None
+
+
+def _reconcile_by_client_id(s: mcp.McpSession, tool: dict, cid: str, account_number: str | None) -> dict:
+    """Look an `unknown` order up by our client id. Only possible when the
+    order tool can LIST orders (no required order id). Not finding it is NOT
+    proof it doesn't exist (the list may be paged), so it stays unresolved."""
+    try:
+        args = mcp.map_arguments(tool, {"account_number": account_number})
+    except mcp.MappingError:
+        return {"unresolved": "Robinhood's order tool needs an order id, and none came back for this order."}
+    try:
+        r = s.call_tool(tool["name"], args)
+    except mcp.ReauthRequired:
+        raise
+    except mcp.BrokerError as exc:
+        return {"unresolved": f"the order lookup failed ({exc})."}
+    match = _find_by_client_id(r["data"], cid)
+    if match is None:
+        return {"unresolved": "it isn't in the orders Robinhood returned."}
+    return mcp.parse_order(match)
 
 
 def _find_order(data: Any, bid: str, depth: int = 0):
@@ -1035,6 +1371,10 @@ async def cancel(db: Session, user: User, order_id: int) -> dict:
     o = _user_order(db, user, order_id)
     if o.status in TERMINAL:
         raise ValueError(f"Order is already {o.status}.")
+    if o.status in UNRESOLVED and not o.broker_order_id:
+        raise ValueError("This order's outcome is unknown, so SwingTrader can't cancel it for you. Check the "
+                         "Robinhood app: cancel it there if it exists, then use Mark cancelled (or Mark "
+                         "filled) here.")
     acct = get_account(db, user.id)
     if o.mode != "live" or not o.broker_order_id:
         o.status = "cancelled"

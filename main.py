@@ -257,6 +257,11 @@ def ensure_schema_migrations():
             "issues": "TEXT",
             "checked_at": "DATETIME",
         })
+        # ML4T gap 8 — idempotent live orders (services/broker_service.py).
+        _ensure_columns(conn, "broker_orders", {
+            "client_order_id": "VARCHAR(64)",
+            "dedupe_key": "VARCHAR(200)",
+        })
 
         # Repair any NULL trading-settings left behind by older migrations that
         # added these columns without a DEFAULT (those rows 500 the Today page

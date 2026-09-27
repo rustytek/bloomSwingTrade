@@ -73,6 +73,15 @@ class MappingError(BrokerError):
     """A tool requires an argument we don't know how to fill."""
 
 
+class OutcomeUnknown(BrokerError):
+    """The request may have reached Robinhood, but we never saw its answer
+    (read timeout, dropped connection, gateway 5xx, unreadable reply).
+
+    For a place-order call this is the dangerous case: the order may exist.
+    broker_service records such an order as `unknown` and refuses to place the
+    same ticker/side again until the outcome is resolved (sync or manual)."""
+
+
 def http_client(timeout: float = DEFAULT_TIMEOUT) -> httpx.Client:
     return httpx.Client(transport=TRANSPORT, timeout=timeout, follow_redirects=False)
 
@@ -314,11 +323,18 @@ class McpSession:
     def _post(self, payload: dict) -> httpx.Response:
         try:
             return self._http.post(self.url, json=payload, headers=self._headers())
-        except httpx.TimeoutException as exc:
-            raise BrokerError("Robinhood's trading service did not respond in time.") from exc
-        except httpx.HTTPError as exc:
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+            # Never got a connection: the request was NOT sent.
             raise BrokerError("Could not reach Robinhood's trading service ("
                               + type(exc).__name__ + ").") from exc
+        except httpx.TimeoutException as exc:
+            # Read/write timeout: the request may have been received and acted on.
+            raise OutcomeUnknown("Robinhood's trading service did not respond in time — "
+                                 "the request may or may not have gone through.") from exc
+        except httpx.HTTPError as exc:
+            raise OutcomeUnknown("The connection to Robinhood's trading service broke ("
+                                 + type(exc).__name__ + ") — the request may or may not have "
+                                 "gone through.") from exc
 
     def _send(self, payload: dict, _retried: bool = False) -> httpx.Response:
         res = self._post(payload)
@@ -350,11 +366,17 @@ class McpSession:
         if params is not None:
             payload["params"] = params
         res = self._send(payload)
+        if res.status_code >= 500:
+            # A gateway/server error after the request was delivered: whether
+            # it was acted on is unknown.
+            raise OutcomeUnknown(_err_text(_json(res), f"Robinhood MCP returned HTTP {res.status_code}.")
+                                 + " The request may or may not have gone through.")
         if res.status_code >= 400:
             raise BrokerError(_err_text(_json(res), f"Robinhood MCP returned HTTP {res.status_code}."))
         msg = _parse_rpc_body(res, rid)
         if msg is None:
-            raise BrokerError("Robinhood MCP returned an unreadable response to " + method + ".")
+            raise OutcomeUnknown("Robinhood MCP returned an unreadable response to " + method
+                                 + " — the request may or may not have gone through.")
         if msg.get("error"):
             err = msg["error"]
             raise BrokerError("Robinhood MCP error on " + method + ": "
@@ -456,6 +478,11 @@ SYNONYMS = {
     "time_in_force": ("time_in_force", "tif", "timeinforce", "duration"),
     "account_number": ("account_number", "account_id", "account", "accountnumber"),
     "order_id": ("order_id", "id", "orderid"),
+    # Idempotency key (ML4T gap 8). Robinhood's own order API calls it
+    # `ref_id` (a UUID); the MCP tool schema is unpublished, so accept the
+    # usual spellings. Only ever sent to the PLACE tool.
+    "client_order_id": ("client_order_id", "ref_id", "idempotency_key", "client_id",
+                        "clientorderid", "client_ref_id", "external_id", "request_id"),
 }
 _ENUM_ALIASES = {
     "gfd": ("gfd", "day", "good_for_day", "good_for_the_day"),

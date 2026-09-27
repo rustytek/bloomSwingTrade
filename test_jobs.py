@@ -435,7 +435,7 @@ def test_daily_report_handler_heartbeats_and_passes_params_through():
         assert report_db is not db, "the report must use its own session, not the job's"
         seen.update(user_id=user_id, triggered_by=triggered_by, model=model, api_key=api_key)
         await asyncio.sleep(0.01)
-        return {"markdown": "# hi", "model": model or "tooling_high"}
+        return {"markdown": "# hi", "model": model or "tooling_high", "validation": {"checked": 0}}
 
     report_service.generate_daily_report = fake
     try:
@@ -444,7 +444,8 @@ def test_daily_report_handler_heartbeats_and_passes_params_through():
     finally:
         report_service.generate_daily_report = real
         db.close()
-    assert out == {"markdown": "# hi", "model": "m1"}, out
+    # The claim-check block (ML4T gap 10) must survive the worker hop.
+    assert out == {"markdown": "# hi", "model": "m1", "validation": {"checked": 0}}, out
     assert seen == {"user_id": _USER_ID, "triggered_by": "schedule", "model": "m1",
                     "api_key": "sk-test-not-real"}, seen
     assert ticks and ticks[-1][0] == 0.99

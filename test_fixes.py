@@ -217,6 +217,174 @@ def test_budget_rule_lives_in_services():
     assert "portfolio_risk.resolve_max_open_r" in src
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# ML4T gap 10 — AI output is checked against the numbers it was given
+# ──────────────────────────────────────────────────────────────────────────
+from services import ai_validation as _aiv  # noqa: E402  (pure module, no web deps)
+
+_FACTS = _aiv.build_facts([
+    {"ticker": "NVDA", "price": 120.50, "rsi": 74.2, "chg_pct": 1.8, "pnl_pct": 12.4,
+     "vs_ma50": 6.1, "vs_ma200": 22.0},
+    {"ticker": "AAPL", "price": 190.00, "rsi": 45.0, "chg_pct": -0.6, "vs_ma200": -3.2},
+])
+
+
+def _kinds(v):
+    return [(i["kind"], i["ticker"]) for i in v["issues"]]
+
+
+@test
+def test_ai_validation_correct_text_passes_clean():
+    text = (
+        "NVDA is trading at $120.40 with an RSI of 74 — overbought, and it is 22% above its 200-day. "
+        "AAPL sits below the 200-day MA, RSI 45.\n"
+        "NVDA rose 1.8% today. AAPL fell 0.6% today. Your NVDA P&L is +12.4%.\n"
+        "It needs to reclaim the 50-day before AAPL looks healthy. AAPL is not oversold.\n\n"
+        "| Ticker | Price | RSI | Chg % |\n| :--- | ---: | ---: | ---: |\n"
+        "| **NVDA** | $120.50 | 74.2 | +1.8% |\n| AAPL | $190.00 | 45 | -0.6% |\n\n"
+        "## MACRO OVERVIEW AND RISK ALL CLEAR\nThe VIX is 18. The Fed held rates. IT spending is up.\n"
+    )
+    v = _aiv.validate_text(text, _FACTS, ["NVDA", "AAPL", "SPY"])
+    assert v["issues"] == [], v["issues"]
+    assert v["pass"] is True and v["checked"] >= 10 and v["verified"] == v["checked"], v
+
+
+@test
+def test_ai_validation_flags_fabricated_ticker():
+    v = _aiv.validate_text("Consider $ZZZQ and TSLA as new ideas; NVDA looks extended.", _FACTS, ["NVDA"])
+    kinds = _kinds(v)
+    assert ("unknown_ticker", "ZZZQ") in kinds and ("unknown_ticker", "TSLA") in kinds, kinds
+    assert all(i["severity"] == "warn" for i in v["issues"]), v["issues"]
+    # Unknown is "unverified", not "wrong": it must not fail the report.
+    assert v["pass"] is True and v["unverifiable"] == 2
+
+
+@test
+def test_ai_validation_flags_wrong_price_and_rsi():
+    v = _aiv.validate_text("NVDA is trading at $98.00 with an RSI of 28.", _FACTS, ["NVDA"])
+    kinds = _kinds(v)
+    assert ("price_mismatch", "NVDA") in kinds and ("rsi_mismatch", "NVDA") in kinds, kinds
+    assert v["pass"] is False and v["contradicted"] == 2
+    by = {i["kind"]: i for i in v["issues"]}
+    assert "120.5" in by["price_mismatch"]["expected"] and "74.2" in by["rsi_mismatch"]["expected"]
+    # Within tolerance is NOT a mismatch (price ±2 %, RSI ±3).
+    ok = _aiv.validate_text("NVDA trades at $118.60, RSI of 71.5.", _FACTS, ["NVDA"])
+    assert ok["issues"] == [], ok["issues"]
+    # Tables are checked cell by cell against the row's ticker.
+    t = _aiv.validate_text("| Ticker | Price | RSI |\n| --- | --- | --- |\n| AAPL | $150.00 | 62 |", _FACTS, ["AAPL"])
+    assert ("price_mismatch", "AAPL") in _kinds(t) and ("rsi_mismatch", "AAPL") in _kinds(t), t
+
+
+@test
+def test_ai_validation_flags_contradictions_but_not_conditionals():
+    v = _aiv.validate_text("AAPL is above the 200-day. NVDA is deeply oversold here.", _FACTS, ["AAPL", "NVDA"])
+    kinds = _kinds(v)
+    assert ("contradiction", "AAPL") in kinds and ("contradiction", "NVDA") in kinds, kinds
+    nv = next(i for i in v["issues"] if i["ticker"] == "NVDA")
+    assert nv["severity"] == "high" and "74.2" in nv["expected"]
+    # Negated / conditional phrasing is not a claim about the present.
+    c = _aiv.validate_text(
+        "AAPL needs to reclaim the 200-day. If NVDA falls below the 50-day, trim. NVDA is not oversold.",
+        _FACTS, ["AAPL", "NVDA"])
+    assert c["issues"] == [], c["issues"]
+
+
+@test
+def test_ai_validation_missing_metric_is_unverifiable_not_wrong():
+    v = _aiv.validate_text("AAPL P&L is +5%.", _FACTS, ["AAPL"])   # no pnl_pct supplied for AAPL
+    assert _kinds(v) == [("unverifiable", "AAPL")] and v["pass"] is True, v
+
+
+@test
+def test_ai_validation_drops_malformed_signals():
+    raw = [
+        {"type": "entry", "signal": "Buy", "message": "RSI of 28 oversold bounce", "strength": "strong"},
+        {"type": "moon", "signal": "x", "message": "y", "strength": "huge"},
+        "garbage",
+        {"type": "INFO", "signal": "Trend", "message": "Holding above the 200-day", "strength": "Weak"},
+    ]
+    kept, v = _aiv.validate_signals(raw, "NVDA", _FACTS)
+    assert [s["signal"] for s in kept] == ["Buy", "Trend"], kept
+    assert kept[1]["type"] == "info" and kept[1]["strength"] == "weak"
+    assert v["dropped"] == 2 and sum(i["kind"] == "invalid_item" for i in v["issues"]) == 2
+    # The kept message's numbers are still checked (RSI 28 vs 74.2).
+    assert ("rsi_mismatch", "NVDA") in _kinds(v), v["issues"]
+    for bad in ("not json", None, 42, {"weird": True}):
+        kept, v = _aiv.validate_signals(bad, "NVDA", _FACTS)
+        assert kept == [] and v["pass"] is False, (bad, kept, v)
+    # Analysis schema/range checks.
+    a = _aiv.validate_analysis({"summary": "Price trades at $120.", "sentiment": "ecstatic",
+                                "confidence": 1.7, "ai_score": 8}, "NVDA", _FACTS)
+    assert sum(i["kind"] == "invalid_item" for i in a["issues"]) == 2, a["issues"]
+
+
+@test
+def test_ai_validation_failure_never_breaks_the_report():
+    """A validator crash becomes a `validator_error` issue; the report is still
+    generated, stamped, persisted and returned unchanged."""
+    import asyncio
+    import json as _json
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from database.db import Base
+    from database.models import ReportCache, User
+    from services import report_service as rs
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(bind=engine)
+    db = sessionmaker(bind=engine)()
+    db.add(User(id=1, username="u", password_hash="x"))
+    db.commit()
+
+    ctx = {"portfolio": [{"ticker": "NVDA", "price": 120.5, "rsi": 74.2}], "watchlist": [],
+           "correlation_groups": [],
+           "summary": {"total_cost": 100.0, "total_mv": 110.0, "total_pnl_pct": 10.0,
+                       "weeks_held": 3, "cost_multiplier": 1.1}}
+    model_text = "NVDA is trading at $98.00 with an RSI of 28."
+
+    async def fake_ctx(user_id, _db):
+        return ctx
+
+    async def fake_charts(_db):
+        return {}
+
+    async def fake_llm(system, user_msg, model=None, api_key=None, **kw):
+        return model_text
+
+    saved = (rs._gather_context, rs.get_all_chart_data, rs._call_llm, _aiv.validate_text)
+    rs._gather_context, rs.get_all_chart_data, rs._call_llm = fake_ctx, fake_charts, fake_llm
+    try:
+        out = asyncio.run(rs.generate_daily_report(db, 1, triggered_by="test", model="tooling_high"))
+        assert out["markdown"].startswith(model_text), out["markdown"][:80]   # never rewritten
+        assert out["validation"]["contradicted"] == 2, out["validation"]
+        row = db.query(ReportCache).one()
+        assert _json.loads(row.validation_json)["contradicted"] == 2
+
+        def boom(*a, **k):
+            raise RuntimeError("validator bug")
+        _aiv.validate_text = boom
+        out = asyncio.run(rs.generate_daily_report(db, 1, triggered_by="test", model="tooling_high"))
+        assert out["markdown"].startswith(model_text)
+        kinds = [i["kind"] for i in out["validation"]["issues"]]
+        assert kinds == ["validator_error"] and out["validation"]["pass"] is None, out["validation"]
+        assert db.query(ReportCache).count() == 2
+    finally:
+        rs._gather_context, rs.get_all_chart_data, rs._call_llm, _aiv.validate_text = saved
+        db.close()
+
+
+@test
+def test_ai_endpoints_return_validation():
+    """Every AI endpoint that shows model output annotates it (static check —
+    the endpoints need the web stack)."""
+    src = _read(os.path.join("api", "ai.py"))
+    for needle in ("safe_validate_analysis(", "safe_validate_signals(", "safe_validate_text(",
+                   '"validation": stored_validation(report)', '"validation": result.get("validation")'):
+        assert needle in src, needle
+    assert src.count("safe_validate_text(") >= 2   # ticker chat + market chat
+
+
+
 def main() -> int:
     passed = failed = 0
     failures = []

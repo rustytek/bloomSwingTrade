@@ -236,6 +236,9 @@ class ReportCache(Base):
     generated_at = Column(DateTime, default=utcnow)
     triggered_by = Column(String(16), default="user")   # "user" | "schedule"
     model = Column(String(128), nullable=True)          # resolved model that generated it
+    # services/ai_validation.py block: the report checked against the numbers
+    # that were in its prompt. NULL = generated before validation existed.
+    validation_json = Column(Text, nullable=True)
 
 
 class BackgroundJob(Base):

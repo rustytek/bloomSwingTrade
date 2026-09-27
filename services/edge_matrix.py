@@ -40,7 +40,7 @@ from sqlalchemy.orm import Session
 
 from services.backtest import run_walk_forward_backtest, wilson_interval
 from services.regime import QUADRANTS, QUADRANT_INFO
-from services.stats import bh_adjust, mean_test
+from services.stats import bh_adjust, episode_ids, mean_test
 from services.strategies import STRATEGIES
 from services.universe import UNIVERSE_AS_OF, UNIVERSE_CAVEAT
 
@@ -118,7 +118,14 @@ DEFAULT_MODE = "trade_plan" if _SUPPORTS_TRADE_PLAN else "rotation"
 #       n) AND agreement in both the discovery and the holdout segment (see
 #       HOLDOUT_START). v3 confirmed any cell with a positive mean on 20
 #       periods, uncorrected for testing 32 cells on one history.
-METHOD_VERSION = 4
+#   5 — significance and the win-rate interval respect regime EPISODES (ML4T
+#       gap 3): a cell's periods are clustered by unbroken stay in the regime,
+#       the t-test uses the more conservative of a cluster-robust and an AR(1)
+#       standard error (df = episodes - 1), and the Wilson interval is computed
+#       on the effective n. v4 treated every 5-day period as independent, so a
+#       cell built from one or two long episodes looked far better sampled
+#       than it was.
+METHOD_VERSION = 5
 
 VERDICTS = ("confirmed", "unproven", "mis-tagged", "untagged-edge")
 
@@ -237,20 +244,33 @@ def _segment(rets: list[float]) -> dict:
 
 
 def _cell_from_returns(quadrant: str, rets: list[float], idle: int = 0,
-                       dates: list[str] | None = None) -> dict:
+                       dates: list[str] | None = None,
+                       episodes: list[int] | None = None) -> dict:
     """`rets` are periods the strategy was actually INVESTED in, in date order.
     `idle` counts periods in this regime where it held nothing — reported,
     never scored: a cash period says nothing about how the strategy trades in
     that regime. `dates` (ISO, parallel to `rets`) enables the discovery /
     holdout split; without it the cell has no segments and cannot be judged
-    out of time."""
+    out of time. `episodes` (parallel to `rets`) is the regime episode each
+    period belongs to (stats.episode_ids over the full run); with it the
+    significance test clusters by episode (see stats.mean_test).
+
+    The Wilson win-rate interval is computed on the EFFECTIVE sample: wins
+    and n are both scaled by n_effective / n, so the win rate is unchanged
+    but the interval widens to what the dependent sample can really support.
+    (Scaling is the simplest honest choice; a block-bootstrap interval would
+    be more exact and is not worth the build time.)"""
     n = len(rets)
     wins = [r for r in rets if r > 0]
     cum = 1.0
     for r in rets:
         cum *= (1 + r / 100.0)
-    ci_low, ci_high = wilson_interval(len(wins), n) if n else (0.0, 100.0)
-    test = mean_test(rets)
+    test = mean_test(rets, episodes)
+    n_eff = float(test["n_eff"] or 0.0)
+    if n and n_eff > 0:
+        ci_low, ci_high = wilson_interval(len(wins) * n_eff / n, n_eff)
+    else:
+        ci_low, ci_high = (0.0, 100.0)
     cell = {
         "quadrant": quadrant,
         "label": QUADRANT_INFO[quadrant]["label"],
@@ -265,6 +285,7 @@ def _cell_from_returns(quadrant: str, rets: list[float], idle: int = 0,
         "t_stat": _round(test["t_stat"], 2),
         "p_value": _round(test["p_value"], 4, 1.0),
         "n_effective": _round(test["n_eff"], 1, 0.0),
+        "episodes": test["episodes"],
         "q_value": None,   # set across the whole matrix by build_edge_matrix
     }
     if dates is not None and len(dates) == n:
@@ -315,8 +336,12 @@ def _run_one(db: Session, user_id: int, strategy_id: str, source: str, kwargs: d
     trades = result.get("trades") or []
     by_q: dict[str, list[float]] = {q: [] for q in QUADRANTS}
     dates_q: dict[str, list[str]] = {q: [] for q in QUADRANTS}
+    eps_q: dict[str, list[int]] = {q: [] for q in QUADRANTS}
     idle: dict[str, int] = {q: 0 for q in QUADRANTS}
-    for t in trades:
+    # Episodes come from the FULL run's regime sequence (idle periods included),
+    # so sitting in cash for a week inside a bull run does not split it in two.
+    run_episodes = episode_ids([t.get("quadrant") for t in trades])
+    for t, ep in zip(trades, run_episodes):
         q = t.get("quadrant")
         if q not in by_q:
             continue
@@ -329,6 +354,7 @@ def _run_one(db: Session, user_id: int, strategy_id: str, source: str, kwargs: d
         if r is not None:
             by_q[q].append(r)
             dates_q[q].append(str(t.get("date") or ""))
+            eps_q[q].append(ep)
 
     metrics = result.get("metrics") or {}
     overall = {
@@ -344,7 +370,7 @@ def _run_one(db: Session, user_id: int, strategy_id: str, source: str, kwargs: d
     }
     return {
         "error": None,
-        "cells": {q: _cell_from_returns(q, rets, idle[q], dates_q[q]) for q, rets in by_q.items()},
+        "cells": {q: _cell_from_returns(q, rets, idle[q], dates_q[q], eps_q[q]) for q, rets in by_q.items()},
         "overall": overall,
         "data_quality": result.get("data_quality"),
     }

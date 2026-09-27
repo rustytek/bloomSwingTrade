@@ -921,6 +921,88 @@ def test_trial_log_flags_luck_and_never_breaks_a_finished_run():
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# 5. Gap 3 — regime episodes (dependent periods are not independent samples)
+# ──────────────────────────────────────────────────────────────────────────
+@test
+def test_episode_ids_break_on_regime_change_not_on_idle_periods():
+    from services import stats
+    seq = ["bull", "bull", "bear", "bear", "bull", "bull", "bull"]
+    assert stats.episode_ids(seq) == [0, 0, 1, 1, 2, 2, 2]
+    assert stats.episode_ids([]) == []
+
+    # Through _run_one: an idle week inside a bull run does not split it.
+    real = em.run_walk_forward_backtest
+
+    def fake_run(**kw):
+        def p(q, held=True, r=1.0):
+            return {"date": "2010-01-04", "quadrant": q, "exits": 0, "period_return": r,
+                    "holdings": [{"ticker": "X"}] if held else []}
+        return {"trades": [p("trending_bull"), p("trending_bull", held=False), p("trending_bull", r=2.0),
+                           p("choppy_calm"), p("trending_bull", r=3.0)],
+                "metrics": {}, "data_quality": {}}
+
+    em.run_walk_forward_backtest = fake_run
+    try:
+        run = em._run_one(None, 995, "momentum_rotation", "universe", {})
+    finally:
+        em.run_walk_forward_backtest = real
+    bull = run["cells"]["trending_bull"]
+    assert bull["n"] == 3 and bull["idle_periods"] == 1, bull
+    assert bull["episodes"] == 2, bull          # the idle week kept episode 1 whole
+    assert run["cells"]["choppy_calm"]["episodes"] == 1
+
+
+@test
+def test_cluster_se_is_wider_than_naive_for_clustered_data():
+    from services import stats
+    import random
+    rng = random.Random(3)
+    xs, clusters = [], []
+    for g in range(6):                          # 6 episodes, each with its own level
+        level = rng.gauss(0.3, 1.5)
+        for _ in range(20):
+            xs.append(level + rng.gauss(0, 0.3))
+            clusters.append(g)
+    naive = stats.stdev(xs) / math.sqrt(len(xs))
+    cse, g = stats.cluster_se(xs, clusters)
+    assert g == 6 and cse > 2 * naive, (cse, naive)
+    t = stats.mean_test(xs, clusters)
+    plain = stats.mean_test(xs)
+    assert t["n_eff"] < plain["n_eff"] and t["n_eff"] < 30, (t, plain)
+    assert t["p_value"] >= plain["p_value"]
+    assert t["episodes"] == 6
+    # Independent data in many clusters: the correction never makes it LOOK better.
+    iid = [rng.gauss(0.2, 1.0) for _ in range(120)]
+    ids = list(range(120))
+    assert stats.mean_test(iid, ids)["p_value"] >= stats.mean_test(iid)["p_value"] - 1e-12
+
+
+@test
+def test_a_single_episode_can_never_be_significant():
+    from services import stats
+    xs = [1.0 + 0.01 * (i % 5) for i in range(200)]   # 200 strongly positive weeks
+    t = stats.mean_test(xs, [0] * 200)
+    assert t["p_value"] == 1.0 and t["t_stat"] is None and t["n_eff"] == 1.0, t
+    c = em._cell_from_returns("trending_bear", xs, 0, ["2008-06-02"] * 100 + ["2020-03-02"] * 100, [7] * 200)
+    assert c["episodes"] == 1 and c["p_value"] == 1.0, c
+    # Wilson on the effective n: 200/200 wins from ONE episode is a wide interval.
+    assert c["win_rate"] == 100.0 and c["win_rate_ci_low"] < 25.0, c
+    json.dumps(c, allow_nan=False)
+
+
+@test
+def test_effective_n_widens_the_win_rate_interval_but_keeps_the_rate():
+    xs = [1.0, -0.5, 2.0, 0.5] * 25                    # 100 periods, 75% winners
+    many = em._cell_from_returns("trending_bull", xs, 0, None, list(range(100)))
+    few = em._cell_from_returns("trending_bull", xs, 0, None, [i // 25 for i in range(100)])
+    assert many["win_rate"] == few["win_rate"] == 75.0
+    assert few["episodes"] == 4 and few["n_effective"] <= many["n_effective"], (few, many)
+    width = lambda c: c["win_rate_ci_high"] - c["win_rate_ci_low"]
+    assert width(few) >= width(many), (few, many)
+    json.dumps(few, allow_nan=False)
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Runner
 # ──────────────────────────────────────────────────────────────────────────
 def main() -> int:

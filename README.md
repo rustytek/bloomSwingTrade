@@ -264,7 +264,7 @@ curl -k -X POST https://localhost:8443/auth/register \
 All data is stored in `./data/swingtrader.db` (SQLite).
 The `./data/` directory is mounted as a Docker volume — data survives container restarts and updates.
 
-To back up: `cp data/swingtrader.db data/swingtrader.db.bak`
+To back up: stop the app, then `cp data/swingtrader.db* backup/` — the database runs in SQLite WAL mode, so recent changes can sit in `swingtrader.db-wal` until they are checkpointed; copy it along with the `.db` file.
 
 ---
 

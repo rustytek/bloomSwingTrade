@@ -468,6 +468,41 @@ def test_daily_report_never_runs_on_the_web_event_loop():
     assert "api_key" not in call, "run_daily_report_job puts the API key into job params"
 
 
+@test
+def test_another_process_writing_does_not_lock_out_readers_or_writers():
+    """2026-09-26: the 20-year backfill (one worker process) held SQLite's
+    write lock long enough that a daily-report worker got "database is
+    locked" — it could not even record its own failure, so its job stayed
+    "running". WAL lets readers through while a writer is active, and the
+    busy timeout makes a second writer wait instead of failing."""
+    import sqlite3
+    import threading
+    from database import db as dbmod
+
+    raw = sqlite3.connect(os.path.join(_TMP, "t.db"), timeout=5, check_same_thread=False)
+    mode = raw.execute("PRAGMA journal_mode").fetchone()[0]
+    assert mode.lower() == "wal", mode
+    # Another process mid-write: an open, uncommitted write transaction.
+    raw.execute("BEGIN IMMEDIATE")
+    raw.execute("UPDATE users SET email = 'held' WHERE id = ?", (_USER_ID,))
+    db = SessionLocal()
+    try:
+        started = time.time()
+        assert db.query(User).filter(User.id == _USER_ID).first() is not None
+        assert time.time() - started < 2, "a read waited on another process's write"
+        # A write waits for the lock (busy_timeout) rather than failing.
+        release = threading.Timer(1.0, raw.commit)
+        release.start()
+        job = BackgroundJob(user_id=_USER_ID, kind="selftest", status="failed", params_key="wal")
+        db.add(job)
+        db.commit()
+        release.join()
+        assert dbmod.SQLITE_BUSY_TIMEOUT_S >= 30
+    finally:
+        db.close()
+        raw.close()
+
+
 def main_runner() -> int:
     passed = failed = 0
     failures = []

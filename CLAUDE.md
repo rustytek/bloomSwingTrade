@@ -31,7 +31,7 @@ python test_fixes.py             # layering (no services->api imports), AI provi
 python test_history.py           # 20-year archive: splice/rebase, yfinance→Tiingo fallback, backfill, 20y engine path, real-VIX regimes, API
 ```
 
-**286 tests across eleven suites** (`python test_broker.py` covers the Robinhood/Trade layer, fully mocked). All are self-contained (no network) except
+**287 tests across eleven suites** (`python test_broker.py` covers the Robinhood/Trade layer, fully mocked). All are self-contained (no network) except
 `test_jobs.py`, which deliberately **launches a real worker subprocess** against a
 throwaway SQLite file in a temp dir — mocking the subprocess would let the very
 layer it guards break while the test still passed. `test_passes.py`
@@ -407,7 +407,7 @@ program instead of asking the user to copy logs:
 - **Versioning before push**: Any push to the remote repo must include a Home Assistant-visible version bump so HA detects the update. Keep `config.json` (`version`), `build.json` (`io.hass.version`), and `main.py` (`FastAPI(... version=...)`) in sync. Do not push functional changes without updating these version fields. If HA still does not show the update after a normal patch bump, use a clearer next version bump (for example `1.5.9` -> `1.6.0`), push it, then tell the user to reload/check updates in the HA Add-on Store because HA can cache add-on repository metadata.
 - **CORS**: with `PUBLIC_URL` set, only that origin is allowed, with credentials; without it, `*` **without** credentials (browsers reject `*` + credentials). Same-origin use of the app is unaffected either way.
 - **SSL**: Auto-generated self-signed cert on first run, stored in `./ssl/` (or `/data/ssl/` in HAOS). Persists across restarts.
-- **Database**: `./data/swingtrader.db` (SQLite). Survives all restarts; back up by copying this file.
+- **Database**: `./data/swingtrader.db` (SQLite, **WAL mode** since 1.23.1 — `database/db.py::configure_sqlite` sets `journal_mode=WAL`, `busy_timeout` 30 s, `synchronous=NORMAL` on every connection). Survives all restarts. Back up with the add-on stopped, or copy `swingtrader.db` **together with** `swingtrader.db-wal`/`-shm` — the newest commits can live in the `-wal` file until a checkpoint. WAL exists because the web app and several job-worker processes share the file: on 2026-09-26 the 20-year backfill held the write lock past SQLite's 5 s default and a daily-report worker got `database is locked` while recording its own failure, leaving job 15 stuck as `running` (pinned by `test_jobs.py::test_another_process_writing_does_not_lock_out_readers_or_writers`).
 - **Scheduler**: APScheduler runs daily report generation at 05:30 local time using the configured AI provider.
 
 ## Adding New AI Providers

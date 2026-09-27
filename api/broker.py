@@ -52,6 +52,9 @@ class OrderIn(BaseModel):
 class OrdersIn(BaseModel):
     orders: list[OrderIn]
     confirm: bool = False
+    # Live only: the user read and accepts the holdings-mismatch warnings
+    # (totals.ack_items from preview). Without it such a batch places nothing.
+    acknowledge: bool = False
 
 
 class ModeIn(BaseModel):
@@ -203,7 +206,7 @@ async def broker_preview(body: OrdersIn, db: Session = Depends(get_db),
 async def broker_place(body: OrdersIn, db: Session = Depends(get_db),
                        user: User = Depends(get_current_user)):
     try:
-        return await svc.place(db, user, _orders_payload(body), body.confirm)
+        return await svc.place(db, user, _orders_payload(body), body.confirm, body.acknowledge)
     except Exception as exc:  # noqa: BLE001
         raise _http_error(exc)
 

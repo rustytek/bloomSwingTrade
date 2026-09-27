@@ -124,6 +124,19 @@ The **Trade** tab sends the orders you tick in the **Weekly Plan** to Robinhood 
    portfolio. Loading it only reads — it works in paper mode and never changes anything. Holdings that are only
    in Robinhood can be ticked and **imported**; they arrive with Robinhood's share count and cost but no stop,
    so set one. Positions SwingTrader already tracks are never changed by an import.
+7. **Live-order safeguards.**
+   - *Never the same order twice.* If Robinhood doesn't answer while an order is being sent (a timeout or a
+     dropped connection), the order shows **outcome unknown** — it may or may not have been placed. SwingTrader
+     then refuses any other order for that ticker and side until you settle it: check the Robinhood app, then
+     press **Check fills** or use **Mark filled / Mark cancelled**. It also refuses a second order while one for
+     the same ticker and side is still open, and an identical order that already filled today.
+   - *Your portfolio must match Robinhood.* Live preview compares Robinhood's holdings with your SwingTrader
+     portfolio. Selling a ticker whose share counts disagree (or that Robinhood doesn't hold) is blocked —
+     reconcile it first. Buying while the two disagree is allowed only after you tick the acknowledgement,
+     because sizing and risk checks use SwingTrader's numbers. Holdings kept only at another broker (e.g. an
+     imported Fidelity book) don't block buys.
+   - *No stale prices.* Live orders need a price under 20 minutes old while the market is open (or taken after
+     the last close when it's shut). **Preview** refreshes old prices; **Place** refuses them — preview again.
 
 Back up `/data` as a whole — the token encryption key (`broker.key`) lives next to the database; without it you
 simply reconnect.

@@ -190,9 +190,19 @@ def _install(fake: FakeRobinhood | None):
         mcp.TRANSPORT = httpx.MockTransport(fake.handler)
 
 
-async def _quotes(tickers, db):
+# Quote fake: prices plus an as_of timestamp. `age_days` ages the cached
+# quote; a refresh=True call returns quotes aged `refresh_age_days`.
+QUOTE_STATE = {"age_days": 0.0, "refresh_age_days": 0.0, "refresh_calls": []}
+
+
+async def _quotes(tickers, db, refresh=False):
+    from datetime import datetime, timedelta, timezone
     table = {"AAPL": 100.0, "MSFT": 410.0, "NVDA": 120.0}
-    return {t: table[t] for t in tickers if t in table}
+    if refresh:
+        QUOTE_STATE["refresh_calls"].append(sorted(tickers))
+    age = QUOTE_STATE["refresh_age_days" if refresh else "age_days"]
+    as_of = (datetime.now(timezone.utc) - timedelta(days=age)).isoformat()
+    return {t: {"price": table[t], "as_of": as_of} for t in tickers if t in table}
 
 svc.QUOTE_SOURCE = _quotes
 
@@ -572,7 +582,7 @@ def test_live_review_runs_before_place_and_rejection_blocks_place():
     assert prev["orders"][0]["broker_review"].startswith("Estimated cost"), prev
     assert prev["totals"]["buying_power"] == 5000.0
     fake.tool_calls.clear()
-    res = _run(svc.place(db, u, [_order("AAPL", shares=5, limit=100.5)], confirm=True))
+    res = _run(svc.place(db, u, [_order("AAPL", shares=5, limit=100.5)], confirm=True, acknowledge=True))
     names = [n for n, _ in fake.tool_calls if n in ("review_equity_order", "place_equity_order")]
     assert names == ["review_equity_order", "place_equity_order"], names
     placed_args = [a for n, a in fake.tool_calls if n == "place_equity_order"][0]
@@ -585,7 +595,7 @@ def test_live_review_runs_before_place_and_rejection_blocks_place():
 
     fake.review_ok = False
     fake.tool_calls.clear()
-    res = _run(svc.place(db, u, [_order("NVDA", shares=1, limit=120)], confirm=True))
+    res = _run(svc.place(db, u, [_order("NVDA", shares=1, limit=120)], confirm=True, acknowledge=True))
     assert res["results"][0]["status"] == "failed"
     assert "Insufficient buying power" in res["results"][0]["message"]
     assert not any(n == "place_equity_order" for n, _ in fake.tool_calls), "rejected review must not place"
@@ -600,7 +610,7 @@ def test_sync_applies_fills_exactly_once_and_full_sell_journals():
     u = _user(db)
     _run(_connect(db, u, fake))
     svc.set_mode(db, u, "live", True)
-    _run(svc.place(db, u, [_order("AAPL", shares=5, limit=100.5)], confirm=True))
+    _run(svc.place(db, u, [_order("AAPL", shares=5, limit=100.5)], confirm=True, acknowledge=True))
     s = _run(svc.sync(db, u))
     assert s["checked"] == 1 and not db.query(PortfolioPosition).filter(
         PortfolioPosition.user_id == u.id).count(), "queued order must not touch the portfolio"
@@ -618,7 +628,7 @@ def test_sync_applies_fills_exactly_once_and_full_sell_journals():
     # Full sell -> journal
     fake.positions = [{"symbol": "AAPL", "quantity": "5"}]
     fake.order_state = {"state": "queued", "cumulative_quantity": "0"}
-    _run(svc.place(db, u, [_order("AAPL", "sell", shares=5, limit=104)], confirm=True))
+    _run(svc.place(db, u, [_order("AAPL", "sell", shares=5, limit=104)], confirm=True, acknowledge=True))
     fake.order_state = {"state": "filled", "cumulative_quantity": "5", "average_price": "104.00"}
     _run(svc.sync(db, u))
     assert not db.query(PortfolioPosition).filter(PortfolioPosition.user_id == u.id).count()
@@ -638,7 +648,7 @@ def test_manual_resolve_when_no_status_tool():
     u = _user(db)
     _run(_connect(db, u, fake))
     svc.set_mode(db, u, "live", True)
-    res = _run(svc.place(db, u, [_order("AAPL", shares=4, limit=100.5)], confirm=True))
+    res = _run(svc.place(db, u, [_order("AAPL", shares=4, limit=100.5)], confirm=True, acknowledge=True))
     oid = res["results"][0]["order_id"]
     s = _run(svc.sync(db, u))
     assert any("no order-status tool" in n for n in s["notes"]), s
@@ -747,6 +757,286 @@ def test_import_rereads_robinhood_adds_only_new_and_never_edits_existing():
     db.close()
 
 
+# ── ML4T gap 8: idempotency, holdings gate, quote freshness ──────────────
+
+def _live_user(fake, **kw):
+    _install(fake)
+    db = SessionLocal()
+    u = _user(db, **kw)
+    _run(_connect(db, u, fake))
+    svc.set_mode(db, u, "live", True)
+    return db, u
+
+
+def _place_names(fake):
+    return [n for n, _ in fake.tool_calls if n == "place_equity_order"]
+
+
+@test
+def test_client_order_id_written_before_the_call_and_sent_as_idempotency_key():
+    fake = FakeRobinhood()
+    schema = json.loads(json.dumps(ORDER_SCHEMA))
+    schema["properties"]["ref_id"] = {"type": "string"}
+    fake.tools[1] = {"name": "place_equity_order", "description": "Place", "inputSchema": schema}
+    fake.positions = []
+    seen_rows = []
+    orig = fake.tool
+
+    def tool(name, args):
+        if name == "place_equity_order":
+            chk = SessionLocal()
+            seen_rows.extend((o.status, o.client_order_id) for o in chk.query(BrokerOrder)
+                             .filter(BrokerOrder.client_order_id == args.get("ref_id")).all())
+            chk.close()
+        return orig(name, args)
+
+    fake.tool = tool
+    db, u = _live_user(fake)
+    res = _run(svc.place(db, u, [_order("AAPL", shares=2, limit=100.5)], confirm=True))
+    r = res["results"][0]
+    placed = [a for n, a in fake.tool_calls if n == "place_equity_order"][0]
+    review = [a for n, a in fake.tool_calls if n == "review_equity_order"][0]
+    assert placed["ref_id"] == r["client_order_id"] and len(r["client_order_id"]) == 36
+    assert "ref_id" not in review, "the idempotency key goes to the place tool only"
+    assert seen_rows == [("sending", r["client_order_id"])], seen_rows
+    o = db.query(BrokerOrder).filter(BrokerOrder.id == r["order_id"]).one()
+    assert o.client_order_id == r["client_order_id"] and o.status == "queued" and o.dedupe_key
+    db.close()
+
+
+@test
+def test_timeout_on_place_is_unknown_and_blocks_a_second_order_until_resolved():
+    fake = FakeRobinhood()
+    fake.positions = []
+    orig = fake.tool
+
+    def tool(name, args):
+        if name == "place_equity_order":
+            fake.tool_calls.append((name, args))
+            raise httpx.ReadTimeout("read timed out")      # Robinhood got it; we never heard back
+        return orig(name, args)
+
+    fake.tool = tool
+    db, u = _live_user(fake)
+    res = _run(svc.place(db, u, [_order("AAPL", shares=3, limit=100.5)], confirm=True))
+    r = res["results"][0]
+    assert r["status"] == "unknown" and res["unknown"] == 1 and "MAY have been placed" in r["message"], r
+    d = [x for x in svc.list_orders(db, u) if x["id"] == r["order_id"]][0]
+    assert d["outcome_unknown"] and d["open"] and d["client_order_id"]
+    # Same logical order again -> refused before any network call to place.
+    fake.tool_calls.clear()
+    again = _run(svc.place(db, u, [_order("AAPL", shares=3, limit=100.5)], confirm=True))
+    assert again["placed"] == 0 and any("unknown outcome" in e for e in again["results"][0]["errors"]), again
+    assert not _place_names(fake)
+    # ...even a different quantity for the same ticker+side, and preview says so too.
+    prev = _run(svc.preview(db, u, [_order("AAPL", shares=1, limit=100.5)]))
+    assert not prev["orders"][0]["ok"] and "unknown outcome" in prev["orders"][0]["errors"][0]
+    # The other side and other tickers are unaffected.
+    other = _run(svc.preview(db, u, [_order("NVDA", shares=1, limit=120)]))
+    assert other["orders"][0]["ok"], other
+    # Cancel can't be done locally for an order that may exist.
+    try:
+        _run(svc.cancel(db, u, r["order_id"]))
+        raise AssertionError("cancel of an unknown order must refuse")
+    except ValueError as exc:
+        assert "unknown" in str(exc)
+    # get_order needs an order id we never got -> sync can't resolve it, says so.
+    s = _run(svc.sync(db, u))
+    assert any("outcome still unknown" in n for n in s["notes"]), s
+    # Manual resolve settles it, and the block lifts.
+    svc.resolve_manually(db, u, r["order_id"], "cancelled", None, None)
+    fake.tool = orig
+    ok = _run(svc.place(db, u, [_order("AAPL", shares=3, limit=100.5)], confirm=True))
+    assert ok["results"][0]["status"] == "queued", ok
+    db.close()
+
+
+@test
+def test_sync_reconciles_an_unknown_order_by_client_id_then_blocks_duplicates():
+    fake = FakeRobinhood()
+    fake.positions = []
+    fake.tools = [t for t in fake.tools if t["name"] != "get_order"] + [
+        {"name": "get_orders", "description": "Order history", "inputSchema": {
+            "type": "object", "properties": {"account_number": {"type": "string"}}}}]
+    schema = json.loads(json.dumps(ORDER_SCHEMA))
+    schema["properties"]["client_order_id"] = {"type": "string"}
+    fake.tools[1] = {"name": "place_equity_order", "description": "Place", "inputSchema": schema}
+    book = []
+    orig = fake.tool
+
+    def tool(name, args):
+        if name == "place_equity_order":
+            fake.tool_calls.append((name, args))
+            book.append({"id": "rh-77", "client_order_id": args["client_order_id"], "state": "queued"})
+            raise httpx.RemoteProtocolError("connection dropped")
+        if name == "get_orders":
+            fake.tool_calls.append((name, args))
+            return {"structuredContent": {"results": book}}
+        return orig(name, args)
+
+    fake.tool = tool
+    db, u = _live_user(fake)
+    r = _run(svc.place(db, u, [_order("AAPL", shares=3, limit=100.5)], confirm=True))["results"][0]
+    assert r["status"] == "unknown"
+    s = _run(svc.sync(db, u))
+    o = db.query(BrokerOrder).filter(BrokerOrder.id == r["order_id"]).one()
+    assert o.broker_order_id == "rh-77" and o.status == "queued", (o.status, s)
+    # Found and open: still one order per ticker+side.
+    again = _run(svc.place(db, u, [_order("AAPL", shares=3, limit=100.5)], confirm=True))
+    assert again["placed"] == 0 and "open buy order" in again["results"][0]["errors"][0]
+    # Filled today: an identical order is a duplicate; a different size is not.
+    book[0]["state"] = "filled"
+    book[0]["cumulative_quantity"] = "3"
+    book[0]["average_price"] = "100.40"
+    o.status = "filled"
+    o.filled_quantity = 3
+    o.avg_fill_price = 100.4
+    db.commit()
+    dup = _run(svc.preview(db, u, [_order("AAPL", shares=3, limit=100.5)]))
+    assert not dup["orders"][0]["ok"] and "already filled today" in dup["orders"][0]["errors"][0]
+    diff = _run(svc.preview(db, u, [_order("AAPL", shares=4, limit=100.5)]))
+    assert diff["orders"][0]["ok"], diff
+    db.close()
+
+
+@test
+def test_connect_error_means_not_sent_and_does_not_block():
+    fake = FakeRobinhood()
+    fake.positions = []
+    orig = fake.tool
+
+    def tool(name, args):
+        if name == "place_equity_order":
+            raise httpx.ConnectError("no route to host")
+        return orig(name, args)
+
+    fake.tool = tool
+    db, u = _live_user(fake)
+    r = _run(svc.place(db, u, [_order("AAPL", shares=3, limit=100.5)], confirm=True))["results"][0]
+    assert r["status"] == "failed", r
+    fake.tool = orig
+    r2 = _run(svc.place(db, u, [_order("AAPL", shares=3, limit=100.5)], confirm=True))["results"][0]
+    assert r2["status"] == "queued", r2
+    db.close()
+
+
+@test
+def test_holdings_mismatch_blocks_sells_and_needs_ack_for_buys():
+    fake = FakeRobinhood()
+    fake.positions = [{"symbol": "AAPL", "quantity": "3", "average_buy_price": "90"},
+                      {"symbol": "MSFT", "quantity": "10", "average_buy_price": "400"}]
+    db, u = _live_user(fake)
+    db.add_all([PortfolioPosition(user_id=u.id, ticker="AAPL", shares=5, avg_cost=90.0),
+                PortfolioPosition(user_id=u.id, ticker="NVDA", shares=2, avg_cost=100.0)])
+    db.commit()
+    prev = _run(svc.preview(db, u, [_order("AAPL", "sell", shares=3, limit=100),
+                                     _order("NVDA", "sell", shares=1, limit=120),
+                                     _order("NVDA", "buy", shares=1, limit=120)]))
+    sell_aapl, sell_nvda, buy_nvda = prev["orders"]
+    assert not sell_aapl["ok"] and any("reconcile" in e for e in sell_aapl["errors"]), sell_aapl
+    assert not sell_nvda["ok"] and any("another broker" in e for e in sell_nvda["errors"]), sell_nvda
+    assert buy_nvda["ok"] and buy_nvda["needs_ack"] and "AAPL" in buy_nvda["needs_ack"][0]
+    assert "MSFT" in buy_nvda["needs_ack"][0] and "NVDA" not in buy_nvda["needs_ack"][0].split("for ")[1]
+    assert prev["totals"]["needs_ack"] and prev["totals"]["ack_items"]
+    fake.tool_calls.clear()
+    res = _run(svc.place(db, u, [_order("NVDA", shares=1, limit=120)], confirm=True))
+    assert res["placed"] == 0 and res["needs_ack"] and not _place_names(fake), res
+    assert not db.query(BrokerOrder).filter(BrokerOrder.user_id == u.id).count()
+    res = _run(svc.place(db, u, [_order("NVDA", shares=1, limit=120)], confirm=True, acknowledge=True))
+    assert res["placed"] == 1 and _place_names(fake)
+    # Acknowledging never unblocks a sell of mismatched shares.
+    res = _run(svc.place(db, u, [_order("AAPL", "sell", shares=3, limit=100)], confirm=True, acknowledge=True))
+    assert res["placed"] == 0 and len(_place_names(fake)) == 1
+    db.close()
+
+
+@test
+def test_unreadable_holdings_need_ack_for_every_order():
+    fake = FakeRobinhood()
+    orig = fake.tool
+
+    def tool(name, args):
+        if name == "get_positions":
+            return {"structuredContent": {"weird": True}, "content": [{"type": "text", "text": "?"}]}
+        return orig(name, args)
+
+    fake.tool = tool
+    db, u = _live_user(fake)
+    db.add(PortfolioPosition(user_id=u.id, ticker="AAPL", shares=5, avg_cost=90.0))
+    db.commit()
+    prev = _run(svc.preview(db, u, [_order("AAPL", "sell", shares=1, limit=100),
+                                     _order("NVDA", shares=1, limit=120)]))
+    assert all(r["needs_ack"] for r in prev["orders"]), prev["orders"]
+    assert any("acknowledgement" in n for n in prev["notes"]), prev["notes"]
+    db.close()
+
+
+@test
+def test_paper_mode_has_no_holdings_or_freshness_gate_and_no_network():
+    _install(None)
+    QUOTE_STATE["age_days"] = 10
+    try:
+        db = SessionLocal()
+        u = _user(db)
+        prev = _run(svc.preview(db, u, [_order("AAPL", shares=1, limit=100.5)]))
+        r = prev["orders"][0]
+        assert r["ok"] and not r["needs_ack"] and not prev["totals"]["needs_ack"], prev
+        assert not QUOTE_STATE["refresh_calls"]
+        assert any("Paper mode" in n for n in prev["notes"])
+        db.close()
+    finally:
+        QUOTE_STATE["age_days"] = 0
+
+
+@test
+def test_quote_staleness_rules():
+    from datetime import datetime, timedelta, timezone
+    now = datetime(2026, 9, 28, 15, 0, tzinfo=timezone.utc)
+    close = datetime(2026, 9, 25, 20, 0, tzinfo=timezone.utc)
+    assert svc.quote_staleness(now - timedelta(minutes=5), now, market_open=True) is None
+    assert "min old" in svc.quote_staleness(now - timedelta(minutes=25), now, market_open=True)
+    assert svc.quote_staleness(close + timedelta(minutes=1), now, market_open=False, last_close=close) is None
+    assert "before the last market close" in svc.quote_staleness(
+        close - timedelta(minutes=1), now, market_open=False, last_close=close)
+    assert svc.quote_staleness(None, now, market_open=True) == "has no timestamp"
+    naive = (now - timedelta(minutes=5)).replace(tzinfo=None)
+    assert svc.quote_staleness(naive, now, market_open=True) is None
+
+
+@test
+def test_live_preview_refreshes_stale_quotes_and_place_refuses_them():
+    fake = FakeRobinhood()
+    fake.positions = []
+    db, u = _live_user(fake)
+    QUOTE_STATE.update(age_days=10, refresh_age_days=0, refresh_calls=[])
+    try:
+        prev = _run(svc.preview(db, u, [_order("AAPL", shares=1, limit=100.5)]))
+        assert prev["orders"][0]["ok"], prev
+        assert QUOTE_STATE["refresh_calls"] == [["AAPL"]]
+        assert any("Refreshed prices" in n for n in prev["notes"])
+        # Refresh can't help (source still old): preview blocks too.
+        QUOTE_STATE["refresh_age_days"] = 10
+        prev = _run(svc.preview(db, u, [_order("AAPL", shares=1, limit=100.5)]))
+        assert not prev["orders"][0]["ok"] and "refresh prices" in prev["orders"][0]["errors"][0]
+        # Place never refreshes and never sizes off a stale price.
+        fake.tool_calls.clear()
+        QUOTE_STATE["refresh_calls"] = []
+        res = _run(svc.place(db, u, [_order("AAPL", shares=1, limit=100.5)], confirm=True))
+        assert res["placed"] == 0 and "refresh prices" in res["results"][0]["errors"][0]
+        assert not _place_names(fake) and not QUOTE_STATE["refresh_calls"]
+    finally:
+        QUOTE_STATE.update(age_days=0, refresh_age_days=0, refresh_calls=[])
+    db.close()
+
+
+@test
+def test_validate_orders_is_unchanged_without_the_new_inputs():
+    """The pure validator keeps its old contract when no stale/holdings data
+    is passed — only the new keys are added."""
+    rows, t = svc.validate_orders([_order("AAPL", shares=1, limit=100.5)], {"AAPL": 100.0}, {}, None, True)
+    assert rows[0]["ok"] and rows[0]["needs_ack"] == [] and t["needs_ack"] is False and t["ok"]
+
+
 # ── API surface: no secrets, callback redirects ──────────────────────────
 
 @test
@@ -787,6 +1077,8 @@ def test_api_never_returns_tokens_and_callback_redirects():
         client.post("/api/broker/holdings/import", json={"tickers": ["MSFT"]}).text,
         client.post("/api/broker/orders/preview", json={"orders": [_order()]}).text,
         client.post("/api/broker/orders", json={"orders": [_order()], "confirm": True}).text,
+        client.post("/api/broker/orders", json={"orders": [_order()], "confirm": True,
+                                                "acknowledge": True}).text,
         client.get("/api/broker/orders").text,
         client.post("/api/broker/orders/sync").text,
     ]

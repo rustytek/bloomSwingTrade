@@ -61,7 +61,9 @@ cell shows *unproven*. Expect many cells to stay unproven even with 20 years —
 Every walk-forward you run is recorded as a *trial* of that strategy (re-running identical settings doesn't count
 twice). The results panel shows the **Deflated Sharpe**: the chance the Sharpe ratio beats what the best of that many
 random tries would show by luck, with a 95% interval on the Sharpe itself. Above 95% is likely real; below 50% is
-likely luck. Trying many variants and keeping the best raises the bar for all of them — that is the point. The list
+likely luck. Trying many variants and keeping the best raises the bar for all of them — that is the point.
+
+Every run is also compared with an **equal-weight portfolio of the same stocks** — every name the strategy could have picked on each rebalance date, always invested, same schedule and costs (the dashed line on the equity chart). Beating SPY is not enough; the rules must beat simply owning their own universe. The **Costs & Turnover** panel shows returns before and after costs, how much the strategy trades, the cost at which it stops making money (and stops beating the equal-weight portfolio), and a table of results at 0–50 bps per side. The list
 of trials counted is at `/api/backtest/trials`; there is deliberately no way to delete them.
 
 ## Enabling FRED Macro Data

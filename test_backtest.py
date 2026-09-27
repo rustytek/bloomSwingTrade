@@ -736,6 +736,135 @@ def test_data_coverage_reports_dropped_gaps_and_early_ends():
     assert {c["id"] for c in data_quality_caveats(clean)} == {"history_window"}
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# ML4T gaps 5 & 6 — same-universe baseline, cost analysis
+# ──────────────────────────────────────────────────────────────────────────
+def _pairs_of(result):
+    """(start, end) rebalance pairs, recovered from the equity curve dates."""
+    eq = [p["date"] for p in result["equity"]]
+    starts = [t["date"] for t in result["trades"]]
+    return list(zip(starts, eq[1:]))
+
+
+@test
+def test_baseline_is_equal_weight_of_eligible_names_next_open_to_next_open():
+    r = run()
+    base = r["baseline"]
+    assert len(base) == len(r["equity"]) and base[0] == {"date": r["equity"][0]["date"], "value": 1.0}
+    assert [p["date"] for p in base] == [p["date"] for p in r["equity"]]
+    strat = bt.STRATEGIES["momentum_rotation"]
+    min_idx = strat.min_bars - 1
+    (d0, d1) = _pairs_of(r)[0]
+    rets = []
+    for t in _TICKERS:
+        bars = _HIST[t]
+        i0 = next(i for i, b in enumerate(bars) if b["date"] == d0)
+        i1 = next(i for i, b in enumerate(bars) if b["date"] == d1)
+        if i0 < min_idx:
+            continue
+        # Bought at the open AFTER the decision date, sold at the open after
+        # the next decision date — never at the decision close.
+        rets.append(bars[i1 + 1]["open"] / bars[i0 + 1]["open"] - 1)
+    assert rets, "every synthetic ticker should be eligible"
+    expected = 1 + sum(rets) / len(rets) - 1.0 * 0.001   # first period buys everything: turnover 1
+    assert approx(base[1]["value"], round(expected, 6), 2e-6), (base[1], expected)
+    bc = r["baseline_comparison"]
+    assert bc["avg_names"] == len(_TICKERS) and bc["min_names"] == len(_TICKERS)
+    assert bc["cagr_excess"] == round(r["metrics"]["cagr"] - r["baseline_metrics"]["cagr"], 2)
+    json.dumps({k: r[k] for k in ("baseline", "baseline_metrics", "baseline_comparison", "cost_analysis")},
+               allow_nan=False)
+
+
+@test
+def test_baseline_has_no_lookahead_and_skips_names_without_enough_history():
+    full = run()
+    # Truncate every series a few bars after a mid-test period end: baseline
+    # points up to that period must not move.
+    pairs = _pairs_of(full)
+    k = len(pairs) // 2
+    cut_date = pairs[k][1]
+    saved = dict(_HIST)
+    try:
+        for t, bars in saved.items():
+            idx = next(i for i, b in enumerate(bars) if b["date"] == cut_date)
+            _HIST[t] = bars[: idx + 3]
+        cut = run()
+    finally:
+        _HIST.clear()
+        _HIST.update(saved)
+    upto = [p for p in full["baseline"] if p["date"] <= pairs[k - 1][1]]
+    assert cut["baseline"][: len(upto)] == upto, "baseline used data from after the period"
+
+    # A young listing is not eligible until the strategy could evaluate it.
+    strat = bt.STRATEGIES["momentum_rotation"]
+    young = make_series(seed=42)[-(strat.min_bars + 40):]
+    try:
+        _HIST["NEW"] = young
+        bt._source_tickers = lambda db, user_id, source: sorted(_TICKERS + ["NEW"])
+        r = run()
+    finally:
+        _HIST.pop("NEW", None)
+        _install_fake_db()
+    # NEW has too few bars for warm-up overall (usable check) or joins late.
+    assert r["baseline_comparison"]["min_names"] == len(_TICKERS), r["baseline_comparison"]
+    # ...and it does join once it has the history (late periods count 7 names).
+    assert r["baseline_comparison"]["avg_names"] > len(_TICKERS), r["baseline_comparison"]
+
+
+@test
+def test_breakeven_and_compounding_math():
+    n = 50
+    gross, turn = [0.01] * n, [1.0] * n
+    assert approx(bt.compound_net(gross, turn, 0.0), 1.01 ** n, 1e-12)
+    be = bt.solve_breakeven(lambda c: bt.compound_net(gross, turn, c) - 1)
+    assert be["status"] == "found" and approx(be["bps"], 100.0, 0.05), be
+    assert bt.solve_breakeven(lambda c: bt.compound_net([-0.01] * n, turn, c) - 1)["status"] == "no_edge"
+    assert bt.solve_breakeven(lambda c: bt.compound_net(gross, [0.0] * n, c) - 1)["status"] == "above_max"
+
+
+@test
+def test_cost_sweep_reproduces_the_run_and_a_rerun_exactly_in_rotation():
+    r10 = run(cost_bps=10)
+    ca = r10["cost_analysis"]
+    assert ca["exact"] and ca["mode"] == "rotation"
+    row10 = next(x for x in ca["sweep"] if x["cost_bps"] == 10)
+    assert abs(row10["cagr"] - r10["metrics"]["cagr"]) <= 0.02, (row10, r10["metrics"]["cagr"])
+    assert abs(row10["baseline_cagr"] - r10["baseline_metrics"]["cagr"]) <= 0.02
+    assert abs(ca["net_cagr"] - r10["metrics"]["cagr"]) <= 0.02
+    assert ca["gross_cagr"] >= ca["net_cagr"] and ca["cost_drag_cagr"] >= 0
+    # The sweep's 25 bps row IS what a 25 bps run reports.
+    r25 = run(cost_bps=25)
+    row25 = next(x for x in ca["sweep"] if x["cost_bps"] == 25)
+    assert abs(row25["cagr"] - r25["metrics"]["cagr"]) <= 0.02, (row25, r25["metrics"]["cagr"])
+    assert abs(row25["baseline_cagr"] - r25["baseline_metrics"]["cagr"]) <= 0.02
+    assert [x["cost_bps"] for x in ca["sweep"]] == sorted(x["cost_bps"] for x in ca["sweep"])
+    cagrs = [x["cagr"] for x in ca["sweep"]]
+    assert cagrs == sorted(cagrs, reverse=True), "CAGR must fall as cost rises"
+    t = ca["turnover"]
+    assert 0 <= t["one_way_per_rebalance_pct"] <= 100 and t["one_way_annual_pct"] >= t["one_way_per_rebalance_pct"]
+    be = ca["breakeven_vs_cash"]
+    if be["status"] == "found":
+        at_be = next((x for x in ca["sweep"] if x["cost_bps"] >= be["bps"]), None)
+        if at_be:
+            assert at_be["cagr"] <= 0.01
+
+
+@test
+def test_trade_plan_cost_analysis_is_consistent():
+    r = run(mode="trade_plan", cost_bps=10, spy_regime=False)
+    ca = r["cost_analysis"]
+    assert ca["mode"] == "trade_plan" and not ca["exact"]
+    assert abs(ca["net_cagr"] - r["metrics"]["cagr"]) <= 0.02, (ca["net_cagr"], r["metrics"]["cagr"])
+    assert ca["gross_cagr"] >= ca["net_cagr"]
+    pt = ca["per_trade"]
+    if r["metrics"]["trades_taken"]:
+        assert pt and pt["trades"] >= 1
+        assert approx(pt["avg_r_net"], round(pt["avg_r_gross"] - pt["avg_cost_r"], 3), 0.0015)
+        assert pt["avg_cost_r"] > 0
+    assert len(r["baseline"]) == len(r["equity"])
+    json.dumps(ca, allow_nan=False)
+
+
 def main() -> int:
     if "--record-baseline" in sys.argv:
         print(rotation_fingerprint(run()))

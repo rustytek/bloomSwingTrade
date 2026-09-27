@@ -279,6 +279,177 @@ def turnover_cost(holdings: set, prev_holdings: set, top_n: int, cost: float) ->
     return sym_diff / max(top_n, 1) * cost
 
 
+# ── Same-universe baseline & cost analysis (ML4T 3e §16.6, §17.4, §18.8) ───
+# The book's first question about any strategy is "does it beat simply owning
+# everything it could have picked, under the same costs and schedule?" SPY is
+# a different universe (cap-weighted, includes names the strategy can't pick),
+# so it answers a different question. And a single cost setting hides how
+# fragile an edge is: the break-even cost and a sweep show it.
+COST_SWEEP_BPS = (0, 5, 10, 25, 50)
+_BREAKEVEN_MAX = 0.10            # search break-even costs up to 1000 bps per side
+
+
+def _years_between(first: str, last: str) -> float:
+    """Same year convention as _metrics (calendar days / 365.25)."""
+    start = datetime.fromisoformat(first)
+    end = datetime.fromisoformat(last)
+    return max((end - start).days / 365.25, 1 / 252)
+
+
+def _cagr_pct(final_value: float, years: float) -> float:
+    if final_value <= 0:
+        return -100.0
+    return (final_value ** (1 / years) - 1) * 100
+
+
+def compound_net(gross: list[float], turnover: list[float], cost: float) -> float:
+    """Final value of 1.0 compounded through per-period GROSS returns net of
+    `turnover[t] * cost` — exactly how the rotation loop books a period
+    (period_ret = gross - turnover_cost). Pure."""
+    value = 1.0
+    for g, t in zip(gross, turnover):
+        value *= max(0.0, 1 + g - t * cost)
+    return value
+
+
+def solve_breakeven(fn, lo: float = 0.0, hi: float = _BREAKEVEN_MAX) -> dict:
+    """The cost c (fraction per side) where fn(c) crosses zero, by bisection.
+
+    `fn` must be positive at `lo` for an edge to exist. Returns
+    {"bps": float|None, "status": "found"|"no_edge"|"above_max"}: "no_edge"
+    means fn(lo) <= 0 (no edge even before costs); "above_max" means the edge
+    survives even at `hi`. Assumes one crossing (true when the strategy trades
+    at least as much as what it is compared against). Pure."""
+    f_lo = fn(lo)
+    if f_lo <= 0:
+        return {"bps": None, "status": "no_edge"}
+    if fn(hi) > 0:
+        return {"bps": None, "status": "above_max"}
+    a, b = lo, hi
+    for _ in range(60):
+        mid = (a + b) / 2
+        if fn(mid) > 0:
+            a = mid
+        else:
+            b = mid
+    return {"bps": round((a + b) / 2 * 10000, 1), "status": "found"}
+
+
+def baseline_series(dates_end: list[str], start_date: str, gross: list[float],
+                    turnover: list[float], cost: float) -> list[dict]:
+    """Equity curve of the equal-weight baseline, aligned with the strategy's
+    equity (first point = start_date at 1.0, then one point per period end)."""
+    curve = [{"date": start_date, "value": 1.0}]
+    for d, g, t in zip(dates_end, gross, turnover):
+        curve.append({"date": d, "value": round(curve[-1]["value"] * max(0.0, 1 + g - t * cost), 6)})
+    return curve
+
+
+def cost_analysis(*, mode: str, cost_bps: float, ppy: float, years: float,
+                  base_gross: list[float], base_turnover: list[float],
+                  rot_gross: list[float] | None = None, rot_turnover: list[float] | None = None,
+                  net_equity: list[dict] | None = None,
+                  tp_final_value: float | None = None, tp_notional: float | None = None,
+                  tp_mean_equity: float | None = None,
+                  tp_trades: list[tuple[float, float]] | None = None) -> dict:
+    """Gross vs net, turnover, break-even cost and a cost sweep — derived from
+    ONE run, never by re-running it. Pure.
+
+    rotation: exact. Every period's gross return and round-trip turnover
+    fraction are known, so any other cost is a re-compounding.
+    trade_plan: costs are charged on each side of every fill (entry and each
+    exit), in dollars. `tp_final_value` is the run's final equity / account,
+    `tp_notional` the dollar value traded that hit cash / account. Another cost
+    shifts the final value by notional × Δcost; the position SIZES are held at
+    the run's values (sizing is path-dependent), so this is a first-order
+    estimate — exact at the run's own cost.
+    Break-even "vs cash" is the per-side cost at which CAGR reaches 0; "vs
+    baseline" is where it falls to the equal-weight universe's CAGR at that
+    same cost (the baseline pays costs too)."""
+    cost = cost_bps / 10000
+
+    def base_cagr(c: float) -> float:
+        return _cagr_pct(compound_net(base_gross, base_turnover, c), years)
+
+    if mode == "rotation":
+        rot_gross = rot_gross or []
+        rot_turnover = rot_turnover or []
+
+        def strat_cagr(c: float) -> float:
+            return _cagr_pct(compound_net(rot_gross, rot_turnover, c), years)
+
+        # Dollar cost actually paid, on the net equity path the run took.
+        paid = 0.0
+        if net_equity:
+            for point, t in zip(net_equity[:-1], rot_turnover):
+                paid += point["value"] * t * cost
+        mean_rt = mean(rot_turnover) if rot_turnover else 0.0
+        one_way = mean_rt / 2
+        turnover = {
+            "one_way_per_rebalance_pct": round(one_way * 100, 1),
+            "one_way_annual_pct": round(one_way * ppy * 100, 1),
+        }
+        total_cost_pct = round(paid * 100, 2)
+        per_trade = None
+    else:
+        final = float(tp_final_value or 0.0)
+        notional = float(tp_notional or 0.0)
+
+        def strat_cagr(c: float) -> float:
+            return _cagr_pct(final + notional * (cost - c), years)
+
+        turnover = {
+            "one_way_per_rebalance_pct": None,
+            "one_way_annual_pct": (round(notional / 2 / tp_mean_equity / years * 100, 1)
+                                   if tp_mean_equity and years else None),
+        }
+        total_cost_pct = round(notional * cost * 100, 2)
+        per_trade = None
+        if tp_trades:
+            rs = [r for r, _ in tp_trades]
+            per_c = [k for _, k in tp_trades]          # R lost per unit of per-side cost
+            avg_r = mean(rs)
+            avg_k = mean(per_c)
+            per_trade = {
+                "trades": len(tp_trades),
+                "avg_r_gross": round(avg_r, 3),
+                "avg_cost_r": round(avg_k * cost, 3),
+                "avg_r_net": round(avg_r - avg_k * cost, 3),
+                "breakeven_bps": (round(avg_r / avg_k * 10000, 1)
+                                  if avg_k > 0 and avg_r > 0 else None),
+            }
+
+    sweep_levels = sorted(set(COST_SWEEP_BPS) | {round(float(cost_bps), 4)})
+    sweep = [{"cost_bps": b,
+              "cagr": round(strat_cagr(b / 10000), 2),
+              "baseline_cagr": round(base_cagr(b / 10000), 2)} for b in sweep_levels]
+    for row in sweep:
+        row["excess_vs_baseline"] = round(row["cagr"] - row["baseline_cagr"], 2)
+    vs_cash = solve_breakeven(strat_cagr)
+    vs_base = solve_breakeven(lambda c: strat_cagr(c) - base_cagr(c))
+    return {
+        "mode": mode,
+        "cost_bps": cost_bps,
+        "cost_model": ("cost_bps per side on traded value: rotation charges it on the names bought "
+                       "and sold at each rebalance; trade_plan on every entry and exit fill"),
+        "gross_cagr": round(strat_cagr(0.0), 2),
+        "net_cagr": round(strat_cagr(cost), 2),
+        "cost_drag_cagr": round(strat_cagr(0.0) - strat_cagr(cost), 2),
+        "total_cost_pct_of_start_equity": total_cost_pct,
+        "turnover": turnover,
+        "breakeven_vs_cash": vs_cash,
+        "breakeven_vs_baseline": vs_base,
+        "sweep": sweep,
+        "per_trade": per_trade,
+        "exact": mode == "rotation",
+        "note": ("Rotation: exact — each period is re-compounded from its gross return and turnover."
+                 if mode == "rotation" else
+                 "trade_plan: first-order estimate — position sizes are held at this run's values "
+                 "(exact at the run's own cost). Per-trade R is gross of costs; avg_cost_r is the "
+                 "R each round trip gives up to costs."),
+    }
+
+
 def _bar_date(bar: dict) -> str:
     return bar["date"]
 
@@ -1077,6 +1248,14 @@ def run_walk_forward_backtest(
     used_tickers: list[str] = []
     scan_list = list(preloaded.keys()) if preloaded is not None else tickers
     pairs = list(zip(dates, dates[1:]))
+    # Same-universe equal-weight baseline (ML4T gap 5), accumulated during the
+    # SAME one-ticker-at-a-time scan: per rebalance date, the sum and count of
+    # next-open → next-open returns over every name the strategy could have
+    # picked, plus how many names entered or left that eligible set.
+    base_sum: dict[str, float] = {d: 0.0 for d, _ in pairs}
+    base_n: dict[str, int] = {d: 0 for d, _ in pairs}
+    base_moves: dict[str, int] = {d: 0 for d, _ in pairs}
+    base_min_idx = max(0, int(getattr(strategy, "min_bars", 0) or 0) - 1)
     for n, ticker in enumerate(scan_list):
         if n % 10 == 0:
             _tick(0.03 + 0.85 * n / max(1, len(scan_list)),
@@ -1089,6 +1268,25 @@ def run_walk_forward_backtest(
         used_tickers.append(ticker)
         if not have_window or not strategy.applies_to(ticker):
             continue
+        # Eligible on a rebalance date = the strategy could have evaluated it
+        # there: a bar ON that date, enough history for the strategy's own
+        # warm-up, and a next session to buy at. Independent of the SPY gate
+        # and of whether the strategy's rules passed — the baseline owns them all.
+        was_in = False
+        for start, end in pairs:
+            sp = _value_on_or_before(bars, start)
+            is_in = False
+            if sp and sp[0] >= base_min_idx and bars[sp[0]]["date"] == start:
+                ep = _value_on_or_before(bars, end)
+                buy = _next_open(bars, sp[0], until=end)
+                if ep and ep[0] > sp[0] and buy:
+                    sell = _next_open(bars, ep[0]) or ep[1]
+                    base_sum[start] += sell / buy - 1
+                    base_n[start] += 1
+                    is_in = True
+            if is_in != was_in:
+                base_moves[start] += 1
+            was_in = is_in
         if mode == "trade_plan":
             for start in dates:
                 if not regime_ok_at.get(start):
@@ -1184,6 +1382,20 @@ def run_walk_forward_backtest(
         missed_gap = 0            # next session never traded down to the limit
         missed_through_stop = 0   # would have filled at/below the planned stop
         missed_no_session = 0     # no next session inside the test window
+        # Cost analysis (ML4T gap 6): dollar value traded that actually hit
+        # cash, and per closed trade (gross R, R lost per unit of per-side cost).
+        tp_notional = 0.0
+        tp_trade_costs: list[tuple[float, float]] = []
+
+        def _log_trade(p: OpenPosition) -> None:
+            rec = _trade_record(p)
+            trade_log.append(rec)
+            st = p.state
+            denom = st.initial_shares * st.risk_per_share
+            if rec["r_multiple"] is not None and denom:
+                traded = st.initial_shares * st.entry_price + sum(
+                    f["shares"] * f["price"] for f in p.fills)
+                tp_trade_costs.append((float(rec["r_multiple"]), traded / denom))
 
         for i, start in enumerate(dates):
             spy_start = _value_on_or_before(spy, start)
@@ -1255,6 +1467,7 @@ def run_walk_forward_backtest(
                         continue
                     outlay = shares * entry_px * (1 + cost)
                 cash -= outlay
+                tp_notional += shares * entry_px
 
                 atr_series = _atr_for(ticker, bars)
                 rules = build_exit_rules(
@@ -1284,8 +1497,9 @@ def run_walk_forward_backtest(
                     pos.closed = True
                     proceeds = shares * stop_px * (1 - cost)
                     cash += proceeds
+                    tp_notional += shares * stop_px
                     pos.proceeds += proceeds
-                    trade_log.append(_trade_record(pos))
+                    _log_trade(pos)
                     exits_this_period += 1
                     continue
                 # Seed path-dependent rule state (highest close, trail level)
@@ -1300,9 +1514,10 @@ def run_walk_forward_backtest(
                 for fill in walk_position(pos, end):
                     proceeds = fill["shares"] * fill["price"] * (1 - cost)
                     cash += proceeds
+                    tp_notional += fill["shares"] * fill["price"]
                     pos.proceeds += proceeds
                 if pos.closed:
-                    trade_log.append(_trade_record(pos))
+                    _log_trade(pos)
                     open_positions.pop(ticker, None)
                     atr_cache.pop(ticker, None)
                     exits_this_period += 1
@@ -1343,7 +1558,7 @@ def run_walk_forward_backtest(
             px = pos.bars[pos.idx]["close"]
             fill = close_position_at(pos, px, pos.bars[pos.idx]["date"], "open at end of test")
             pos.proceeds += fill["shares"] * fill["price"] * (1 - cost)
-            trade_log.append(_trade_record(pos))
+            _log_trade(pos)
             open_positions.pop(ticker, None)
 
         rs = [t["r_multiple"] for t in trade_log if t["r_multiple"] is not None]
@@ -1374,6 +1589,8 @@ def run_walk_forward_backtest(
     else:
         rebalance_windows = pairs
 
+    rot_gross: list[float] = []
+    rot_turnover: list[float] = []
     for start, end in rebalance_windows:
         spy_start = _value_on_or_before(spy, start)
         spy_end = _value_on_or_before(spy, end)
@@ -1398,6 +1615,8 @@ def run_walk_forward_backtest(
         period_ret = 0.0
         if selected:
             period_ret = mean((end_px / start_px - 1) for _, _, start_px, end_px in selected)
+        rot_gross.append(period_ret)
+        rot_turnover.append(turnover_cost(holdings, prev_holdings, top_n, 1.0))
         # Round-trip turnover cost, uncapped — see turnover_cost() above.
         period_ret -= turnover_cost(holdings, prev_holdings, top_n, cost)
         spy_ret = (spy_sell / spy_buy - 1) if spy_buy else 0.0
@@ -1439,6 +1658,57 @@ def run_walk_forward_backtest(
     # Per-TRADE statistics only exist in trade_plan mode — a rotation has no
     # discrete trades, only rebalance periods, so these keys stay absent there.
     metrics.update(tp_stats)
+
+    # ── Same-universe equal-weight baseline (gap 5) ──────────────────────
+    # Always invested (no SPY gate — timing is part of what the strategy is
+    # being credited for), rebalanced to equal weight on the strategy's own
+    # schedule, open-to-open like the strategy. Cost: `cost` per side on the
+    # names entering or leaving the eligible set, as a fraction of the names
+    # held (the same formula turnover_cost() applies to the strategy). The
+    # small drift trades that restore equal weights are NOT charged — which
+    # flatters the baseline slightly, i.e. errs against the strategy.
+    base_gross: list[float] = []
+    base_turnover: list[float] = []
+    prev_n = 0
+    for s_date, _ in pairs:
+        n_now = base_n[s_date]
+        base_gross.append(base_sum[s_date] / n_now if n_now else 0.0)
+        base_turnover.append(base_moves[s_date] / max(n_now, prev_n, 1))
+        prev_n = n_now
+    baseline = baseline_series([e for _, e in pairs], dates[0], base_gross, base_turnover, cost)
+    baseline_metrics = _metrics(baseline, ppy)
+    names = [base_n[s_date] for s_date, _ in pairs]
+    baseline_comparison = {
+        "cagr_excess": round((metrics.get("cagr") or 0) - (baseline_metrics.get("cagr") or 0), 2),
+        "total_return_excess": round((metrics.get("total_return") or 0)
+                                     - (baseline_metrics.get("total_return") or 0), 2),
+        "sharpe_excess": (round(metrics["sharpe"] - baseline_metrics["sharpe"], 2)
+                          if metrics.get("sharpe") is not None and baseline_metrics.get("sharpe") is not None
+                          else None),
+        "beats_baseline": (metrics.get("cagr") or 0) > (baseline_metrics.get("cagr") or 0),
+        "avg_names": round(mean(names), 1) if names else 0,
+        "min_names": min(names) if names else 0,
+        "method": ("Equal weight in every name this strategy could have picked on each rebalance "
+                   "date (bar on the date, enough warm-up, inside its sub-universe), always invested, "
+                   "bought and sold at the next session's open, same cost per side on names entering "
+                   "or leaving the set."),
+    }
+
+    # ── Cost sensitivity (gap 6) ─────────────────────────────────────────
+    years_tested = _years_between(equity[0]["date"], equity[-1]["date"])
+    if mode == "trade_plan":
+        cost_report = cost_analysis(
+            mode=mode, cost_bps=cost_bps, ppy=ppy, years=years_tested,
+            base_gross=base_gross, base_turnover=base_turnover,
+            tp_final_value=equity[-1]["value"], tp_notional=tp_notional / account_size,
+            tp_mean_equity=mean(p["value"] for p in equity), tp_trades=tp_trade_costs,
+        )
+    else:
+        cost_report = cost_analysis(
+            mode=mode, cost_bps=cost_bps, ppy=ppy, years=years_tested,
+            base_gross=base_gross, base_turnover=base_turnover,
+            rot_gross=rot_gross, rot_turnover=rot_turnover, net_equity=equity,
+        )
 
     # Per-regime breakdown — this is the "does the strategy actually earn its
     # keep in the regime it's tagged for" check. A strategy tagged for
@@ -1547,6 +1817,30 @@ def run_walk_forward_backtest(
                 "close counts these as trades — they are the optimism this convention removes."
             ),
         })
+    if not baseline_comparison["beats_baseline"]:
+        caveats.append({
+            "id": "baseline_beats_strategy",
+            "severity": "high",
+            "title": "An equal-weight portfolio of the same stocks did better",
+            "detail": (
+                f"Owning every name this strategy could have picked, equally weighted and rebalanced "
+                f"on the same schedule with the same costs, returned {baseline_metrics.get('cagr')}% "
+                f"a year against the strategy's {metrics.get('cagr')}%. Beating SPY is not enough: "
+                "the selection rules have to add something over simply owning their own universe."
+            ),
+        })
+    be = cost_report["breakeven_vs_cash"]
+    if be["status"] == "found" and be["bps"] is not None and be["bps"] < 2 * max(float(cost_bps), 5.0):
+        caveats.append({
+            "id": "cost_fragile",
+            "severity": "medium",
+            "title": f"The edge disappears at about {be['bps']} bps per side",
+            "detail": (
+                f"This run assumed {cost_bps} bps per side. At about {be['bps']} bps the CAGR reaches "
+                "zero — less than twice the assumed cost, so modestly worse fills or spreads would "
+                "erase it. See the cost sweep."
+            ),
+        })
     data_quality = coverage.result()
     caveats.extend(data_quality_caveats(data_quality))
     if metrics.get("trades_taken") is not None and metrics["trades_taken"] < MIN_PERIODS_LOW_CONFIDENCE:
@@ -1574,6 +1868,10 @@ def run_walk_forward_backtest(
         "strategy_regimes": strategy.regimes,
         "mode": mode,
         "sharpe_inference": sharpe_inference(equity, ppy),
+        "baseline": baseline,
+        "baseline_metrics": baseline_metrics,
+        "baseline_comparison": baseline_comparison,
+        "cost_analysis": cost_report,
         "trade_log": trade_log,
         "caveats": caveats,
         "data_quality": data_quality,

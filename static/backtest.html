@@ -300,6 +300,12 @@
         <div class="skip-grid" id="skipCounters"></div>
       </div>
 
+      <div class="panel" id="costWrap" style="margin-top:14px;" hidden>
+        <div class="panel-title">Costs &amp; Turnover <span class="panel-sub">how much of the edge survives trading costs</span></div>
+        <div class="panel-desc">Worked out from this one run (not re-run): the same returns re-compounded at other per-side costs. Break-even is the cost at which the strategy stops making money, or stops beating the equal-weight portfolio of its own stocks. A real edge should survive costs well above what you expect to pay.</div>
+        <div id="costPanel"></div>
+      </div>
+
       <div class="panel" style="margin-top:14px;">
         <div class="panel-title">Regime Performance Breakdown <span class="panel-sub">how this strategy did in each market regime</span></div>
         <div class="panel-desc">Markets rotate between trending and choppy, calm and volatile conditions. This strategy is tagged for the regime(s) highlighted below — use this table to check whether its actual results back up that tag. The win rate carries its Wilson interval and a confidence label so a thin sample cannot masquerade as proof.</div>
@@ -842,7 +848,7 @@ function renderStats(bt) {
   const m = bt.metrics || {}, b = bt.benchmark_metrics || {};
   document.getElementById('statsWrap').hidden = false;
   document.getElementById('statsStrategy').textContent = `${currentStrategyName()} · ${bt.mode || currentMode()} mode`;
-  document.getElementById('equityStrategy').textContent = `${currentStrategyName()} vs SPY benchmark`;
+  document.getElementById('equityStrategy').textContent = `${currentStrategyName()} vs SPY and the equal-weight universe`;
   document.getElementById('stats').innerHTML = [
     statCard('Strategy CAGR', fmtPct(m.cagr), `SPY ${N(b.cagr) === null ? '--' : num(b.cagr, 2) + '%'}`, (m.cagr ?? 0) >= (b.cagr ?? 0) ? 'up' : 'down', 'Annualized growth rate. Prefer positive CAGR that beats SPY without requiring extreme drawdown.'),
     statCard('Total Return', fmtPct(m.total_return), `SPY ${N(b.total_return) === null ? '--' : num(b.total_return, 2) + '%'}`, (m.total_return ?? 0) >= 0 ? 'up' : 'down', 'End-to-end return over cached history. Useful, but less important than consistency and drawdown.'),
@@ -851,7 +857,50 @@ function renderStats(bt) {
     statCard('Sortino', num(m.sortino, 2), `SPY ${num(b.sortino, 2)}`, (m.sortino ?? 0) > 1 ? 'up' : 'warn', 'Like Sharpe, but only downside volatility counts as risk. Better for asymmetric strategies whose many small wins inflate plain volatility.'),
     statCard('Exposure', pctv(m.exposure, 1), N(m.avg_invested_return) !== null ? `avg ${signed(m.avg_invested_return, 2, '%')} per invested period` : 'time in the market', '', 'Share of rebalance periods the strategy actually held positions. Low exposure with a solid average per-period return means the strategy earned its results while mostly sitting safely in cash.'),
     sharpeTrustCard(bt),
+    baselineCard(bt),
   ].join('');
+}
+
+// ML4T gap 5: the strategy against simply owning every stock it could pick.
+function baselineCard(bt) {
+  const bm = bt.baseline_metrics, bc = bt.baseline_comparison;
+  if (!bm || !bc) return statCard('vs Equal-Weight Universe', '--', 'no baseline for this run', '', 'Needs a completed run.');
+  const ex = N(bc.cagr_excess);
+  return statCard('vs Equal-Weight Universe', ex === null ? '--' : signed(ex, 2, '%'),
+    `baseline CAGR ${fmtPct(bm.cagr)} · ~${num(bc.avg_names, 0)} names`,
+    ex === null ? '' : (ex > 0 ? 'up' : 'down'),
+    'CAGR above (or below) an equal-weight portfolio of every stock this strategy could have picked on each rebalance date, always invested, rebalanced on the same schedule, next-open fills and the same cost per side. If this is negative the selection rules did not add anything over owning their own universe, even if the strategy beat SPY.');
+}
+
+// ML4T gap 6: cost sensitivity, derived from the run itself.
+function renderCost(bt) {
+  const wrap = document.getElementById('costWrap');
+  const ca = bt.cost_analysis;
+  if (!ca) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  const be = (b) => {
+    if (!b) return '--';
+    if (b.status === 'found') return `${num(b.bps, 1)} bps`;
+    if (b.status === 'above_max') return '> 1000 bps';
+    return 'no edge even at 0 bps';
+  };
+  const t = ca.turnover || {};
+  const cards = [
+    statCard('Gross → Net CAGR', `${fmtPct(ca.gross_cagr)} → ${fmtPct(ca.net_cagr)}`, `costs cost ${num(ca.cost_drag_cagr, 2)} pts/yr at ${num(ca.cost_bps, 0)} bps`, (N(ca.net_cagr) ?? 0) > 0 ? 'up' : 'down', 'CAGR before any trading cost vs after the cost this run assumed (per side, on traded value).'),
+    statCard('Turnover', N(t.one_way_annual_pct) === null ? '--' : pctv(t.one_way_annual_pct, 0) + '/yr', N(t.one_way_per_rebalance_pct) === null ? 'one-way, of equity' : `${pctv(t.one_way_per_rebalance_pct, 1)} per rebalance (one-way)`, '', 'How much of the portfolio is sold and replaced. Every unit of turnover pays the per-side cost twice (sell + buy).'),
+    statCard('Break-even cost', be(ca.breakeven_vs_cash), 'per side, where CAGR reaches 0', ca.breakeven_vs_cash && ca.breakeven_vs_cash.status === 'no_edge' ? 'down' : '', 'The per-side cost at which this strategy stops making money at all.'),
+    statCard('Break-even vs baseline', be(ca.breakeven_vs_baseline), 'per side, where it stops beating equal weight', ca.breakeven_vs_baseline && ca.breakeven_vs_baseline.status === 'no_edge' ? 'down' : '', 'The per-side cost at which the strategy falls to the equal-weight universe (which pays the same cost on its own, lower, turnover).'),
+  ].join('');
+  const rows = (ca.sweep || []).map(r => `<tr${Number(r.cost_bps) === Number(ca.cost_bps) ? ' style="background:#16161a;"' : ''}>
+      <td class="mono">${num(r.cost_bps, 0)} bps${Number(r.cost_bps) === Number(ca.cost_bps) ? ' <span class="muted">(this run)</span>' : ''}</td>
+      <td class="mono ${(N(r.cagr) ?? 0) >= 0 ? 'up' : 'down'}">${fmtPct(r.cagr)}</td>
+      <td class="mono">${fmtPct(r.baseline_cagr)}</td>
+      <td class="mono ${(N(r.excess_vs_baseline) ?? 0) >= 0 ? 'up' : 'down'}">${signed(r.excess_vs_baseline, 2, '%')}</td></tr>`).join('');
+  const pt = ca.per_trade;
+  const ptHtml = pt ? `<div class="panel-desc" style="margin:10px 0 0;">Per trade: average ${signed(pt.avg_r_gross, 3)}R before costs, ${signed(pt.avg_r_net, 3)}R after (${num(pt.avg_cost_r, 3)}R per round trip goes to costs)${N(pt.breakeven_bps) !== null ? `; the average trade breaks even at ${num(pt.breakeven_bps, 1)} bps per side` : ''}.</div>` : '';
+  document.getElementById('costPanel').innerHTML = `<section class="grid4">${cards}</section>
+    <table style="margin-top:12px;"><thead><tr><th>Cost per side</th><th>Strategy CAGR</th><th>Equal-weight CAGR</th><th>Excess</th></tr></thead><tbody>${rows}</tbody></table>
+    ${ptHtml}<div class="note" style="margin-top:8px;font-size:11px;">${esc(ca.note || '')}</div>`;
 }
 
 // ML4T gap 2b: how far the Sharpe can be trusted, after allowing for skew,
@@ -1051,6 +1100,9 @@ function renderChart(bt) {
       datasets: [
         { label: 'Strategy', data: (bt.equity || []).map(p => p.value), borderColor: '#f0a500', backgroundColor: 'rgba(240,165,0,.08)', tension: .2, pointRadius: 0 },
         { label: 'SPY', data: (bt.benchmark || []).map(p => p.value), borderColor: '#7eb8f5', backgroundColor: 'rgba(126,184,245,.06)', tension: .2, pointRadius: 0 },
+        ...(Array.isArray(bt.baseline) && bt.baseline.length === (bt.equity || []).length
+          ? [{ label: 'Equal-weight universe', data: bt.baseline.map(p => p.value), borderColor: '#9a9aa2', borderDash: [6, 4], tension: .2, pointRadius: 0 }]
+          : []),
       ],
     },
     options: {
@@ -1201,6 +1253,7 @@ async function load() {
   }
   safeRender(() => renderStats(bt), 'stats');
   safeRender(() => renderPlanMetrics(bt), 'planMetrics');
+  safeRender(() => renderCost(bt), 'costPanel');
   safeRender(() => renderRegimeBreakdown(bt), 'regimeBreakdown');
   safeRender(() => renderCaveats(bt), 'caveats');
   safeRender(() => renderTradeLog(bt), 'tradeLog');

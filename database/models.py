@@ -56,6 +56,10 @@ class User(Base):
     breaker_drawdown_reduce_pct = Column(Float, nullable=True)  # size new trades down
     breaker_drawdown_halt_pct = Column(Float, nullable=True)    # pause new entries
     breaker_loss_streak = Column(Integer, nullable=True)        # consecutive losing trades
+    # Opt-in: scale live position risk by the continuous regime multiplier
+    # (services/regime_risk.py, ML4T gap 4). Ships OFF — it changes real
+    # position sizes; with it off sizing is exactly what it always was.
+    regime_sizing = Column(Boolean, default=False, nullable=True)
 
     watchlist = relationship("WatchlistItem", back_populates="user", cascade="all, delete-orphan")
     portfolio = relationship("PortfolioPosition", back_populates="user", cascade="all, delete-orphan")

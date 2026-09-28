@@ -1052,6 +1052,7 @@ def run_walk_forward_backtest(
     history: str = "5y",
     progress=None,
     max_window_years: float | None = MAX_WINDOW_YEARS,
+    regime_sizing: bool = False,
 ) -> dict:
     """Walk-forward backtest. `history="20y"` draws on the 20-year archive
     spliced onto the cache (services/long_history.py). The tested window is
@@ -1091,6 +1092,10 @@ def run_walk_forward_backtest(
             "r_multiple": r_multiple,
             "exit_rules": exit_rules or "fixed",
         })
+        # Only recorded when ON, so every existing trade_plan run (and its
+        # trial-log key) is unchanged. See services/regime_risk.py.
+        if regime_sizing:
+            params["regime_sizing"] = True
     # Non-actionable strategies (e.g. bear_reversal_watch) are watchlist-only
     # signals. This engine models a LONG-ONLY equal-weight rotation, so running
     # one here would produce a long equity curve for a "do not buy" signal.
@@ -1346,6 +1351,21 @@ def run_walk_forward_backtest(
     prev_holdings: set[str] = set()
     cost = cost_bps / 10000
 
+    def _regime_multiplier_at(idx: int) -> float:
+        """The live regime-sizing factor (services/regime_risk.py) at a SPY
+        bar index — the same function the Playbook uses, fed the same inputs
+        the quadrant uses (index only, no look-ahead)."""
+        from services import regime_risk
+        adx_v = adx_full[idx]["adx"] if adx_full[idx] else None
+        ma = spy_ma200[idx]
+        pct = (spy_closes[idx] - ma) / ma * 100 if ma else None
+        v = vix_by_date.get(spy[idx]["date"]) if vix_by_date else None
+        vol, src = (v, "vix") if v is not None else (vol20[idx], "realized")
+        market = regime_risk.market_risk(adx_v, pct, vol, src)["multiplier"]
+        fit = regime_risk.strategy_fit(
+            strategy.regimes, regime_risk.quadrant_memberships(adx_v, pct, vol, src))["weight"]
+        return regime_risk.sizing_multiplier(market, fit)
+
     def _quadrant_at(idx: int) -> tuple[str, float | None]:
         """Regime quadrant + ADX at a SPY bar index (no look-ahead: index only)."""
         adx_v = adx_full[idx]["adx"] if adx_full[idx] else None
@@ -1424,6 +1444,8 @@ def run_walk_forward_backtest(
                     plan = build_trade_plan(
                         bars[: idx + 1], equity_now, risk_pct,
                         bars[idx]["close"], atr_stop_mult, r_multiple,
+                        **({"regime_multiplier": _regime_multiplier_at(spy_idx)}
+                           if regime_sizing else {}),
                     )
                     if not plan or not plan.get("shares"):
                         skipped_no_plan += 1

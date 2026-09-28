@@ -235,6 +235,7 @@
       <div class="form-row"><label>Size down at drawdown (%)</label><input id="setCbReduce" type="number" min="1" max="50" step="0.5"></div>
       <div class="form-row"><label>Pause new entries at drawdown (%)</label><input id="setCbHalt" type="number" min="2" max="75" step="0.5"></div>
       <div class="form-row"><label>Size down after losing streak of</label><input id="setCbStreak" type="number" min="2" max="30" step="1"></div>
+      <div class="form-row"><label class="hint" data-tip="Scale each new position's risk by how hostile the market is (SPY vs its 200-day MA, volatility, trend strength) and how well the strategy fits the current regime. Between 50% and 100% of your risk %, never more. Off = full size, exactly as before.">Regime sizing</label><input id="setRegimeSizing" type="checkbox" style="width:auto;"></div>
       <div id="settingsErr" class="error"></div>
       <div class="form-actions">
         <button class="btn" onclick="closeSettings()" type="button">Cancel</button>
@@ -429,6 +430,12 @@
           ${(() => { const b = r.breadth && typeof r.breadth === 'object' ? r.breadth.pct_above_ma200 : r.breadth; return N(b) !== null ? `<span class="chip hint" data-tip="Share of the universe trading above its own 200-day MA.">Breadth ${pct(b, 0)} above 200MA</span>` : ''; })()}
         </div>
         <div class="chips">${(r.reasons || []).map((x) => `<span class="chip">${esc(x)}</span>`).join('')}</div>
+        ${(() => {
+          const rk = r.risk || {}, rs = (DATA && DATA.regime_sizing) || {};
+          if (N(rk.multiplier) === null) return '';
+          const tip = `${rk.explanation || ''} ${rs.note || ''}`.trim();
+          return `<div class="chips"><span class="chip hint" data-tip="${esc(tip)}">Regime risk ×${num(rk.multiplier, 2)} · sizing ${rs.enabled ? 'ON' : 'off'}</span></div>`;
+        })()}
         <div class="regime-sub" style="margin-top:8px;">as of ${esc(when || '--')}</div>
       </div>`;
 
@@ -1058,6 +1065,7 @@
                     setCbHalt: 'breaker_drawdown_halt_pct', setCbStreak: 'breaker_loss_streak' };
       for (const [id, k] of Object.entries(map)) if (cur && cur[k] != null) document.getElementById(id).value = cur[k];
     }).catch(() => {});
+    document.getElementById('setRegimeSizing').checked = !!s.regime_sizing;
     document.getElementById('settingsErr').textContent = '';
     document.getElementById('settingsModal').style.display = 'flex';
   }
@@ -1069,6 +1077,7 @@
       max_positions: parseInt(document.getElementById('setMax').value, 10),
       atr_stop_mult: parseFloat(document.getElementById('setAtr').value),
       r_multiple: parseFloat(document.getElementById('setR').value),
+      regime_sizing: document.getElementById('setRegimeSizing').checked,
     };
     // Blank breaker field = null = back to the default.
     const cbNum = (id, int) => { const v = document.getElementById(id).value.trim();

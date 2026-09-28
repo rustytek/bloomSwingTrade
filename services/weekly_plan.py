@@ -261,6 +261,9 @@ def _buy_why(s: dict, status: dict | None, cell: dict | None, settings: dict) ->
     ev = _evidence_line(cell)
     if ev:
         why.append(ev)
+    fit_note = ((status or {}).get("regime_fit") or {}).get("note")
+    if fit_note:
+        why.append(f"Regime fit: {fit_note}")
     if plan:
         acct = _f(settings.get("account_size")) or 0
         rp = _f(settings.get("risk_pct")) or 0
@@ -271,6 +274,13 @@ def _buy_why(s: dict, status: dict | None, cell: dict | None, settings: dict) ->
             f"{plan.get('shares')} shares loses exactly that amount if the stop is hit."
             + (" Size was capped by the max-position-value limit." if plan.get("capped_by_max_position") else "")
         )
+        rm = _f(plan.get("regime_multiplier"))
+        if rm is not None and rm < 1.0:
+            why.append(
+                f"Regime sizing is on: the market backdrop and this strategy's fit cut the risk to "
+                f"{rm:.0%} of normal ({_money(plan.get('risk_dollars_before_regime'))} → "
+                f"{_money(plan.get('risk_dollars'))}). Regime can only shrink a position, never grow it."
+            )
         why.append(
             f"Target {_money(plan.get('target'))} (+{_f(plan.get('target_pct')) or 0:.1f}%) = "
             f"{_f(plan.get('r_multiple')) or 0:g}R: you aim to make {_f(plan.get('r_multiple')) or 0:g}× what you risk."
@@ -420,6 +430,7 @@ async def build_weekly_plan(db: Session, user: User, force: bool = False) -> dic
             "reason": st.get("reason"), "setups": counts.get(st["id"], 0),
             "evidence": _evidence_line(cells.get(st["id"])),
             "verdict": (cells.get(st["id"]) or {}).get("verdict"),
+            "regime_fit": st.get("regime_fit"),
         }
         (running if st.get("active") else standing_down).append(row)
 
@@ -471,7 +482,9 @@ async def build_weekly_plan(db: Session, user: User, force: bool = False) -> dic
             "breadth": regime.get("breadth"),
             "reasons": regime.get("reasons") or [],
             "transition": regime.get("transition"),
+            "risk": regime.get("risk"),
         },
+        "regime_sizing": today.get("regime_sizing"),
         "summary": {"headline": headline, "steps": steps},
         "strategies_running": running,
         "strategies_standing_down": standing_down,

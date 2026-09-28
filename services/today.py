@@ -219,6 +219,8 @@ async def _build_regime(cache: dict[str, dict]) -> dict:
         "adx_trend": classified["adx_trend"],
         "above_200ma": classified.get("above_200ma"),
         "transition": classified["transition"],
+        # Continuous regime risk (services/regime_risk.py, ML4T gap 4).
+        "risk": classified.get("risk"),
         "spy": {
             "price": round(spy_price, 2) if spy_price else None,
             "vs_ma50": round(vs_ma50, 2) if vs_ma50 is not None else None,
@@ -271,7 +273,8 @@ def _build_setups(cache: dict[str, dict], held: set[str], account_size: float,
                   risk_pct: float, atr_mult: float, r_multiple: float,
                   active_ids: set[str] | None = None,
                   per_strategy: int = 3, overall: int = 8,
-                  selection: dict | None = None) -> list[dict]:
+                  selection: dict | None = None,
+                  regime_multipliers: dict[str, float] | None = None) -> list[dict]:
     """Top setups across the active strategies.
 
     `selection`, when passed, is filled in with HOW the list was chosen — how
@@ -329,12 +332,18 @@ def _build_setups(cache: dict[str, dict], held: set[str], account_size: float,
     out = []
     for setup, bars, quote in selected:
         strat = STRATEGIES[setup.strategy]
+        plan_kwargs = {}
+        if regime_multipliers is not None:
+            # Only when the user turned regime sizing ON — otherwise the call
+            # (and the plan) is exactly what it always was.
+            plan_kwargs["regime_multiplier"] = regime_multipliers.get(setup.strategy, 1.0)
         plan = build_trade_plan(
             bars,
             account_size=account_size,
             risk_pct=risk_pct,
             atr_mult=atr_mult,
             r_multiple=r_multiple,
+            **plan_kwargs,
         ) if strat.actionable else None
         swing = compute_swing_score(quote) if quote else None
         out.append({
@@ -463,6 +472,44 @@ def evidence_adjustment_safe(quadrant, matrix):
 
 # ── Top-level builder ────────────────────────────────────────────────────────
 
+def _regime_sizing(user, regime: dict) -> tuple[dict, dict, dict | None]:
+    """Per-strategy continuous regime fit, the regime-sizing summary, and —
+    only when the user opted in (`User.regime_sizing`, ships OFF) — the
+    per-strategy risk multipliers handed to build_trade_plan. See
+    services/regime_risk.py. Never raises: any failure means no adjustment."""
+    from services import regime_risk
+    risk = regime.get("risk") or {}
+    memberships = risk.get("memberships") or None
+    fits: dict[str, dict] = {}
+    try:
+        if memberships:
+            for s in STRATEGIES.values():
+                fit = regime_risk.strategy_fit(s.regimes, memberships)
+                fit["note"] = regime_risk.fit_sentence(s.name, fit)
+                fits[s.id] = fit
+    except Exception:  # noqa: BLE001 — informational; never break the Playbook
+        fits = {}
+    enabled = bool(getattr(user, "regime_sizing", False))
+    market = risk.get("multiplier")
+    multipliers = None
+    if enabled:
+        multipliers = {
+            sid: regime_risk.sizing_multiplier(market, (fits.get(sid) or {}).get("weight", 1.0))
+            for sid in STRATEGIES
+        }
+    summary = {
+        "enabled": enabled,
+        "market_multiplier": market,
+        "score": risk.get("score"),
+        "explanation": risk.get("explanation"),
+        "note": ("Position risk is scaled by the regime multiplier and each strategy's fit."
+                 if enabled else
+                 "Regime sizing is off — positions are sized at your full risk % "
+                 "(turn it on in Settings to let a hostile market shrink new positions)."),
+    }
+    return fits, summary, multipliers
+
+
 async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
     if not force:
         hit = _cache.get(user_id)
@@ -492,8 +539,10 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
     pos_rows = _build_positions(positions, cache, atr_stop_mult)
     held = {p.ticker for p in positions}
     selection: dict = {}
+    regime_fit, regime_sizing, regime_multipliers = _regime_sizing(user, regime)
     setups = _build_setups(cache, held, account_size, plan_risk_pct, atr_stop_mult, r_multiple,
-                           active_ids=active_ids, selection=selection)
+                           active_ids=active_ids, selection=selection,
+                           regime_multipliers=regime_multipliers)
 
     strategy_regime_status = []
     for s in STRATEGIES.values():
@@ -546,6 +595,9 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
             "horizon": (s.details or {}).get("horizon"),
             "how": (s.details or {}).get("how"),
             "horizon_days": s.horizon_days,
+            # Continuous fit to the current market (ML4T gap 4). Informational:
+            # `active` above still comes from the hand-written tags.
+            "regime_fit": regime_fit.get(s.id),
             "evidence": {
                 "override_enabled": evidence["enabled"],
                 "override_applied": evidence["applied"],
@@ -589,6 +641,7 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
         "selection": selection,
         "strategy_regime_status": strategy_regime_status,
         "evidence_regimes": evidence,
+        "regime_sizing": regime_sizing,
         "suppressed_by_regime": suppressed,
         "circuit_breaker": breaker,
         "checklist": checklist,
@@ -606,6 +659,7 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
             "max_positions": max_positions,
             "atr_stop_mult": atr_stop_mult,
             "r_multiple": r_multiple,
+            "regime_sizing": regime_sizing["enabled"],
         },
         "disclaimer": "Decision-support only. Verify position sizing, taxes, liquidity, and "
                       "your own risk tolerance before placing any order.",

@@ -208,6 +208,7 @@
           <label class="inline" style="margin:0;"><input type="checkbox" class="exitRule" value="regime"> regime</label>
         </span>
       </label>
+      <label class="inline hint" data-tip="Scale each entry's risk by the continuous regime multiplier (50%-100% of your risk %, never more) — what the Playbook's Regime sizing setting would have done. Off = full size."><input type="checkbox" id="regimeSizing"> Regime sizing</label>
     </section>
 
     <section class="controls">
@@ -841,6 +842,8 @@ function buildParams(strategyId) {
     });
     const rules = [...document.querySelectorAll('.exitRule')].filter(c => c.checked).map(c => c.value);
     if (rules.length) p.set('exit_rules', rules.join(','));
+    const rs = document.getElementById('regimeSizing');
+    if (rs && rs.checked) p.set('regime_sizing', 'true');
   }
   return p;
 }

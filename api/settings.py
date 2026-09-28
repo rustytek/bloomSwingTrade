@@ -37,6 +37,9 @@ class SettingsResponse(BaseModel):
     breaker_drawdown_halt_pct: float | None = None
     breaker_loss_streak: int | None = None
     breaker_effective: dict = {}
+    # Scale position risk by the continuous regime multiplier (0.5-1.0).
+    # Ships off: it changes real position sizes.
+    regime_sizing: bool = False
 
 
 _BREAKER_FIELDS = ("breaker_daily_loss_pct", "breaker_drawdown_reduce_pct",
@@ -58,6 +61,7 @@ class SettingsUpdate(BaseModel):
     breaker_drawdown_reduce_pct: float | None = Field(default=None, ge=1, le=50)
     breaker_drawdown_halt_pct: float | None = Field(default=None, ge=2, le=75)
     breaker_loss_streak: int | None = Field(default=None, ge=2, le=30)
+    regime_sizing: bool | None = None
 
 
 def _to_response(user: User) -> SettingsResponse:
@@ -77,6 +81,7 @@ def _to_response(user: User) -> SettingsResponse:
         breaker_drawdown_halt_pct=getattr(user, "breaker_drawdown_halt_pct", None),
         breaker_loss_streak=getattr(user, "breaker_loss_streak", None),
         breaker_effective={k: v for k, v in circuit_breaker.thresholds_for(user).items() if k != "user_set"},
+        regime_sizing=bool(getattr(user, "regime_sizing", False)),
     )
 
 

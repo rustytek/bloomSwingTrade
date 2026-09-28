@@ -585,6 +585,165 @@ def test_implied_max_open_r_guards():
     assert pr.implied_max_open_r(float("nan"), 1.0) is None
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# 6. Regime as a risk lens (ML4T gap 4) — services/regime_risk.py
+# ══════════════════════════════════════════════════════════════════════════
+def _rr():
+    from services import regime_risk
+    return regime_risk
+
+
+@test
+def test_regime_multiplier_is_bounded_and_never_levers_up():
+    rr = _rr()
+    grid = [(a, p, v) for a in (None, 5, 15, 19, 20, 21, 25, 35, 60)
+            for p in (None, -25, -3, -0.5, 0, 0.5, 3, 25)
+            for v in (None, 8, 18, 24, 25, 26, 45, 90)]
+    for a, p, v in grid:
+        m = rr.market_risk(a, p, v)["multiplier"]
+        assert rr.REGIME_MULTIPLIER_MIN <= m <= 1.0, (a, p, v, m)
+    # Non-finite inputs are "unknown", never an exception or a NaN.
+    m = rr.market_risk(float("nan"), float("inf"), float("-inf"))["multiplier"]
+    assert rr.REGIME_MULTIPLIER_MIN <= m <= 1.0
+
+
+@test
+def test_regime_multiplier_is_monotone_in_every_input():
+    rr = _rr()
+    mult = lambda a, p, v: rr.market_risk(a, p, v)["multiplier"]
+    for a in (12, 22, 30):
+        for v in (12, 25, 40):
+            ms = [mult(a, p, v) for p in [x / 4 for x in range(-40, 41)]]
+            assert all(x <= y + 1e-12 for x, y in zip(ms, ms[1:])), "further above the 200MA must not cut risk"
+    for a in (12, 22, 30):
+        for p in (-5, 0, 5):
+            ms = [mult(a, p, v) for v in [x / 2 for x in range(10, 101)]]
+            assert all(x >= y - 1e-12 for x, y in zip(ms, ms[1:])), "higher volatility must not raise risk"
+    for p in (-5, 5):
+        ms = [mult(a / 4, p, 15) for a in range(20, 200)]
+        assert all(x <= y + 1e-12 for x, y in zip(ms, ms[1:])), "a stronger trend must not cut risk"
+
+
+@test
+def test_regime_multiplier_has_no_step_at_any_threshold():
+    """The whole point of gap 4: ADX 19.99 vs 20.01 (and the 200MA, and the VIX
+    line) are the same market, so size must not jump there."""
+    rr = _rr()
+    from services.regime import ADX_CHOPPY, ADX_TRENDING, VIX_CRISIS
+    m = lambda a, p, v: rr.market_risk(a, p, v)["multiplier"]
+    eps = 0.01
+    for a in (ADX_CHOPPY, ADX_TRENDING):
+        assert abs(m(a - eps, 2, 15) - m(a + eps, 2, 15)) < 0.005
+    assert abs(m(28, -eps, 15) - m(28, eps, 15)) < 0.005
+    assert abs(m(28, 3, VIX_CRISIS - eps) - m(28, 3, VIX_CRISIS + eps)) < 0.005
+    mem = lambda a: rr.quadrant_memberships(a, 3, 15)
+    lo, hi = mem(ADX_CHOPPY - eps), mem(ADX_CHOPPY + eps)
+    assert all(abs(lo[q] - hi[q]) < 0.01 for q in lo), (lo, hi)
+
+
+@test
+def test_hostile_market_cuts_risk_and_calm_bull_keeps_full_size():
+    rr = _rr()
+    calm_bull = rr.market_risk(35, 8, 12)
+    bear_crisis = rr.market_risk(32, -12, 38)
+    assert calm_bull["multiplier"] >= 0.98, calm_bull
+    assert bear_crisis["multiplier"] <= 0.6, bear_crisis
+    assert "below its 200-day" in bear_crisis["explanation"]
+
+
+@test
+def test_fuzzy_quadrants_sum_to_one_and_equal_the_hard_tree_far_from_thresholds():
+    rr = _rr()
+    from services.regime import classify_quadrant, trend_strength_label
+    for adx in (8, 45):
+        for pct in (-15, 15):
+            for vix in (10, 60):
+                mem = rr.quadrant_memberships(adx, pct, vix)
+                assert abs(sum(mem.values()) - 1.0) < 1e-6, mem
+                hard = classify_quadrant(trend_strength_label(adx), pct > 0, vix >= 25)
+                assert mem[hard] > 0.99, (adx, pct, vix, hard, mem)
+    # Near a boundary: two quadrants share the weight.
+    mem = rr.quadrant_memberships(20.3, 5, 14)
+    assert 0.3 < mem["trending_bull"] < 0.7 and 0.3 < mem["choppy_calm"] < 0.7, mem
+
+
+@test
+def test_strategy_fit_is_full_or_out_far_from_thresholds_and_partial_near_them():
+    rr = _rr()
+    far = rr.quadrant_memberships(40, 10, 12)
+    assert rr.strategy_fit(["trending_bull"], far)["label"] == "full"
+    assert rr.strategy_fit(["choppy_calm"], far)["label"] == "out"
+    assert rr.strategy_fit([], far) == {"weight": 0.0, "label": "out"}
+    near = rr.quadrant_memberships(20.3, 5, 14)
+    out_ = rr.strategy_fit(["trending_bull"], near)
+    in_ = rr.strategy_fit(["choppy_calm"], near)
+    assert out_["label"] in ("fading_out", "fading_in") and in_["label"] in ("fading_out", "fading_in")
+    assert rr.fit_sentence("X", out_) and rr.fit_sentence("X", {"weight": 1.0, "label": "full"}) is None
+
+
+@test
+def test_sizing_multiplier_combines_market_and_fit_within_bounds():
+    rr = _rr()
+    assert rr.sizing_multiplier(1.0, 1.0) == 1.0
+    assert rr.sizing_multiplier(1.0, 0.0) == 0.5
+    assert rr.sizing_multiplier(0.5, 0.0) == rr.REGIME_MULTIPLIER_MIN   # floor, never below
+    assert rr.sizing_multiplier(2.0, 5.0) == 1.0                         # never above
+    assert rr.sizing_multiplier(None, None) == 1.0                       # unknown -> no change
+    assert rr.sizing_multiplier(0.8, 1.0) == 0.8
+
+
+@test
+def test_regime_multiplier_off_reproduces_sizing_byte_for_byte():
+    """User.regime_sizing ships OFF: with no regime multiplier the plan must be
+    exactly the pre-change plan — same keys, same numbers."""
+    bars = plan_bars()
+    before = build_trade_plan(bars, 100_000, 1.0)
+    after = build_trade_plan(bars, 100_000, 1.0, regime_multiplier=None)
+    assert before == after and "regime_multiplier" not in after
+    for k, v in _BASELINE.items():
+        assert after[k] == v, k
+
+
+@test
+def test_regime_multiplier_scales_risk_down_only_and_stacks_with_edge():
+    from services.trade_plan import REGIME_MULTIPLIER_MIN, clamp_regime_multiplier
+    bars = plan_bars()
+    base = build_trade_plan(bars, 100_000, 0.5, max_position_pct=100.0)
+    half = build_trade_plan(bars, 100_000, 0.5, max_position_pct=100.0, regime_multiplier=0.5)
+    assert half["shares"] == math.floor(0.5 * 100_000 * 0.005 / base["risk_per_share"])
+    assert half["regime_multiplier"] == 0.5
+    assert half["risk_dollars_before_regime"] == round(100_000 * 0.005, 2)
+    # Cannot lever up: above 1.0 clamps to 1.0 (same shares as no regime).
+    up = build_trade_plan(bars, 100_000, 0.5, max_position_pct=100.0, regime_multiplier=3.0)
+    assert up["shares"] == base["shares"] and up["regime_multiplier"] == 1.0
+    assert clamp_regime_multiplier(0.01) == REGIME_MULTIPLIER_MIN
+    assert clamp_regime_multiplier(float("nan")) == 1.0
+    # Stacks with the edge multiplier: 1.5 x 0.5 = 0.75 of the base budget.
+    both = build_trade_plan(bars, 100_000, 0.5, max_position_pct=100.0,
+                            edge_multiplier=1.5, regime_multiplier=0.5)
+    assert both["shares"] == math.floor(0.75 * 100_000 * 0.005 / base["risk_per_share"])
+
+
+@test
+def test_classify_regime_carries_a_json_safe_risk_block():
+    import json
+    from services.regime import classify_regime
+    rng = random.Random(4)
+    price, bars = 100.0, []
+    start = date(2020, 1, 1)
+    for i in range(320):
+        price *= 1 + rng.gauss(-0.002, 0.03)          # falling, volatile
+        bars.append({"date": (start + timedelta(days=i)).isoformat(), "open": price,
+                     "high": price * 1.02, "low": price * 0.98, "close": price, "volume": 1e6})
+    r = classify_regime(bars)
+    risk = r["risk"]
+    assert 0.5 <= risk["multiplier"] <= 1.0 and abs(sum(risk["memberships"].values()) - 1) < 1e-4
+    json.dumps(r, allow_nan=False)
+    short = classify_regime(bars[:10])
+    assert short["risk"]["multiplier"] == 1.0
+    json.dumps(short, allow_nan=False)
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Account-level circuit breaker (services/circuit_breaker.py, ML4T gap 7)
 # Pure logic only — the DB layer is exercised in test_broker.py.

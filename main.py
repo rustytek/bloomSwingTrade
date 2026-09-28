@@ -249,6 +249,7 @@ def ensure_schema_migrations():
             "breaker_drawdown_reduce_pct": "FLOAT",
             "breaker_drawdown_halt_pct": "FLOAT",
             "breaker_loss_streak": "INTEGER",
+            "regime_sizing": "BOOLEAN DEFAULT 0",
         })
         _ensure_columns(conn, "portfolio_positions", {
             "stop_loss": "FLOAT",

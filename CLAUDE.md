@@ -31,7 +31,7 @@ python test_fixes.py             # layering (no services->api imports), AI provi
 python test_history.py           # 20-year archive: splice/rebase, yfinance→Tiingo fallback, backfill, 20y engine path, real-VIX regimes, API
 ```
 
-**287 tests across eleven suites** (`python test_broker.py` covers the Robinhood/Trade layer, fully mocked). All are self-contained (no network) except
+**359 tests across eleven suites** (`python test_broker.py` covers the Robinhood/Trade layer, fully mocked). All are self-contained (no network) except
 `test_jobs.py`, which deliberately **launches a real worker subprocess** against a
 throwaway SQLite file in a temp dir — mocking the subprocess would let the very
 layer it guards break while the test still passed. `test_passes.py`
@@ -42,7 +42,7 @@ living in `api/*.py` can be imported without the full web stack.
 
 > **Counting routes:** this FastAPI version stores `_IncludedRouter` lazy references, so
 > `len(app.routes)` UNDERCOUNTS and filtering on `hasattr(r, "path")` silently omits every
-> router-mounted endpoint. Always verify through `app.openapi()["paths"]` (currently 85; the OAuth callback is excluded from the schema).
+> router-mounted endpoint. Always verify through `app.openapi()["paths"]` (currently 88; the OAuth callback is excluded from the schema).
 
 The app runs on HTTPS at `https://localhost:8443`. Swagger docs at `/api/docs`.
 

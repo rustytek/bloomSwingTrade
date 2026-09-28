@@ -26,6 +26,7 @@ from services.strategies import STRATEGIES
 from services.trade_plan import build_trade_plan
 from services.universe import UNIVERSE
 from services import chart_service
+from services import circuit_breaker
 from services import regime as regime_mod
 from services.regime import classify_regime, strategies_for_regime, QUADRANT_INFO
 from services.strategy_rationale import rationale_for
@@ -480,13 +481,18 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
     positions = db.query(PortfolioPosition).filter(PortfolioPosition.user_id == user_id).all()
     cache = _load_all_cache(db)
 
+    # Account-level circuit breaker (gap 7): records today's equity snapshot
+    # and sizes NEW plans down while it is at reduce/halt. Never raises.
+    breaker = circuit_breaker.current_state(db, user)
+    plan_risk_pct = risk_pct * circuit_breaker.plan_risk_multiplier(breaker)
+
     regime = await _build_regime(cache)
     tagged_ids = strategies_for_regime(regime["quadrant"])
     active_ids, evidence, matrix = _resolve_active_strategies(db, user, regime["quadrant"])
     pos_rows = _build_positions(positions, cache, atr_stop_mult)
     held = {p.ticker for p in positions}
     selection: dict = {}
-    setups = _build_setups(cache, held, account_size, risk_pct, atr_stop_mult, r_multiple,
+    setups = _build_setups(cache, held, account_size, plan_risk_pct, atr_stop_mult, r_multiple,
                            active_ids=active_ids, selection=selection)
 
     strategy_regime_status = []
@@ -584,6 +590,7 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
         "strategy_regime_status": strategy_regime_status,
         "evidence_regimes": evidence,
         "suppressed_by_regime": suppressed,
+        "circuit_breaker": breaker,
         "checklist": checklist,
         "capacity": {
             "open_positions": len(positions),
@@ -593,6 +600,9 @@ async def build_today(db: Session, user_id: int, force: bool = False) -> dict:
         "settings_used": {
             "account_size": account_size,
             "risk_pct": risk_pct,
+            # Risk % the setups' plans were actually sized with (risk_pct x the
+            # circuit breaker's multiplier) — differs only while it is tripped.
+            "plan_risk_pct": plan_risk_pct,
             "max_positions": max_positions,
             "atr_stop_mult": atr_stop_mult,
             "r_multiple": r_multiple,

@@ -1039,6 +1039,101 @@ def test_validate_orders_is_unchanged_without_the_new_inputs():
 
 # ── API surface: no secrets, callback redirects ──────────────────────────
 
+# ── account circuit breaker (gap 7) ──────────────────────────────────────
+
+def _seed_peak(db, user, peak: float, day: str = "2026-01-05"):
+    """A past equity peak well above today's equity (account_size, nothing
+    held with a cached price) — puts the user's breaker at HALT."""
+    from database.models import EquitySnapshot
+    db.add(EquitySnapshot(user_id=user.id, date=day, equity=peak, source="close"))
+    db.commit()
+
+
+@test
+def test_breaker_halt_refuses_live_buys_but_always_allows_sells():
+    from services import circuit_breaker as cb
+    fake = FakeRobinhood()
+    fake.positions = [{"symbol": "AAPL", "quantity": "5", "average_buy_price": "90"}]
+    db, u = _live_user(fake)
+    db.add(PortfolioPosition(user_id=u.id, ticker="AAPL", shares=5, avg_cost=90.0))
+    db.commit()
+    _seed_peak(db, u, 12000.0)                       # equity 10000 -> 16.7 % drawdown
+    assert cb.current_state(db, u)["level"] == "halt"
+    prev = _run(svc.preview(db, u, [_order("NVDA", shares=1, limit=120)]))
+    assert not prev["orders"][0]["ok"] and any("HALT" in e for e in prev["orders"][0]["errors"]), prev
+    assert prev["totals"]["circuit_breaker"]["level"] == "halt"
+    fake.tool_calls.clear()
+    res = _run(svc.place(db, u, [_order("NVDA", shares=1, limit=120)], confirm=True, acknowledge=True))
+    assert res["placed"] == 0 and not _place_names(fake), res
+    # Cutting risk is never blocked.
+    res = _run(svc.place(db, u, [_order("AAPL", "sell", shares=5, limit=100)], confirm=True, acknowledge=True))
+    assert res["placed"] == 1 and len(_place_names(fake)) == 1, res
+    # Acknowledging resumes at REDUCED size: the buy goes through with a warning.
+    st = cb.acknowledge(db, u)
+    assert st["level"] == "reduce" and st["acknowledged"]["by"] == u.username
+    res = _run(svc.place(db, u, [_order("NVDA", shares=1, limit=120)], confirm=True, acknowledge=True))
+    assert res["placed"] == 1, res
+    assert any("REDUCE" in w for w in res["results"][0]["warnings"]), res["results"][0]
+    db.close()
+
+
+@test
+def test_breaker_halt_flags_paper_buys_without_blocking_or_network():
+    _install(None)   # any network use raises
+    db = SessionLocal()
+    u = _user(db)
+    _seed_peak(db, u, 12000.0)
+    res = _run(svc.place(db, u, [_order("AAPL", shares=5, limit=100.5)], confirm=False))
+    assert res["placed"] == 1 and res["results"][0]["status"] == "simulated", res
+    assert any("would be refused live" in w for w in res["results"][0]["warnings"])
+    db.close()
+
+
+@test
+def test_breaker_snapshots_close_rows_win_and_acknowledge_needs_a_halt():
+    from datetime import datetime, timezone
+    from database.models import BreakerState, EquitySnapshot
+    from services import circuit_breaker as cb
+    db = SessionLocal()
+    u = _user(db)
+    yday = datetime(2026, 9, 23, 18, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 9, 24, 18, 0, tzinfo=timezone.utc)
+    cb.record_snapshot(db, u, source="close", now=yday)
+    u.account_size = 9000.0
+    db.commit()
+    cb.record_snapshot(db, u, source="intraday", now=yday)      # must not replace the close row
+    row = db.query(EquitySnapshot).filter(EquitySnapshot.user_id == u.id).one()
+    assert row.source == "close" and row.equity == 10000.0, (row.source, row.equity)
+    try:
+        cb.acknowledge(db, u, now=now)
+        raise AssertionError("acknowledging without a halt must be refused")
+    except ValueError:
+        pass
+    st = cb.current_state(db, u, now=now)
+    assert st["level"] == "reduce" and st["metrics"]["drawdown_pct"] == 10.0, st   # 9000 vs 10000
+    assert db.query(BreakerState).filter(BreakerState.user_id == u.id).one().level == "reduce"
+    json.dumps(st, allow_nan=False)
+    db.close()
+
+
+@test
+def test_breaker_never_raises_and_blocks_nothing_when_it_cannot_evaluate():
+    from services import circuit_breaker as cb
+
+    class Broken:
+        def query(self, *a, **k):
+            raise RuntimeError("db is down")
+
+        def rollback(self):
+            pass
+
+    st = cb.current_state(Broken(), User(id=1, username="x", password_hash="x", account_size=1.0))
+    assert st["level"] == "unknown" and not st["blocks_new_entries"] and st["risk_multiplier"] == 1.0
+    rows = [{"side": "buy", "ok": True, "errors": [], "warnings": []}]
+    cb.gate_orders(rows, st, live=True)
+    assert rows[0]["ok"] is True
+
+
 @test
 def test_api_never_returns_tokens_and_callback_redirects():
     from fastapi import FastAPI

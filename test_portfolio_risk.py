@@ -586,6 +586,156 @@ def test_implied_max_open_r_guards():
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Account-level circuit breaker (services/circuit_breaker.py, ML4T gap 7)
+# Pure logic only — the DB layer is exercised in test_broker.py.
+# ──────────────────────────────────────────────────────────────────────────
+def _cb():
+    from services import circuit_breaker
+    return circuit_breaker
+
+
+_CB_HIST = [("2026-09-01", 100000.0), ("2026-09-02", 110000.0), ("2026-09-03", 105000.0)]
+
+
+@test
+def test_breaker_escalates_warn_reduce_halt_with_multipliers():
+    cb = _cb()
+    t = cb.thresholds_for(None)
+    ok = cb.evaluate(_CB_HIST, 104000.0, "2026-09-04", 0, t, {})
+    assert ok["level"] == "ok" and ok["risk_multiplier"] == 1.0 and not ok["blocks_new_entries"], ok
+    # -2.9 % on the day, drawdown 7.3 % from the 110k peak: warn only.
+    warn = cb.evaluate(_CB_HIST, 102000.0, "2026-09-04", 0, t, {})
+    assert warn["level"] == "warn" and warn["risk_multiplier"] == 1.0, warn
+    reduce_ = cb.evaluate(_CB_HIST, 100000.0, "2026-09-04", 0, t, {})
+    assert reduce_["level"] == "reduce" and reduce_["risk_multiplier"] == cb.REDUCE_RISK_MULTIPLIER
+    assert approx(reduce_["metrics"]["drawdown_pct"], 9.09, 0.01)
+    halt = cb.evaluate(_CB_HIST, 96000.0, "2026-09-04", 0, t, {})
+    assert halt["level"] == "halt" and halt["blocks_new_entries"] and halt["risk_multiplier"] == 0.0
+    assert halt["can_acknowledge"] and halt["_latch"].get("halted_since") is not None
+
+
+@test
+def test_breaker_losing_streak_sizes_down_and_scratches_do_not_count():
+    cb = _cb()
+    assert cb.loss_streak([-5, -1, 0, -2, 10, -3]) == 3        # scratch skipped, win ends it
+    assert cb.loss_streak([4, -1, -1]) == 0
+    assert cb.loss_streak([]) == 0
+    t = cb.thresholds_for(None)
+    s = cb.evaluate(_CB_HIST, 109000.0, "2026-09-04", 5, t, {})
+    assert s["level"] == "reduce" and any(r["code"] == "loss_streak" for r in s["reasons"]), s
+
+
+@test
+def test_breaker_halt_is_latched_until_recovery_below_rearm():
+    cb = _cb()
+    t = cb.thresholds_for(None)
+    latch = cb.evaluate(_CB_HIST, 96000.0, "2026-09-04", 0, t, {})["_latch"]
+    # Bounced to a 10 % drawdown: under the halt line but above re-arm -> still halted.
+    still = cb.evaluate(_CB_HIST, 99000.0, "2026-09-05", 0, t, latch)
+    assert still["level"] == "halt" and still["raw_level"] == "reduce", still
+    assert any(r["code"] == "halt_latched" for r in still["reasons"])
+    # Recovered to 5 % below the peak (< 8 % re-arm): the latch releases itself.
+    cleared = cb.evaluate(_CB_HIST, 104500.0, "2026-09-08", 0, t, still["_latch"])
+    assert cleared["level"] == "ok" and not cleared["_latch"].get("halted_since"), cleared
+    assert any(r["code"] == "halt_cleared" for r in cleared["reasons"])
+
+
+@test
+def test_breaker_acknowledgement_resumes_reduced_and_rehalts_if_deeper():
+    cb = _cb()
+    t = cb.thresholds_for(None)
+    latch = cb.evaluate(_CB_HIST, 96000.0, "2026-09-04", 0, t, {})["_latch"]
+    latch.update(ack_at=cb._utcnow(), ack_by="alice", ack_drawdown_pct=12.73)
+    # Same drawdown after acknowledging: resumed, but only at REDUCED size.
+    resumed = cb.evaluate(_CB_HIST, 96000.0, "2026-09-04", 0, t, latch)
+    assert resumed["level"] == "reduce" and not resumed["blocks_new_entries"], resumed
+    assert resumed["acknowledged"]["by"] == "alice"
+    assert resumed["risk_multiplier"] == cb.REDUCE_RISK_MULTIPLIER
+    # Deepened past ack + REHALT_STEP_PCT: halted again and the ack is spent.
+    rehalt = cb.evaluate(_CB_HIST, 92000.0, "2026-09-05", 0, t, resumed["_latch"])
+    assert rehalt["level"] == "halt" and rehalt["_latch"].get("ack_at") is None, rehalt
+    assert any(r["code"] == "rehalt" for r in rehalt["reasons"])
+
+
+@test
+def test_breaker_thresholds_default_and_stay_consistent():
+    cb = _cb()
+    from types import SimpleNamespace
+    t = cb.thresholds_for(SimpleNamespace(breaker_daily_loss_pct=None, breaker_drawdown_reduce_pct=10.0,
+                                          breaker_drawdown_halt_pct=6.0, breaker_loss_streak=None))
+    assert t["daily_loss_pct"] == 2.0 and t["loss_streak"] == 5
+    assert t["drawdown_reduce_pct"] == 10.0 and t["drawdown_halt_pct"] > 10.0, t   # halt kept above reduce
+    assert cb.thresholds_for(None)["drawdown_halt_pct"] == 12.0
+
+
+@test
+def test_breaker_equity_definition_and_unpriced_positions():
+    cb = _cb()
+    eq = cb.compute_equity(10000, 500, [
+        {"ticker": "AAA", "shares": 10, "avg_cost": 100, "price": 110},
+        {"ticker": "BBB", "shares": 5, "avg_cost": 50, "price": None},
+    ])
+    assert eq["equity"] == 10000 + 500 + 100 and eq["unrealized_pnl"] == 100.0, eq
+    assert eq["unpriced"] == ["BBB"] and eq["open_value"] == 1100 + 250
+
+
+@test
+def test_breaker_first_session_has_no_drawdown_and_is_json_safe():
+    import json
+    cb = _cb()
+    s = cb.evaluate([], 10000.0, "2026-09-04", 0, cb.thresholds_for(None), {})
+    assert s["level"] == "ok" and s["metrics"]["drawdown_pct"] == 0.0 and s["metrics"]["daily_change_pct"] is None
+    s.pop("_latch")
+    json.dumps(s, allow_nan=False)
+
+
+@test
+def test_breaker_session_date_maps_weekends_to_friday():
+    cb = _cb()
+    from datetime import datetime, timezone
+    sat = datetime(2026, 9, 26, 15, 0, tzinfo=timezone.utc)      # Saturday
+    assert cb.session_date(sat).isoformat() == "2026-09-25"
+    late_mon = datetime(2026, 9, 29, 2, 0, tzinfo=timezone.utc)  # Mon 22:00 ET is still Monday
+    assert cb.session_date(late_mon).isoformat() == "2026-09-28"
+
+
+@test
+def test_breaker_gate_blocks_live_buys_never_sells():
+    cb = _cb()
+    halt = {"level": "halt", "reasons": [{"level": "halt", "message": "Drawdown 13%"}]}
+
+    def rows():
+        return [{"side": "buy", "ok": True, "errors": [], "warnings": []},
+                {"side": "sell", "ok": True, "errors": [], "warnings": []}]
+
+    live = rows()
+    cb.gate_orders(live, halt, live=True)
+    assert live[0]["ok"] is False and "HALT" in live[0]["errors"][0]
+    assert live[1]["ok"] is True and not live[1]["errors"] and not live[1]["warnings"]
+    paper = rows()
+    cb.gate_orders(paper, halt, live=False)
+    assert paper[0]["ok"] is True and "would be refused live" in paper[0]["warnings"][0]
+    reduced = rows()
+    cb.gate_orders(reduced, {"level": "reduce", "reasons": []}, live=True)
+    assert reduced[0]["ok"] and "REDUCE" in reduced[0]["warnings"][0] and not reduced[1]["warnings"]
+    untouched = rows()
+    cb.gate_orders(untouched, {"level": "ok"}, live=True)
+    cb.gate_orders(untouched, None, live=True)
+    assert all(r["ok"] and not r["warnings"] for r in untouched)
+
+
+@test
+def test_breaker_plan_multiplier_is_reduced_for_reduce_and_halt():
+    cb = _cb()
+    assert cb.plan_risk_multiplier({"level": "ok"}) == 1.0
+    assert cb.plan_risk_multiplier({"level": "warn"}) == 1.0
+    assert cb.plan_risk_multiplier({"level": "reduce"}) == cb.REDUCE_RISK_MULTIPLIER
+    assert cb.plan_risk_multiplier({"level": "halt"}) == cb.REDUCE_RISK_MULTIPLIER
+    assert cb.plan_risk_multiplier({"level": "unknown"}) == 1.0
+    assert cb.plan_risk_multiplier(None) == 1.0
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Runner
 # ──────────────────────────────────────────────────────────────────────────
 def main() -> int:

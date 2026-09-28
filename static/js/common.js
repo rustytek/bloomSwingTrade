@@ -209,3 +209,43 @@ function closeTickerModal() {
   _tdChart?.destroy();
   _tdChart = null;
 }
+
+/* ── Account circuit breaker (services/circuit_breaker.py, ML4T gap 7) ──
+   Loud banner for the Playbook, Weekly Plan and Trade pages. Returns '' when
+   the breaker is ok, so pages can call it unconditionally. */
+const _CB_TITLES = {
+  warn: 'CIRCUIT BREAKER — WARNING',
+  reduce: 'CIRCUIT BREAKER — SIZE DOWN',
+  halt: 'CIRCUIT BREAKER — NEW ENTRIES PAUSED',
+  unknown: 'CIRCUIT BREAKER — NOT EVALUATED',
+};
+function breakerBannerHtml(cb) {
+  if (!cb || !cb.level || cb.level === 'ok') return '';
+  const lvl = _CB_TITLES[cb.level] ? cb.level : 'unknown';
+  const m = cb.metrics || {};
+  const reasons = (cb.reasons || []).filter(r => r && r.message)
+    .map(r => `<li>${esc(r.message)}</li>`).join('');
+  const bits = [];
+  if (m.equity != null) bits.push('equity ' + fmtMoney(m.equity, 0));
+  if (m.peak_equity != null) bits.push('peak ' + fmtMoney(m.peak_equity, 0));
+  if (m.drawdown_pct != null) bits.push('drawdown ' + Number(m.drawdown_pct).toFixed(1) + '%');
+  if (m.daily_change_pct != null) bits.push('today ' + (m.daily_change_pct >= 0 ? '+' : '') + Number(m.daily_change_pct).toFixed(1) + '%');
+  if (m.loss_streak) bits.push(m.loss_streak + ' losses in a row');
+  const ack = cb.can_acknowledge
+    ? `<div class="cb-actions"><button class="btn btn-primary btn-sm" type="button" onclick="acknowledgeBreaker(this)">I understand — resume at reduced size</button>
+       <span style="font-size:11px;opacity:.8;">Recorded with your name and the time. It halts again if the drawdown deepens a further ${esc((cb.thresholds || {}).rehalt_step_pct ?? 3)} points.</span></div>`
+    : '';
+  return `<div class="cb-banner cb-${lvl}" role="alert"><div class="cb-title">${_CB_TITLES[lvl]}</div>`
+    + (reasons ? `<ul>${reasons}</ul>` : '')
+    + (bits.length ? `<div class="cb-metrics hint" data-tip="${esc(cb.equity_definition || '')}">${esc(bits.join(' · '))}</div>` : '')
+    + ack + '</div>';
+}
+async function acknowledgeBreaker(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Recording…'; }
+  try {
+    await api('/api/risk/breaker/acknowledge', { method: 'POST' });
+    window.location.reload();
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Acknowledge failed — retry'; }
+  }
+}

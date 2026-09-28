@@ -50,6 +50,13 @@ class User(Base):
     # Strategy.regimes tags on the Today playbook. Ships OFF.
     use_evidence_regimes = Column(Boolean, default=False, nullable=True)
 
+    # Account-level circuit breaker thresholds (services/circuit_breaker.py,
+    # ML4T gap 7). NULL = use the module default — shown in Settings as such.
+    breaker_daily_loss_pct = Column(Float, nullable=True)       # warn at this daily loss
+    breaker_drawdown_reduce_pct = Column(Float, nullable=True)  # size new trades down
+    breaker_drawdown_halt_pct = Column(Float, nullable=True)    # pause new entries
+    breaker_loss_streak = Column(Integer, nullable=True)        # consecutive losing trades
+
     watchlist = relationship("WatchlistItem", back_populates="user", cascade="all, delete-orphan")
     portfolio = relationship("PortfolioPosition", back_populates="user", cascade="all, delete-orphan")
 
@@ -217,6 +224,44 @@ class BacktestRun(Base):
     runs = Column(Integer, default=1)                  # times this exact configuration was run
     first_run_at = Column(DateTime, default=utcnow)
     last_run_at = Column(DateTime, default=utcnow)
+
+
+class EquitySnapshot(Base):
+    """One account-equity reading per user per trading session
+    (services/circuit_breaker.py, ML4T gap 7). Cash is not tracked by the app,
+    so equity = account_size + realized P&L (journal) + unrealized P&L (open
+    positions at their last cached price). A `close` row (written by the
+    after-close scheduler job) is never overwritten by an `intraday` one."""
+    __tablename__ = "equity_snapshots"
+    __table_args__ = (UniqueConstraint("user_id", "date", name="uq_equity_snapshot_day"),)
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    date = Column(String(10), nullable=False)          # trading session, America/New_York
+    equity = Column(Float, nullable=False)
+    account_size = Column(Float, nullable=True)
+    realized_pnl = Column(Float, nullable=True)
+    unrealized_pnl = Column(Float, nullable=True)
+    open_value = Column(Float, nullable=True)          # market value of open positions
+    unpriced = Column(Integer, nullable=True)          # positions with no cached price
+    source = Column(String(16), nullable=False)        # "close" | "intraday"
+    recorded_at = Column(DateTime, default=utcnow)
+
+
+class BreakerState(Base):
+    """Per-user circuit-breaker latch. A HALT stays latched until the drawdown
+    recovers below the reduce threshold, or the user acknowledges it — which
+    lifts it to REDUCE only, and re-halts if the drawdown deepens further."""
+    __tablename__ = "breaker_state"
+
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    level = Column(String(16), nullable=True)          # last evaluated level
+    level_since = Column(DateTime, nullable=True)
+    halted_since = Column(DateTime, nullable=True)     # set while a halt is latched
+    ack_at = Column(DateTime, nullable=True)
+    ack_by = Column(String(64), nullable=True)
+    ack_drawdown_pct = Column(Float, nullable=True)
+    updated_at = Column(DateTime, default=utcnow)
 
 
 class AICache(Base):

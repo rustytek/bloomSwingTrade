@@ -62,6 +62,7 @@
   <div class="topbar" id="topbar"></div>
   <main class="page">
     <div id="loading" class="empty">Building your weekly plan…</div>
+    <div id="breakerWrap"></div>
     <div id="content" hidden>
       <section class="hero">
         <h1 id="headline"></h1>
@@ -286,6 +287,8 @@
   async function load() {
     try {
       PLAN = await api('/api/weekly-plan');
+      // Account circuit breaker (gap 7): loud, above the whole walkthrough.
+      try { document.getElementById('breakerWrap').innerHTML = breakerBannerHtml(PLAN.circuit_breaker); } catch (e) { /* never block the plan */ }
     } catch (e) {
       document.getElementById('loading').innerHTML = `<span class="error">Could not build the weekly plan: ${esc(e.message)}</span>`;
       return;

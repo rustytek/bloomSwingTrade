@@ -193,6 +193,35 @@ def test_buy_carries_plan_intent_and_limit_at_zone_top():
     assert o["plan"]["planned_entry_high"] == 51.0 and o["plan"]["strategy"] == "momentum_rotation"
 
 
+@test
+def test_circuit_breaker_halt_blocks_every_buy_but_not_sells():
+    """Gap 7: a HALT means no new entries are pre-selected — but position
+    reviews (sells, trims, stop raises) are built exactly as before."""
+    cache = _cache({"AAA": _bars(21), "BBB": _bars(22)})
+    today = _today([_setup("AAA"), _setup("BBB")])
+    today["circuit_breaker"] = {"level": "halt", "blocks_new_entries": True, "risk_multiplier": 0.0,
+                                "reasons": [{"level": "halt", "message": "Drawdown 13%"}]}
+    orders = wp._buy_orders(today, cache, [], set(), SETTINGS, {})
+    assert orders and not any(o["recommended"] for o in orders), orders
+    assert all("HALT" in o["skip_reason"] for o in orders)
+    # The sell side is untouched by the breaker.
+    _r, sell = wp._review_position(_pos_row(status="stop_hit", price=94.0), None)
+    assert sell["kind"] == "sell" and sell["recommended"] is True
+
+
+@test
+def test_circuit_breaker_reduce_explains_the_smaller_size():
+    cache = _cache({"AAA": _bars(23)})
+    today = _today([_setup("AAA")])
+    today["circuit_breaker"] = {"level": "reduce", "blocks_new_entries": False, "risk_multiplier": 0.5}
+    o = wp._buy_orders(today, cache, [], set(), SETTINGS, {})[0]
+    assert o["recommended"] is True
+    assert any("Circuit breaker REDUCE" in w and "50%" in w for w in o["why"]), o["why"]
+    # No breaker block at all (older payloads): behaves exactly as before.
+    plain = wp._buy_orders(_today([_setup("AAA")]), cache, [], set(), SETTINGS, {})[0]
+    assert plain["recommended"] is True and not any("Circuit breaker" in w for w in plain["why"])
+
+
 # ── 3. Rationale ─────────────────────────────────────────────────────────────
 
 @test

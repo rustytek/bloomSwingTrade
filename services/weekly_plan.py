@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from database.models import PortfolioPosition, User
-from services import portfolio_risk
+from services import circuit_breaker, portfolio_risk
 from services.strategies import STRATEGIES
 from services.strategy_rationale import rationale_for
 from services.today import build_today, _load_all_cache, _json_safe
@@ -294,6 +294,8 @@ def _buy_orders(today: dict, cache: dict, positions: list[PortfolioPosition],
     ]
     picked = 0
     out = []
+    breaker = today.get("circuit_breaker") or {}
+    halted = bool(breaker.get("blocks_new_entries"))
     for s in today.get("setups") or []:
         plan = s.get("plan")
         if not s.get("actionable") or not plan or not plan.get("shares"):
@@ -312,7 +314,10 @@ def _buy_orders(today: dict, cache: dict, positions: list[PortfolioPosition],
         blocks = [w for w in warnings if w.get("level") == "block"]
 
         skip = None
-        if blocks:
+        if halted:
+            skip = ("Circuit breaker HALT — new entries are paused until the drawdown recovers or you "
+                    "acknowledge the halt on the Playbook. Sells and stop raises are unaffected.")
+        elif blocks:
             skip = "Blocked by a risk check: " + "; ".join(w.get("message", "") for w in blocks)
         elif (cell or {}).get("verdict") == "mis-tagged":
             skip = "The backtest says this strategy has not worked in the current regime."
@@ -323,6 +328,9 @@ def _buy_orders(today: dict, cache: dict, positions: list[PortfolioPosition],
                     f"Adding positions gradually spreads out timing risk.")
         for w in warnings:
             why.append(("BLOCKED: " if w.get("level") == "block" else "Risk note: ") + w.get("message", ""))
+        if breaker.get("level") in ("reduce", "halt"):
+            why.append(f"Circuit breaker {breaker['level'].upper()}: sized at "
+                       f"{int(circuit_breaker.plan_risk_multiplier(breaker) * 100)}% of your normal risk.")
 
         zone = plan.get("entry_zone") or []
         limit = _f(zone[1]) if len(zone) == 2 else _f(plan.get("entry"))
@@ -434,7 +442,10 @@ async def build_weekly_plan(db: Session, user: User, force: bool = False) -> dic
          "detail": (f"{len(rec_sells)} sell/trim order(s) recommended, {len(stop_raises)} stop(s) to raise."
                     if (rec_sells or stop_raises) else "No holdings need action.")},
         {"n": 3, "title": "Pick new trades",
-         "detail": (f"{len(rec_buys)} buy(s) recommended out of {len(buy_orders)} candidates; "
+         "detail": ("Circuit breaker HALT — no new entries this week until the drawdown recovers or "
+                    "you acknowledge the halt on the Playbook."
+                    if (today.get("circuit_breaker") or {}).get("blocks_new_entries") else
+                    f"{len(rec_buys)} buy(s) recommended out of {len(buy_orders)} candidates; "
                     f"{today.get('capacity', {}).get('slots_free', 0)} slot(s) free.")},
         {"n": 4, "title": "Send the orders",
          "detail": "Tick the trades you agree with, then review and place them on the Trade tab."},
@@ -467,6 +478,7 @@ async def build_weekly_plan(db: Session, user: User, force: bool = False) -> dic
         "selection": today.get("selection") or {},
         "position_reviews": reviews,
         "orders": orders,
+        "circuit_breaker": today.get("circuit_breaker"),
         "capacity": today.get("capacity") or {},
         "risk_budget": {"max_open_r": budget, "basis": basis},
         "settings_used": settings_used,

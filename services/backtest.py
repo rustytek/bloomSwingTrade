@@ -112,14 +112,29 @@ def _safe_float(value):
 
 
 def _load_history(db: Session, ticker: str) -> list[dict]:
-    row = db.query(StockCache).filter(StockCache.ticker == ticker).first()
-    if not row or not row.history_json:
-        return []
+    """The 5-year cache row's normalized bars (columnar BLOB or legacy JSON)."""
+    from services.long_history import load_cache_bars
     try:
-        bars = json.loads(row.history_json)
-    except Exception:
+        return _normalize_bars(load_cache_bars(db, ticker))
+    except Exception:  # noqa: BLE001
         return []
-    return _normalize_bars(bars)
+
+
+def _cache_version(db: Session, ticker: str) -> str | None:
+    """The data version of a ticker's cache row (ML4T gap 9). Reads the small
+    version column; only a legacy JSON row without one is hashed."""
+    try:
+        from services import bar_store
+        row = db.query(StockCache.history_version).filter(StockCache.ticker == ticker).first()
+        if row is None:
+            return None
+        if row[0]:
+            return row[0]
+        full = (db.query(StockCache.history_blob, StockCache.history_json)
+                .filter(StockCache.ticker == ticker).first())
+        return bar_store.row_version(full[0], full[1], None) if full else None
+    except Exception:  # noqa: BLE001 — a version lookup must never break a backtest
+        return None
 
 
 _INF = (math.inf, -math.inf)
@@ -169,7 +184,9 @@ def _source_tickers(db: Session, user_id: int, source: str) -> list[str]:
     tickers = set()
     if source == "universe":
         from services.universe import UNIVERSE
-        cached = {t for (t,) in db.query(StockCache.ticker).filter(StockCache.history_json.isnot(None)).all()}
+        from sqlalchemy import or_
+        cached = {t for (t,) in db.query(StockCache.ticker).filter(
+            or_(StockCache.history_json.isnot(None), StockCache.history_blob.isnot(None))).all()}
         tickers.update(cached & set(UNIVERSE))
     if source in ("watchlist", "both"):
         tickers.update(t for (t,) in db.query(WatchlistItem.ticker).filter(WatchlistItem.user_id == user_id).all())
@@ -839,7 +856,7 @@ class _BarLoader:
                 if cut > 0:
                     raw = raw[cut:]
             return _normalize_bars(raw), meta
-        return _load_history(self.db, ticker), None
+        return _load_history(self.db, ticker), {"cache_version": _cache_version(self.db, ticker)}
 
     def load(self, ticker: str) -> list[dict]:
         hit = self._lru.get(ticker)
@@ -915,10 +932,21 @@ class _Coverage:
         self.ends_early: list[dict] = []
         self.spliced = 0
         self.splice_problems: list[dict] = []
+        # ML4T gap 9 — which stored data each ticker came from.
+        self.versions: dict[str, dict] = {}
 
     def add(self, ticker: str, bars: list[dict], used: bool, splice_meta: dict | None = None) -> None:
         self.requested += 1
         if splice_meta is not None:
+            if any(k in splice_meta for k in ("cache_version", "archive_version")):
+                archived = bool(splice_meta.get("used_archive_bars"))
+                self.versions[ticker] = {
+                    "cache": splice_meta.get("cache_version"),
+                    "archive": splice_meta.get("archive_version") if archived else None,
+                    "source": ("archive:" + (splice_meta.get("archive_source") or "unknown") + "+cache")
+                              if archived else "cache",
+                    "used": bool(used),
+                }
             if splice_meta.get("used_archive_bars"):
                 self.spliced += 1
             elif any(w in (splice_meta.get("reason") or "") for w in ("disagree", "cannot rebase")) \
@@ -974,6 +1002,32 @@ class _Coverage:
             "ends_early_count": len(ends_early),
             "tickers_spliced_with_archive": self.spliced,
             "splice_problems": self.splice_problems,
+            "sources": self.source_counts(),
+        }
+
+    def source_counts(self) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for v in self.versions.values():
+            if v.get("used"):
+                out[v["source"]] = out.get(v["source"], 0) + 1
+        return out
+
+    def fingerprint(self) -> dict:
+        """ML4T gap 9: the exact stored data this run read. `fingerprint` is
+        one hash over every (ticker, cache version, archive version) the run
+        loaded, so two runs on identical data share it and any refetch that
+        changed a series changes it. Per-ticker versions let a changed result
+        be traced to the series that moved (see history_revisions)."""
+        import hashlib
+        items = sorted((t, v.get("cache") or "", v.get("archive") or "") for t, v in self.versions.items())
+        blob = "|".join(",".join(i) for i in items)
+        return {
+            "fingerprint": hashlib.sha1(blob.encode()).hexdigest()[:16] if items else None,
+            "tickers": len(items),
+            "unversioned": sum(1 for _, c, a in items if not c and not a),
+            "sources": self.source_counts(),
+            "versions": {t: {k: v.get(k) for k in ("cache", "archive", "source")}
+                         for t, v in sorted(self.versions.items())},
         }
 
 
@@ -1023,6 +1077,24 @@ def data_quality_caveats(dq: dict) -> list[dict]:
             "detail": (
                 "Their cached history ends more than 5 sessions before SPY's (stale cache or "
                 "delisted), so they drop out of the later part of the test."
+            ),
+        })
+    if dq.get("sources"):
+        # ML4T gap 9 — say where the prices came from, and what free data
+        # cannot provide (point-in-time index membership; see UNIVERSE_CAVEAT).
+        parts = ", ".join(f"{n} from {src}" for src, n in sorted(dq["sources"].items(), key=lambda kv: -kv[1]))
+        out.append({
+            "id": "data_sources",
+            "severity": "info",
+            "title": "Where the prices came from",
+            "detail": (
+                f"Tickers used: {parts}. 'cache' is the daily-refreshed 5-year Yahoo series; "
+                "'archive:<source>+cache' joins the 20-year archive (Yahoo or Tiingo) onto it, "
+                "rebased to the same adjustment. Prices are split- and dividend-adjusted as of "
+                "when they were downloaded; each ticker's data version is listed in "
+                "data_versions, and any refetch that changed stored bars is kept in the "
+                "revision history. Which companies were in the S&P 500 on each past date is "
+                "NOT known from free data — the universe is today's list (survivorship bias)."
             ),
         })
     return out
@@ -1333,6 +1405,7 @@ def run_walk_forward_backtest(
             "metrics": {},
             "benchmark_metrics": {},
             "data_quality": coverage.result(),
+            "data_versions": coverage.fingerprint(),
             "notes": [
                 f"Need cached SPY history and at least {warmup} bars for selected tickers "
                 f"(SPY has {len(spy)}; {len(used_tickers)} of {coverage.requested} tickers qualify).",
@@ -1875,6 +1948,7 @@ def run_walk_forward_backtest(
         "trade_log": trade_log,
         "caveats": caveats,
         "data_quality": data_quality,
+        "data_versions": coverage.fingerprint(),
         "notes": [
             "Hypothetical backtest using cached adjusted daily closes only.",
             f"Strategy: {strategy.name}. {strategy.description}",

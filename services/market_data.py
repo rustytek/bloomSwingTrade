@@ -448,13 +448,12 @@ async def get_quote(ticker: str, db: Session, force_refresh: bool = False) -> Op
 
 
 def _cached_bars(row) -> list[dict]:
-    if not row or not row.history_json:
+    """The row's stored bars, from the columnar BLOB or legacy JSON
+    (services/bar_store.py — the only reader of those columns)."""
+    if not row:
         return []
-    try:
-        bars = json.loads(row.history_json)
-    except (TypeError, ValueError):
-        return []
-    return bars if isinstance(bars, list) else []
+    from services import bar_store
+    return bar_store.read_bars(getattr(row, "history_blob", None), row.history_json)
 
 
 # A refetch returning fewer than this share of the cached bars is treated as a
@@ -497,8 +496,9 @@ async def get_history(ticker: str, db: Session, period: str = "5y", force_refres
 
     row: Optional[StockCache] = db.query(StockCache).filter(StockCache.ticker == ticker).first()
     history_cached_at = row.history_cached_at or row.cached_at if row else None
-    if not force_refresh and row and row.history_json and history_cached_at and _is_fresh(history_cached_at):
-        data = json.loads(row.history_json)
+    if (not force_refresh and row and (row.history_blob or row.history_json)
+            and history_cached_at and _is_fresh(history_cached_at)):
+        data = _cached_bars(row)
         _mem_cache[cache_key] = {"data": data, "cached_at": history_cached_at}
         return data
 
@@ -518,14 +518,23 @@ async def get_history(ticker: str, db: Session, period: str = "5y", force_refres
         logger.warning(f"Kept cached history for {ticker}: {rejected}")
         return cached_bars
 
+    # Columnar BLOB + content version (ML4T gap 9, services/bar_store.py). A
+    # refetch that materially changes bars already stored (a new dividend or
+    # split adjustment, corrected values) keeps the previous series as a
+    # revision first — in the same commit — so old results stay reproducible.
+    from services import bar_store
     now = datetime.now(timezone.utc)
-    history_json = json.dumps(history)
+    blob, text, version = bar_store.payload_for(history)
     if row:
-        row.history_json = history_json
+        if cached_bars:
+            prev_version = bar_store.row_version(row.history_blob, row.history_json, row.history_version)
+            bar_store.note_rewrite(db, ticker, "cache", cached_bars, history, prev_version, version)
+        row.history_blob, row.history_json, row.history_version = blob, text, version
         row.history_cached_at = now
         row.cached_at = now
     else:
-        row = StockCache(ticker=ticker, history_json=history_json, cached_at=now, history_cached_at=now)
+        row = StockCache(ticker=ticker, history_blob=blob, history_json=text, history_version=version,
+                         cached_at=now, history_cached_at=now)
         db.add(row)
     db.commit()
 
@@ -666,15 +675,15 @@ def invalidate_short_history_cache(db: Session, min_bars: int = 420) -> int:
     immediately via a manual screener refresh), avoiding repeated refetches of
     genuinely short-history (recent-IPO) tickers.
     """
+    from sqlalchemy import or_
+    from services import bar_store
     epoch = datetime(2000, 1, 1, tzinfo=timezone.utc)
-    rows = db.query(StockCache).filter(StockCache.history_json.isnot(None)).all()
+    rows = db.query(StockCache).filter(or_(StockCache.history_json.isnot(None),
+                                           StockCache.history_blob.isnot(None))).all()
     count = 0
     for row in rows:
-        try:
-            bars = json.loads(row.history_json or "[]")
-        except Exception:
-            bars = []
-        if len(bars) < min_bars:
+        # bar_count reads a BLOB's header only — no decode of 5 years of bars.
+        if bar_store.bar_count(row.history_blob, row.history_json) < min_bars:
             row.history_cached_at = epoch
             row.quote_cached_at = epoch
             row.cached_at = epoch

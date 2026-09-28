@@ -43,6 +43,7 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from database.models import HistoryArchive, StockCache
+from services import bar_store
 from services import history_sources as src
 
 logger = logging.getLogger(__name__)
@@ -127,14 +128,35 @@ def _json_bars(text: str | None) -> list[dict]:
     return bars if isinstance(bars, list) else []
 
 
+def load_cache_row(db: Session, ticker: str) -> tuple[list[dict], str | None]:
+    """(bars, data version) of the ticker's 5-year cache row."""
+    row = (db.query(StockCache.history_blob, StockCache.history_json, StockCache.history_version)
+           .filter(StockCache.ticker == ticker).first())
+    if not row:
+        return [], None
+    return bar_store.read_bars(row[0], row[1]), bar_store.row_version(row[0], row[1], row[2])
+
+
+def load_archive_row(db: Session, ticker: str, since: str | None = None,
+                     keep_before: int = 0) -> tuple[list[dict], str | None, str | None]:
+    """(bars, data version, source) of the ticker's archive row. With `since`,
+    only bars from `keep_before` bars before `since` on — a columnar row then
+    builds just those, instead of parsing 20 years to throw most away."""
+    row = (db.query(HistoryArchive.bars_blob, HistoryArchive.bars_json,
+                    HistoryArchive.data_version, HistoryArchive.source)
+           .filter(HistoryArchive.ticker == ticker).first())
+    if not row:
+        return [], None, None
+    bars = bar_store.read_bars(row[0], row[1], since=since, keep_before=keep_before)
+    return bars, bar_store.row_version(row[0], row[1], row[2]), row[3]
+
+
 def load_cache_bars(db: Session, ticker: str) -> list[dict]:
-    row = db.query(StockCache.history_json).filter(StockCache.ticker == ticker).first()
-    return _json_bars(row[0] if row else None)
+    return load_cache_row(db, ticker)[0]
 
 
 def load_archive_bars(db: Session, ticker: str) -> list[dict]:
-    row = db.query(HistoryArchive.bars_json).filter(HistoryArchive.ticker == ticker).first()
-    return _json_bars(row[0] if row else None)
+    return load_archive_row(db, ticker)[0]
 
 
 def load_long_bars(db: Session, ticker: str,
@@ -144,23 +166,30 @@ def load_long_bars(db: Session, ticker: str,
     `trim_before=(date, keep)` drops archive bars more than `keep` bars before
     `date` BEFORE splicing. Archive bars after that point (including the
     overlap with the cache used for rebasing) are kept, so the result from
-    that point on is identical to splicing everything and trimming after."""
+    that point on is identical to splicing everything and trimming after.
+
+    The meta also names the data under the result (ML4T gap 9):
+    `cache_version`, `archive_version` (None when the archive was not read)
+    and `archive_source` (yfinance / tiingo)."""
     from bisect import bisect_left
-    cache = load_cache_bars(db, ticker)
+    cache, cache_version = load_cache_row(db, ticker)
+    versions = {"cache_version": cache_version, "archive_version": None, "archive_source": None}
     if trim_before and cache:
         start, keep = trim_before
         if bisect_left([b["date"] for b in cache], start) - keep >= 0:
             # The cache alone reaches back far enough (warm-up included): the
             # archive would be trimmed away entirely, so don't even parse it.
             return cache, {"used_archive_bars": 0, "ratio": None, "mismatch": None,
-                           "reason": "cache covers the window"}
-    archive = load_archive_bars(db, ticker)
-    if trim_before and archive:
+                           "reason": "cache covers the window", **versions}
+    if trim_before:
         start, keep = trim_before
-        cut = bisect_left([b["date"] for b in archive], start) - keep
-        if cut > 0:
-            archive = archive[cut:]
-    return splice(archive, cache)
+        archive, arch_version, arch_source = load_archive_row(db, ticker, since=start, keep_before=keep)
+    else:
+        archive, arch_version, arch_source = load_archive_row(db, ticker)
+    versions["archive_version"], versions["archive_source"] = arch_version, arch_source
+    bars, meta = splice(archive, cache)
+    meta.update(versions)
+    return bars, meta
 
 
 def load_vix_by_date(db: Session) -> dict[str, float]:
@@ -250,17 +279,26 @@ def _store(db: Session, ticker: str, bars: list[dict], source: str | None,
            requested_start: str, issues: list[str]) -> None:
     row = db.query(HistoryArchive).filter(HistoryArchive.ticker == ticker).first()
     now = datetime.now(timezone.utc)
+    old: list[dict] = []
+    kept_old = False
     if bars:
-        old = _json_bars(row.bars_json) if row else []
+        old = bar_store.read_bars(row.bars_blob, row.bars_json) if row else []
         # Never replace a longer stored series with a shorter download.
         if old and (bars[0]["date"] > old[0]["date"] and bars[-1]["date"] <= old[-1]["date"]):
             bars = old
+            kept_old = True
             issues = issues + ["kept the previously stored, longer series"]
     if row is None:
         row = HistoryArchive(ticker=ticker, bars_json="[]", start_date="", end_date="")
         db.add(row)
-    if bars:
-        row.bars_json = json.dumps(bars)
+    if bars and not kept_old:
+        blob, text, version = bar_store.payload_for(bars)
+        if old:
+            # A re-download that re-adjusted or corrected stored bars keeps
+            # the previous series (ML4T gap 9), in the same commit.
+            prev_version = bar_store.row_version(row.bars_blob, row.bars_json, row.data_version)
+            bar_store.note_rewrite(db, ticker, "archive", old, bars, prev_version, version)
+        row.bars_blob, row.bars_json, row.data_version = blob, (text if text is not None else ""), version
         row.start_date, row.end_date = bars[0]["date"], bars[-1]["date"]
         row.fetched_at = now
         row.source = source
@@ -299,8 +337,8 @@ def run_backfill(db: Session, *, tiingo_key: str | None = None, force: bool = Fa
     for n, t in enumerate(todo):
         tick(0.02 + 0.96 * n / max(1, len(todo)), f"{t} ({n + 1}/{len(todo)})")
         row = db.query(HistoryArchive).filter(HistoryArchive.ticker == t).first()
-        if t == REFERENCE_TICKER and row is not None and row.bars_json:
-            calendar = [b["date"] for b in _json_bars(row.bars_json)]
+        if t == REFERENCE_TICKER and row is not None and (row.bars_blob or row.bars_json):
+            calendar = [b["date"] for b in bar_store.read_bars(row.bars_blob, row.bars_json)]
         # VIX is not in the daily cache, so its archive IS its only source —
         # refresh it whenever it has fallen behind instead of skipping it.
         vix_stale = (t == VIX_TICKER and row is not None and row.end_date

@@ -146,11 +146,12 @@ Link: https://digital.fidelity.com/ftgw/digital/portfolio/positions
 # ── Helper: extract close prices from cached history ─────────────────────────
 
 def _closes_from_cache(ticker: str, db: Session) -> list[float]:
+    from services import bar_store
     row = db.query(StockCache).filter(StockCache.ticker == ticker).first()
-    if not row or not row.history_json:
+    if not row:
         return []
     try:
-        bars = json.loads(row.history_json)
+        bars = bar_store.read_bars(row.history_blob, row.history_json)
         return [b["close"] for b in bars if b.get("close") is not None]
     except Exception:
         return []

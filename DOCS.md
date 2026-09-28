@@ -50,6 +50,17 @@ Start date (for example 2007-01-01 to test through the 2008 crash).
 
 The download adds a few hundred MB to `/data`, so HA backups of the add-on get bigger. The ticker list is today's
 S&P 500, so companies that failed or left the index are missing — older years look better than they really were.
+Which companies were in the index on each past date isn't available from free data, so this can't be corrected,
+only disclosed.
+
+**Compact, versioned storage (since the gap 9 release).** Stored prices use a compact column format about a quarter
+the size of the old JSON. On the first start after the update, a background job converts the existing history
+(a few minutes; each series is checked to read back exactly before the old copy is removed). To also shrink the
+database file, an admin can call `POST /api/history/storage/migrate?vacuum=true` once the conversion is done — it
+locks the database for up to a minute. When a re-download changes prices that were already stored (Yahoo re-adjusts
+old prices after every dividend and split), the previous version is kept (the last 3 per ticker, 64 MB at most), and
+every backtest lists the exact data versions it used, so a result can be traced back to its data. After the
+conversion, an older SwingTrader version can no longer read the stored history — don't roll back past this release.
 
 **Without the download the edge matrix can't confirm anything.** Since 1.23.0 a verdict (confirmed, mis-tagged,
 untagged-edge) needs the years before 2019 and the years from 2019 on to agree, plus a significance test corrected

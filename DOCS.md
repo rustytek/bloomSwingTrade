@@ -56,6 +56,17 @@ untagged-edge) needs the years before 2019 and the years from 2019 on to agree, 
 for testing every strategy in every regime at once. With only the 5-year cache there are no pre-2019 years, so every
 cell shows *unproven*. Expect many cells to stay unproven even with 20 years — that is the honest answer.
 
+## Regime Sizing (optional, off by default)
+
+The market regime still decides which strategies run. **Regime sizing** additionally lets a hostile
+market shrink *new* positions: Playbook → Settings → **Regime sizing**. When on, each new position's
+risk is multiplied by a number between 0.5 and 1.0 built from how far SPY is from its 200-day average,
+volatility (VIX), trend strength, and how well the strategy fits the current regime. It changes
+smoothly — there is no jump when ADX crosses 20 or SPY crosses its 200-day line — and it can only
+*reduce* size, never increase it. The Playbook's regime panel shows the current multiplier, and every
+Weekly Plan buy says how much it was cut. To see what it would have done historically, tick
+**Regime sizing** in a Strategy Lab trade_plan backtest.
+
 ## How Much to Trust a Backtest (Strategy Lab)
 
 Every walk-forward you run is recorded as a *trial* of that strategy (re-running identical settings doesn't count

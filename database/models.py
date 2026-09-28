@@ -50,6 +50,11 @@ class User(Base):
     # Strategy.regimes tags on the Today playbook. Ships OFF.
     use_evidence_regimes = Column(Boolean, default=False, nullable=True)
 
+    # Opt-in: scale live position risk by the continuous regime multiplier
+    # (services/regime_risk.py, ML4T gap 4). Ships OFF — it changes real
+    # position sizes; with it off sizing is exactly what it always was.
+    regime_sizing = Column(Boolean, default=False, nullable=True)
+
     watchlist = relationship("WatchlistItem", back_populates="user", cascade="all, delete-orphan")
     portfolio = relationship("PortfolioPosition", back_populates="user", cascade="all, delete-orphan")
 

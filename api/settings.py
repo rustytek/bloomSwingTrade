@@ -28,6 +28,9 @@ class SettingsResponse(BaseModel):
     max_open_r_effective: float | None = None
     max_open_r_basis: str = ""
     use_evidence_regimes: bool = False
+    # Scale position risk by the continuous regime multiplier (0.5-1.0).
+    # Ships off: it changes real position sizes.
+    regime_sizing: bool = False
 
 
 class SettingsUpdate(BaseModel):
@@ -40,6 +43,7 @@ class SettingsUpdate(BaseModel):
     # budget — so this one is read from model_fields_set, not exclude_none.
     max_open_r: float | None = Field(default=None, ge=0.1, le=100)
     use_evidence_regimes: bool | None = None
+    regime_sizing: bool | None = None
 
 
 def _to_response(user: User) -> SettingsResponse:
@@ -54,6 +58,7 @@ def _to_response(user: User) -> SettingsResponse:
         max_open_r_effective=chosen,
         max_open_r_basis=basis,
         use_evidence_regimes=bool(getattr(user, "use_evidence_regimes", False)),
+        regime_sizing=bool(getattr(user, "regime_sizing", False)),
     )
 
 

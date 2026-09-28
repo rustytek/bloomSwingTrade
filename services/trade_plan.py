@@ -18,6 +18,14 @@ from services.indicators import calc_atr
 EDGE_MULTIPLIER_MIN = 0.5
 EDGE_MULTIPLIER_MAX = 1.5
 
+#: Regime sizing (services/regime_risk.py, ML4T gap 4) is a separate factor in
+#: [0.5, 1.0] — regime can only CUT risk. It multiplies the clamped edge
+#: multiplier, so the combined risk scale is bounded to [0.25, 1.5] of the
+#: base fixed-fractional budget: never more than the edge cap allows, never
+#: less than a quarter.
+REGIME_MULTIPLIER_MIN = 0.5
+REGIME_MULTIPLIER_MAX = 1.0
+
 
 def _finite(v) -> bool:
     """True only for real, finite numbers (rejects None, NaN, ±inf)."""
@@ -34,6 +42,14 @@ def clamp_edge_multiplier(edge_multiplier) -> float:
     return max(EDGE_MULTIPLIER_MIN, min(EDGE_MULTIPLIER_MAX, float(edge_multiplier)))
 
 
+def clamp_regime_multiplier(regime_multiplier) -> float:
+    """Clamp a regime multiplier into [REGIME_MULTIPLIER_MIN, 1.0]; non-numeric
+    falls back to 1.0 (no regime adjustment)."""
+    if not _finite(regime_multiplier):
+        return 1.0
+    return max(REGIME_MULTIPLIER_MIN, min(REGIME_MULTIPLIER_MAX, float(regime_multiplier)))
+
+
 def build_trade_plan(
     bars: list[dict],
     account_size: float,
@@ -44,6 +60,7 @@ def build_trade_plan(
     max_position_pct: float = 25.0,
     atr_period: int = 14,
     edge_multiplier: float = 1.0,
+    regime_multiplier: float | None = None,
 ) -> dict | None:
     """Build a complete trade plan from OHLCV bars and user risk settings.
 
@@ -52,6 +69,11 @@ def build_trade_plan(
     with a tested edge can be sized up and a marginal one sized down. It is
     clamped to [0.5, 1.5]; the default of 1.0 reproduces the un-weighted
     fixed-fractional sizing exactly.
+
+    `regime_multiplier` (None = off) is the regime-sizing factor from
+    services/regime_risk.py::sizing_multiplier, clamped to [0.5, 1.0] and
+    applied on top of the edge multiplier. When it is None the plan is
+    byte-for-byte what it was before regime sizing existed (no extra keys).
 
     Returns None when there isn't enough data to compute an ATR or when the
     inputs can't produce a sane plan (zero/negative risk per share).
@@ -83,7 +105,10 @@ def build_trade_plan(
 
     target = entry + r_multiple * risk_per_share
     edge = clamp_edge_multiplier(edge_multiplier)
+    regime = None if regime_multiplier is None else clamp_regime_multiplier(regime_multiplier)
     risk_dollars = account_size * risk_pct / 100.0 * edge
+    if regime is not None:
+        risk_dollars *= regime
     shares = math.floor(risk_dollars / risk_per_share)
 
     capped = False
@@ -95,7 +120,7 @@ def build_trade_plan(
         shares = 0
 
     position_value = shares * entry
-    return {
+    plan = {
         "entry": round(entry, 2),
         "entry_zone": [round(entry - 0.5 * atr, 2), round(entry + 0.5 * atr, 2)],
         "stop": round(stop, 2),
@@ -117,6 +142,12 @@ def build_trade_plan(
         "capped_by_max_position": capped,
         "edge_multiplier": edge,
     }
+    if regime is not None:
+        plan["regime_multiplier"] = regime
+        # What the budget would have been without the regime cut, so the UI
+        # can say "risking $70 instead of $100".
+        plan["risk_dollars_before_regime"] = round(account_size * risk_pct / 100.0 * edge, 2)
+    return plan
 
 
 # ──────────────────────────────────────────────────────────────────────────

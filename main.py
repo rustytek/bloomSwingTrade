@@ -222,6 +222,7 @@ def ensure_schema_migrations():
             # `budget_basis` honest.
             "max_open_r": "FLOAT",
             "use_evidence_regimes": "BOOLEAN DEFAULT 0",
+            "regime_sizing": "BOOLEAN DEFAULT 0",
         })
         _ensure_columns(conn, "portfolio_positions", {
             "stop_loss": "FLOAT",

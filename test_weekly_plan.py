@@ -17,6 +17,7 @@ Run:
 """
 from __future__ import annotations
 
+import json
 import random
 import sys
 import traceback
@@ -211,6 +212,95 @@ def test_every_strategy_has_rationale_for_every_quadrant():
 def test_unknown_strategy_rationale_is_empty_not_error():
     r = rationale_for("nope", "trending_bull")
     assert r["why_it_works"] == "" and r["fit_now"] == ""
+
+
+# ── 4. Regime sizing (ML4T gap 4) ────────────────────────────────────────────
+
+def _with_fake_scan(fn):
+    """Run fn() with the live universe reduced to AAA/BBB and momentum_rotation
+    returning a triggered setup for each, so _build_setups is deterministic."""
+    from services import today as td
+    from services.strategies import Setup
+    strat = STRATEGIES["momentum_rotation"]
+    real_universe = td.UNIVERSE
+
+    def fake_scan(ticker, bars, quote):
+        return Setup(ticker=ticker, strategy=strat.id, strategy_name=strat.name,
+                     score=1.0 if ticker == "AAA" else 0.5, state="triggered")
+
+    td.UNIVERSE = ["AAA", "BBB"]
+    strat.scan = fake_scan                      # instance attribute shadows the method
+    try:
+        return fn(td)
+    finally:
+        td.UNIVERSE = real_universe
+        del strat.scan
+
+
+def _setups_cache():
+    return {t: {"bars": _bars(seed), "quote": {"ticker": t, "price": 100.0, "name": t}}
+            for t, seed in (("AAA", 1), ("BBB", 2))}
+
+
+@test
+def test_regime_sizing_off_leaves_playbook_plans_identical():
+    def run(td):
+        cache = _setups_cache()
+        args = (cache, set(), 100_000.0, 1.0, 2.5, 2.0)
+        plain = td._build_setups(*args, active_ids={"momentum_rotation"})
+        off = td._build_setups(*args, active_ids={"momentum_rotation"}, regime_multipliers=None)
+        assert plain == off and plain, plain
+        assert all("regime_multiplier" not in (s["plan"] or {}) for s in plain)
+        on = td._build_setups(*args, active_ids={"momentum_rotation"},
+                              regime_multipliers={"momentum_rotation": 0.5})
+        for a, b in zip(plain, on):
+            assert b["plan"]["regime_multiplier"] == 0.5
+            assert b["plan"]["shares"] <= a["plan"]["shares"]
+            assert b["plan"]["risk_dollars"] <= a["plan"]["risk_dollars"]
+        assert any(b["plan"]["shares"] < a["plan"]["shares"] for a, b in zip(plain, on))
+    _with_fake_scan(run)
+
+
+@test
+def test_regime_sizing_helper_ships_off_and_cuts_risk_in_a_volatile_bear():
+    from services import regime_risk as rr
+    from services import today as td
+    bear = {"risk": dict(rr.market_risk(30, -10, 36),
+                         memberships=rr.quadrant_memberships(30, -10, 36))}
+    bull = {"risk": dict(rr.market_risk(35, 8, 12),
+                         memberships=rr.quadrant_memberships(35, 8, 12))}
+    fits, summary, mults = td._regime_sizing(SimpleNamespace(regime_sizing=False), bear)
+    assert mults is None and summary["enabled"] is False
+    assert set(fits) == set(STRATEGIES)
+    _, _, bear_m = td._regime_sizing(SimpleNamespace(regime_sizing=True), bear)
+    _, _, bull_m = td._regime_sizing(SimpleNamespace(regime_sizing=True), bull)
+    sid = "momentum_rotation"                       # tagged for trending_bull only
+    assert bull_m[sid] >= 0.98 and bear_m[sid] <= 0.55, (bull_m[sid], bear_m[sid])
+    assert all(0.5 <= v <= 1.0 for v in list(bear_m.values()) + list(bull_m.values()))
+    # No risk block (insufficient data) -> no fits, no adjustment, never an error.
+    fits, summary, mults = td._regime_sizing(SimpleNamespace(regime_sizing=True), {})
+    assert fits == {} and all(v == 1.0 for v in mults.values())
+    json.dumps([fits, summary, mults], allow_nan=False)
+
+
+@test
+def test_weekly_buy_explains_regime_cut_and_fit():
+    setup = _setup("AAA", shares=10)
+    setup["plan"].update({"regime_multiplier": 0.7, "risk_dollars": 35.0,
+                          "risk_dollars_before_regime": 50.0})
+    today = _today([setup])
+    for st in today["strategy_regime_status"]:
+        if st["id"] == "momentum_rotation":
+            st["regime_fit"] = {"weight": 0.6, "label": "fading_out",
+                                "note": "Momentum is near the edge of its regime."}
+    cache = _cache({"AAA": _bars(3)})
+    o = wp._buy_orders(today, cache, [], set(), SETTINGS, {})[0]
+    text = " ".join(o["why"])
+    assert "Regime sizing is on" in text and "70%" in text, text
+    assert "Regime fit: Momentum is near the edge" in text, text
+    # Off (no multiplier, no fit note): no regime lines at all.
+    o2 = wp._buy_orders(_today([_setup("AAA", shares=10)]), cache, [], set(), SETTINGS, {})[0]
+    assert "Regime" not in " ".join(o2["why"])
 
 
 def main() -> int:

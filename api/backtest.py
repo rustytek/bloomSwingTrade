@@ -64,6 +64,10 @@ def walk_forward(
     atr_stop_mult: float | None = Query(None, gt=0, le=10),
     r_multiple: float | None = Query(None, gt=0, le=20),
     exit_rules: str | None = Query(None, pattern=r"^[a-z,]+$"),
+    # trade_plan only: scale each entry's risk by the continuous regime
+    # multiplier (services/regime_risk.py) — measures what User.regime_sizing
+    # would have done. Off by default; ignored in rotation mode.
+    regime_sizing: bool = Query(False),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -93,6 +97,7 @@ def walk_forward(
         r_multiple=r_multiple if r_multiple is not None else user.r_multiple,
         exit_rules=exit_rules,
         history="20y",
+        regime_sizing=regime_sizing and mode == "trade_plan",
     )
     # Every run is a trial: record it and deflate the Sharpe for the search
     # (ML4T gap 2b). Never raises — see trial_log.annotate.

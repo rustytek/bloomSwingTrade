@@ -134,6 +134,8 @@ def classify_regime(
     reading and a "why change" transition event when the trend-strength
     regime has just flipped."""
     closes = [b["close"] for b in spy_bars] if spy_bars else []
+    from services import regime_risk  # local: regime_risk imports this module
+
     if len(closes) < 60:
         return {
             "quadrant": None,
@@ -143,11 +145,16 @@ def classify_regime(
             "above_200ma": None,
             "transition": {"changed": False, "reason": None},
             "reasons": ["Not enough SPY history cached yet."],
+            # Unknown market -> no regime sizing adjustment (never a guess).
+            "risk": {"score": None, "multiplier": 1.0, "floor": regime_risk.REGIME_MULTIPLIER_MIN,
+                     "components": {}, "memberships": None,
+                     "explanation": "Not enough SPY history to judge regime risk — sized normally."},
         }
 
     ma200 = calc_ma(closes, 200)
     price = closes[-1]
     above_200 = ma200[-1] is not None and price > ma200[-1]
+    spy_vs_ma200_pct = ((price - ma200[-1]) / ma200[-1] * 100) if ma200[-1] else None
 
     adx_data = _adx_series(spy_bars)
     adx_now = adx_data["adx"]
@@ -155,6 +162,7 @@ def classify_regime(
 
     if vix_last is not None:
         crisis_vol = vix_last >= VIX_CRISIS
+        vol_value, vol_source = vix_last, "vix"
     else:
         # Backtests over historical dates don't have a per-date VIX series
         # cached — fall back to SPY's own realized volatility as a proxy for
@@ -167,8 +175,15 @@ def classify_regime(
         else:
             realized_vol = 0.0
         crisis_vol = realized_vol >= 22.0
+        vol_value, vol_source = realized_vol, "realized"
 
     trend_strength = trend_strength_label(adx_now)
+    # Continuous reading of the same inputs (ML4T gap 4): a risk multiplier
+    # and fuzzy quadrant memberships. Informational unless the user turns on
+    # regime sizing — the quadrant below still comes from the hard tree.
+    risk = regime_risk.market_risk(adx_now, spy_vs_ma200_pct, vol_value, vol_source)
+    risk["memberships"] = regime_risk.quadrant_memberships(adx_now, spy_vs_ma200_pct,
+                                                           vol_value, vol_source)
     quadrant = classify_quadrant(trend_strength, above_200, crisis_vol)
 
     reasons = [
@@ -189,6 +204,7 @@ def classify_regime(
         "above_200ma": above_200,
         "transition": transition,
         "reasons": reasons,
+        "risk": risk,
     }
 
 

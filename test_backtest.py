@@ -306,6 +306,27 @@ def test_trade_plan_never_fills_on_the_signal_bar():
 
 
 @test
+def test_trade_plan_regime_sizing_off_is_unchanged_and_on_only_cuts_risk():
+    """ML4T gap 4: regime_sizing=False must be the existing engine exactly (and
+    not even appear in `parameters`); True may only shrink entries."""
+    base = run(mode="trade_plan")
+    off = run(mode="trade_plan", regime_sizing=False)
+    assert base["trade_log"] == off["trade_log"] and base["metrics"] == off["metrics"]
+    assert "regime_sizing" not in off["parameters"]
+    on = run(mode="trade_plan", regime_sizing=True)
+    assert on["parameters"]["regime_sizing"] is True
+    assert on["trade_log"], "fixture should still trade with regime sizing on"
+    # Only the FIRST entry is comparable: after it, a smaller position leaves
+    # more cash, so later sizes legitimately diverge (path dependence).
+    first_b = min(base["trade_log"], key=lambda t: t["entry_date"])
+    first_o = min(on["trade_log"], key=lambda t: t["entry_date"])
+    assert (first_b["ticker"], first_b["entry_date"]) == (first_o["ticker"], first_o["entry_date"])
+    assert first_o["shares"] <= first_b["shares"], (first_b, first_o)
+    # Rotation ignores it entirely (frozen surface).
+    assert run(regime_sizing=True)["equity"] == run()["equity"]
+
+
+@test
 def test_no_lookahead_trailing_stop_uses_prior_bar_level():
     """A bar must never be able to stop itself out on a trail level derived from
     its own close — the level checked on bar t comes from bar t-1's update()."""

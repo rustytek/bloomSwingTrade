@@ -41,6 +41,7 @@ from api.scorecard import router as scorecard_router
 from api.jobs import router as jobs_router
 from api.broker import router as broker_router
 from api.history import router as history_router
+from api.risk import router as risk_router
 from generate_ssl import generate_ssl_cert
 from services.universe import UNIVERSE
 from services.market_data import (
@@ -86,6 +87,27 @@ async def _scheduled_report_job():
         logger.error("Scheduler: report generation failed: %s", e)
     finally:
         db.close()
+
+
+async def _scheduled_equity_snapshot_job():
+    """After the close: one `close` equity snapshot per user for the circuit
+    breaker (services/circuit_breaker.py). Cached prices + one journal sum per
+    user, no network — still run in a thread so it never touches the loop."""
+    import anyio
+    from services.circuit_breaker import record_close_snapshots
+
+    def _run() -> int:
+        db = SessionLocal()
+        try:
+            return record_close_snapshots(db)
+        finally:
+            db.close()
+
+    try:
+        n = await anyio.to_thread.run_sync(_run)
+        logger.info("Scheduler: recorded %s close equity snapshot(s)", n)
+    except Exception as e:  # noqa: BLE001
+        logger.error("Scheduler: equity snapshot failed: %s", e)
 
 
 async def _scheduled_market_refresh_job():
@@ -222,6 +244,11 @@ def ensure_schema_migrations():
             # `budget_basis` honest.
             "max_open_r": "FLOAT",
             "use_evidence_regimes": "BOOLEAN DEFAULT 0",
+            # Circuit-breaker thresholds — NULL means "use the default".
+            "breaker_daily_loss_pct": "FLOAT",
+            "breaker_drawdown_reduce_pct": "FLOAT",
+            "breaker_drawdown_halt_pct": "FLOAT",
+            "breaker_loss_streak": "INTEGER",
         })
         _ensure_columns(conn, "portfolio_positions", {
             "stop_loss": "FLOAT",
@@ -442,6 +469,16 @@ async def lifespan(app: FastAPI):
         max_instances=1,
         coalesce=True,
     )
+    # 16:20 ET, after the 15:45 last intraday refresh: the circuit breaker's
+    # daily `close` equity snapshot (prices are the last cached ones).
+    _scheduler.add_job(
+        _scheduled_equity_snapshot_job,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=20, timezone="America/New_York"),
+        id="equity_snapshot_close",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     _scheduler.start()
     logger.info("Scheduler started — daily report 05:30, market data every 15 minutes during trading hours")
 
@@ -487,6 +524,7 @@ app.include_router(weekly_plan_router)
 app.include_router(scorecard_router)
 app.include_router(jobs_router)
 app.include_router(broker_router)
+app.include_router(risk_router)
 app.include_router(history_router)
 
 

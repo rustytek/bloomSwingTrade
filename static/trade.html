@@ -90,6 +90,7 @@
       <div class="stepper" id="stepper"></div>
     </section>
     <div id="banner"></div>
+    <div id="breakerWrap"></div>
 
     <!-- Step 1 -->
     <section class="panel" id="step1">
@@ -303,6 +304,8 @@
   async function trLoadPlan() {
     try { TR_PLAN = await api('/api/weekly-plan'); TR_PLAN_ERR = null; }
     catch (e) { TR_PLAN = null; TR_PLAN_ERR = trErr(e); }
+    // Account circuit breaker (gap 7): a HALT refuses live BUY orders.
+    try { document.getElementById('breakerWrap').innerHTML = breakerBannerHtml(TR_PLAN && TR_PLAN.circuit_breaker); } catch (e) { /* never block the page */ }
     const orders = (TR_PLAN && TR_PLAN.orders) || [];
     // The Weekly Plan page saves the ticked ids with the week they belong to.
     // A selection from a previous week must not leak into this one.

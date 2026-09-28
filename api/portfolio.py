@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from database.db import get_db
 from database.models import User, PortfolioPosition
 from auth.deps import get_current_user
-from services import market_data, portfolio_risk
+from services import circuit_breaker, market_data, portfolio_risk
 from services.journal import compute_r_multiple, journal_close  # noqa: F401 — single journal implementation lives in services/journal.py; re-exported here so existing `from api.portfolio import ...` imports keep working
 from services.tickers import normalize_ticker
 from services.trade_plan import build_trade_plan
@@ -162,10 +162,11 @@ async def assess_position(
     if not bars:
         raise HTTPException(status_code=404, detail=f"No price history available for {ticker}")
 
+    breaker = circuit_breaker.current_state(db, user, record=False)
     plan = build_trade_plan(
         bars,
         account_size=user.account_size,
-        risk_pct=user.risk_pct,
+        risk_pct=(user.risk_pct or 1.0) * circuit_breaker.plan_risk_multiplier(breaker),
         entry=req.entry,
         atr_mult=req.atr_mult if req.atr_mult is not None else user.atr_stop_mult,
         r_multiple=req.r_multiple if req.r_multiple is not None else user.r_multiple,
@@ -197,6 +198,19 @@ async def assess_position(
     )
     if isinstance(assessment, dict):
         assessment["budget_basis"] = settings["max_open_r_basis"]
+        # Account-level circuit breaker (gap 7). A `block` warning disables
+        # the Plan-a-Trade commit button; POST /api/portfolio itself is NOT
+        # gated, so a trade already made elsewhere can still be recorded.
+        assessment["circuit_breaker"] = breaker
+        level = breaker.get("level")
+        if level in ("halt", "reduce"):
+            msg = ("Circuit breaker HALT — new entries are paused (acknowledge it on the Playbook to "
+                   "resume at reduced size)." if level == "halt" else
+                   f"Circuit breaker REDUCE — this plan is sized at "
+                   f"{int(circuit_breaker.plan_risk_multiplier(breaker) * 100)}% of your normal risk.")
+            assessment.setdefault("warnings", []).insert(0, {
+                "level": "block" if level == "halt" else "warn",
+                "code": f"circuit_breaker_{level}", "message": msg})
     return assessment
 
 

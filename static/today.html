@@ -164,6 +164,7 @@
   <div class="topbar" id="topbar"></div>
   <main class="page" id="page">
     <div id="loading" class="empty">Loading your daily briefing…</div>
+    <div id="breakerWrap"></div>
     <a class="weekly-cta" href="/plan" style="text-decoration:none;">
       <span class="t">Weekly check →</span>
       <span class="d">Step-by-step: read the market, deal with what you own, pick new trades with the reasoning for each, then send them to Robinhood.</span>
@@ -229,6 +230,11 @@
       <div class="form-row"><label>Max open positions</label><input id="setMax" type="number" min="1" max="50" step="1"></div>
       <div class="form-row"><label>ATR stop multiple</label><input id="setAtr" type="number" min="0.5" max="6" step="0.1"></div>
       <div class="form-row"><label>Target R-multiple</label><input id="setR" type="number" min="0.5" max="10" step="0.5"></div>
+      <div class="muted" style="font-size:11px;margin:12px 0 6px;">Circuit breaker — leave blank for the default shown.</div>
+      <div class="form-row"><label>Warn at a daily loss of (%)</label><input id="setCbDaily" type="number" min="0.5" max="20" step="0.5"></div>
+      <div class="form-row"><label>Size down at drawdown (%)</label><input id="setCbReduce" type="number" min="1" max="50" step="0.5"></div>
+      <div class="form-row"><label>Pause new entries at drawdown (%)</label><input id="setCbHalt" type="number" min="2" max="75" step="0.5"></div>
+      <div class="form-row"><label>Size down after losing streak of</label><input id="setCbStreak" type="number" min="2" max="30" step="1"></div>
       <div id="settingsErr" class="error"></div>
       <div class="form-actions">
         <button class="btn" onclick="closeSettings()" type="button">Cancel</button>
@@ -376,6 +382,7 @@
   }
 
   function renderAll() {
+    safeRender(renderBreaker, 'breakerWrap');
     safeRender(renderBand, 'bandWrap');
     safeRender(renderRunning, 'runningWrap');
     safeRender(renderPlaybook, 'playbookWrap');
@@ -391,6 +398,11 @@
       const el = document.getElementById(id);
       if (el) el.innerHTML = `<div class="error" style="padding:10px;">Section failed to render: ${esc(e.message)}</div>`;
     }
+  }
+
+  /* ── 0. Account circuit breaker (gap 7) — loud, above everything ─────── */
+  function renderBreaker() {
+    document.getElementById('breakerWrap').innerHTML = breakerBannerHtml(DATA && DATA.circuit_breaker);
   }
 
   /* ── 1. Regime band ────────────────────────────────────────────────────── */
@@ -1032,6 +1044,20 @@
     document.getElementById('setMax').value = s.max_positions ?? '';
     document.getElementById('setAtr').value = s.atr_stop_mult ?? '';
     document.getElementById('setR').value = s.r_multiple ?? '';
+    // Breaker thresholds: show the user's chosen value, else leave blank with
+    // the effective default as the placeholder (blank = keep the default).
+    const cbT = ((DATA && DATA.circuit_breaker) || {}).thresholds || {};
+    [['setCbDaily', 'daily_loss_pct'], ['setCbReduce', 'drawdown_reduce_pct'],
+     ['setCbHalt', 'drawdown_halt_pct'], ['setCbStreak', 'loss_streak']].forEach(([id, k]) => {
+      const el = document.getElementById(id);
+      el.value = '';
+      el.placeholder = cbT[k] != null ? `default ${cbT[k]}` : 'default';
+    });
+    api('/api/settings').then(cur => {
+      const map = { setCbDaily: 'breaker_daily_loss_pct', setCbReduce: 'breaker_drawdown_reduce_pct',
+                    setCbHalt: 'breaker_drawdown_halt_pct', setCbStreak: 'breaker_loss_streak' };
+      for (const [id, k] of Object.entries(map)) if (cur && cur[k] != null) document.getElementById(id).value = cur[k];
+    }).catch(() => {});
     document.getElementById('settingsErr').textContent = '';
     document.getElementById('settingsModal').style.display = 'flex';
   }
@@ -1044,6 +1070,13 @@
       atr_stop_mult: parseFloat(document.getElementById('setAtr').value),
       r_multiple: parseFloat(document.getElementById('setR').value),
     };
+    // Blank breaker field = null = back to the default.
+    const cbNum = (id, int) => { const v = document.getElementById(id).value.trim();
+      return v === '' ? null : (int ? parseInt(v, 10) : parseFloat(v)); };
+    body.breaker_daily_loss_pct = cbNum('setCbDaily');
+    body.breaker_drawdown_reduce_pct = cbNum('setCbReduce');
+    body.breaker_drawdown_halt_pct = cbNum('setCbHalt');
+    body.breaker_loss_streak = cbNum('setCbStreak', true);
     try {
       await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       closeSettings();

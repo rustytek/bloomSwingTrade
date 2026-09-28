@@ -155,3 +155,20 @@ Your database and SSL certificates are preserved across updates.
 ## Support
 
 GitHub: https://github.com/rustytek/bloomSwingTrade
+
+## Account Circuit Breaker
+
+SwingTrader watches your whole account, not just each trade, and slows you down when things go wrong:
+
+| Level | When (defaults) | What changes |
+|---|---|---|
+| Warning | Down 2% or more since the last session | A banner only |
+| Size down | 8% below your equity peak, or 5 losing trades in a row | New trade plans use half your normal risk |
+| Paused | 12% below your equity peak | No new buys are pre-selected, Plan-a-Trade can't commit, and live Robinhood buys are refused |
+
+Selling, trimming and raising stops are **never** blocked. Equity is your Settings account size plus realized P&L
+from the journal plus unrealized P&L at the last cached prices (the app doesn't track cash, so update the account
+size if you deposit or withdraw). A pause lifts by itself once you recover to less than 8% below the peak, or when
+you press **I understand — resume at reduced size** on the Playbook: that is recorded with your name and the time,
+trading resumes at half size, and it pauses again if the drawdown deepens another 3 points. Change the thresholds
+in the Playbook's Settings (leave a field blank for the default).

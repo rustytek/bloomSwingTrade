@@ -50,7 +50,7 @@ import anyio
 from sqlalchemy.orm import Session
 
 from database.models import BrokerAccount, BrokerOrder, PortfolioPosition, User
-from services import secrets_box
+from services import circuit_breaker, secrets_box
 from services.brokers import robinhood_mcp as mcp
 from services.journal import journal_close
 
@@ -915,17 +915,27 @@ async def _context(db: Session, user: User, orders: list[dict], refresh_stale: b
             "bp": bp, "holdings": holdings, "holdings_unknown": holdings_unknown, "notes": notes}
 
 
-def _validate(orders: list[dict], ctx: dict) -> tuple[list[dict], dict]:
-    return validate_orders(orders, ctx["quotes"], ctx["held"], ctx["bp"],
-                           strict_quotes=(ctx["mode"] == "live"), stale=ctx["stale"],
-                           holdings=ctx["holdings"], holdings_unknown=ctx["holdings_unknown"])
+def _validate(orders: list[dict], ctx: dict, db: Session | None = None,
+              user: User | None = None) -> tuple[list[dict], dict]:
+    rows, totals = validate_orders(orders, ctx["quotes"], ctx["held"], ctx["bp"],
+                                   strict_quotes=(ctx["mode"] == "live"), stale=ctx["stale"],
+                                   holdings=ctx["holdings"], holdings_unknown=ctx["holdings_unknown"])
+    if db is not None and user is not None:
+        # Account-level circuit breaker (gap 7): a HALT refuses live BUYs
+        # (paper buys are flagged); sells are never touched.
+        state = circuit_breaker.current_state(db, user, record=False)
+        circuit_breaker.gate_orders(rows, state, live=ctx["live"])
+        totals["circuit_breaker"] = {"level": state.get("level"),
+                                     "reasons": [r.get("message") for r in state.get("reasons") or []]}
+        _recount(totals, rows)
+    return rows, totals
 
 
 async def preview(db: Session, user: User, orders: list[dict]) -> dict:
     async with _lock(user.id):
         ctx = await _context(db, user, orders, refresh_stale=True)
         acct, mode, notes = ctx["acct"], ctx["mode"], ctx["notes"]
-        rows, totals = _validate(orders, ctx)
+        rows, totals = _validate(orders, ctx, db, user)
         if ctx["live"]:
             duplicate_blocks(db, user, rows)
             _recount(totals, rows)
@@ -980,7 +990,7 @@ async def place(db: Session, user: User, orders: list[dict], confirm: bool,
                 raise ValueError("Live mode, but Robinhood is not connected. Reconnect or switch to paper.")
             if not confirm:
                 raise ValueError("Live orders need confirm: true.")
-        rows, totals = _validate(orders, ctx)
+        rows, totals = _validate(orders, ctx, db, user)
         if mode == "live":
             duplicate_blocks(db, user, rows)
             _recount(totals, rows)

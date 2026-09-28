@@ -141,11 +141,12 @@ def position_flags(pos: PortfolioPosition, quote: dict, bars: list[dict] | None 
 
 def _load_all_cache(db: Session) -> dict[str, dict]:
     """One query → {ticker: {"quote": dict|None, "bars": list|None}}."""
+    from services import bar_store
     rows = db.query(
-        StockCache.ticker, StockCache.quote_json, StockCache.history_json
+        StockCache.ticker, StockCache.quote_json, StockCache.history_json, StockCache.history_blob
     ).all()
     out: dict[str, dict] = {}
-    for ticker, quote_json, history_json in rows:
+    for ticker, quote_json, history_json, history_blob in rows:
         quote = None
         bars = None
         if quote_json:
@@ -153,11 +154,9 @@ def _load_all_cache(db: Session) -> dict[str, dict]:
                 quote = json.loads(quote_json)
             except Exception:
                 quote = None
-        if history_json:
-            try:
-                bars = json.loads(history_json)
-            except Exception:
-                bars = None
+        if history_blob or history_json:
+            # Columnar BLOB or legacy JSON (services/bar_store.py).
+            bars = bar_store.read_bars(history_blob, history_json) or None
         out[ticker] = {"quote": quote, "bars": bars}
     return out
 

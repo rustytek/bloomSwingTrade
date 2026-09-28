@@ -185,6 +185,29 @@ def _ensure_columns(conn, table: str, columns: dict[str, str]):
             conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
 
 
+def _kick_bar_storage_migration():
+    """Start the one-time JSON -> columnar conversion when rows are pending.
+    Owned by the configured admin account. Never blocks startup."""
+    db = SessionLocal()
+    try:
+        from services import bar_store
+        st = bar_store.storage_status(db)
+        if st["migrated"]:
+            return
+        admin = db.query(User).filter(User.username == settings.admin_user).first()
+        if admin is None:
+            return
+        from api.history import start_storage_migration
+        job, created = start_storage_migration(db, admin.id)
+        if created:
+            logger.info("Columnar price storage: converting %s cache + %s archive rows in job %s",
+                        st["pending_cache"], st["pending_archive"], job.id)
+    except Exception:  # noqa: BLE001 — an optimisation must never stop startup
+        logger.exception("Could not start the price-storage conversion")
+    finally:
+        db.close()
+
+
 def orphan_background_jobs():
     """Fail any job left mid-flight by a restart.
 
@@ -229,6 +252,9 @@ def ensure_schema_migrations():
         _ensure_columns(conn, "stock_cache", {
             "quote_cached_at": "DATETIME",
             "history_cached_at": "DATETIME",
+            # ML4T gap 9 — columnar bars + data version (services/bar_store.py).
+            "history_blob": "BLOB",
+            "history_version": "VARCHAR(24)",
         })
         _ensure_columns(conn, "users", {
             "account_size": "FLOAT DEFAULT 10000",
@@ -284,6 +310,8 @@ def ensure_schema_migrations():
             "requested_start": "VARCHAR(10)",
             "issues": "TEXT",
             "checked_at": "DATETIME",
+            "bars_blob": "BLOB",
+            "data_version": "VARCHAR(24)",
         })
         # ML4T gap 8 — idempotent live orders (services/broker_service.py).
         _ensure_columns(conn, "broker_orders", {
@@ -433,6 +461,10 @@ async def lifespan(app: FastAPI):
         invalidate_legacy_schema_cache(db)
     finally:
         db.close()
+    # ML4T gap 9: convert any stored JSON price history to the columnar format,
+    # once, in the job worker (never here). Only when rows are still pending,
+    # so after the first successful run this is a no-op query.
+    _kick_bar_storage_migration()
     # Kick off background universe data refresh (non-blocking)
     import asyncio
     asyncio.create_task(refresh_universe(UNIVERSE, db_factory=SessionLocal))

@@ -17,6 +17,7 @@ import yfinance as yf
 from sqlalchemy.orm import Session
 
 from database.models import HistoryArchive
+from services import bar_store
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +60,9 @@ def ensure_archive(db: Session, ticker: str, need_start: str, need_end: str) -> 
     """Return archived bars for `ticker` covering [need_start, need_end],
     fetching/widening from yfinance as needed. Returns the full stored range."""
     row = db.query(HistoryArchive).filter(HistoryArchive.ticker == ticker).first()
-    if row and row.start_date <= need_start and row.end_date >= need_end:
-        try:
-            return json.loads(row.bars_json or "[]")
-        except Exception:
-            pass  # corrupt → refetch below
+    stored = bar_store.read_bars(row.bars_blob, row.bars_json) if row else []
+    if row and stored and row.start_date <= need_start and row.end_date >= need_end:
+        return stored
 
     # Fetch the union of what we need and what we already have (one wide pull).
     fetch_start = min(need_start, row.start_date) if row else need_start
@@ -71,12 +70,7 @@ def ensure_archive(db: Session, ticker: str, need_start: str, need_end: str) -> 
     bars = _fetch_range_sync(ticker, fetch_start, fetch_end)
     if not bars:
         # Fall back to whatever we already had, if anything.
-        if row:
-            try:
-                return json.loads(row.bars_json or "[]")
-            except Exception:
-                return []
-        return []
+        return stored
 
     actual_start, actual_end = bars[0]["date"], bars[-1]["date"]
     if row and row.start_date and row.end_date and (
@@ -85,20 +79,20 @@ def ensure_archive(db: Session, ticker: str, need_start: str, need_end: str) -> 
         # answer). Never shrink the archive — the 20-year backfill lives here too.
         logger.warning("Archive fetch for %s returned %s..%s, narrower than stored %s..%s — kept stored",
                        ticker, actual_start, actual_end, row.start_date, row.end_date)
-        try:
-            return json.loads(row.bars_json or "[]")
-        except Exception:
-            return bars
-    payload = json.dumps(bars)
+        return stored or bars
+    blob, text, version = bar_store.payload_for(bars)
     if row:
-        row.bars_json = payload
+        if stored:
+            prev_version = bar_store.row_version(row.bars_blob, row.bars_json, row.data_version)
+            bar_store.note_rewrite(db, ticker, "archive", stored, bars, prev_version, version)
+        row.bars_blob, row.bars_json, row.data_version = blob, (text if text is not None else ""), version
         row.start_date = actual_start
         row.end_date = actual_end
         row.fetched_at = datetime.now(timezone.utc)
     else:
         db.add(HistoryArchive(
-            ticker=ticker, bars_json=payload,
-            start_date=actual_start, end_date=actual_end,
+            ticker=ticker, bars_blob=blob, bars_json=(text if text is not None else ""),
+            data_version=version, start_date=actual_start, end_date=actual_end,
             fetched_at=datetime.now(timezone.utc),
         ))
     db.commit()

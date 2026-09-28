@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Column, Integer, String, Float, Boolean, Date, DateTime, Text,
-    ForeignKey, UniqueConstraint
+    ForeignKey, UniqueConstraint, LargeBinary
 )
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
@@ -173,7 +173,13 @@ class StockCache(Base):
 
     ticker = Column(String(16), primary_key=True)
     quote_json = Column(Text, nullable=True)
+    # Bars are stored in ONE of these two: history_blob (columnar, see
+    # services/bar_store.py) for everything written or migrated since gap 9,
+    # history_json for legacy rows and series the codec can't hold exactly.
+    # Read them only through bar_store.read_bars().
     history_json = Column(Text, nullable=True)
+    history_blob = Column(LargeBinary, nullable=True)
+    history_version = Column(String(24), nullable=True)   # bar_store.bars_version
     cached_at = Column(DateTime, default=utcnow)
     quote_cached_at = Column(DateTime, nullable=True)
     history_cached_at = Column(DateTime, nullable=True)
@@ -190,7 +196,11 @@ class HistoryArchive(Base):
     __tablename__ = "history_archive"
 
     ticker = Column(String(16), primary_key=True)
+    # NOT NULL in existing databases, so a migrated row keeps "" here and its
+    # bars in bars_blob. Read only through bar_store.read_bars().
     bars_json = Column(Text, nullable=False)
+    bars_blob = Column(LargeBinary, nullable=True)
+    data_version = Column(String(24), nullable=True)   # bar_store.bars_version
     start_date = Column(String(10), nullable=False)   # earliest bar date covered (YYYY-MM-DD)
     end_date = Column(String(10), nullable=False)     # latest bar date covered
     fetched_at = Column(DateTime, default=utcnow)
@@ -266,6 +276,31 @@ class BreakerState(Base):
     ack_by = Column(String(64), nullable=True)
     ack_drawdown_pct = Column(Float, nullable=True)
     updated_at = Column(DateTime, default=utcnow)
+
+
+class HistoryRevision(Base):
+    """A stored price series as it was BEFORE a refetch materially changed it
+    (a new split/dividend adjustment, or corrected values) — ML4T gap 9, so a
+    backtest can be reproduced and a data change audited. Written by
+    services/bar_store.py::record_revision; retention (per series and total
+    bytes) is enforced there."""
+    __tablename__ = "history_revisions"
+
+    id = Column(Integer, primary_key=True)
+    ticker = Column(String(16), nullable=False, index=True)
+    store = Column(String(16), nullable=False)          # "cache" | "archive"
+    captured_at = Column(DateTime, default=utcnow)
+    kind = Column(String(16), nullable=True)            # adjustment | split | correction
+    reason = Column(Text, nullable=True)
+    summary_json = Column(Text, nullable=True)
+    prev_version = Column(String(24), nullable=True)
+    new_version = Column(String(24), nullable=True)
+    prev_bars = Column(Integer, nullable=True)
+    prev_start = Column(String(10), nullable=True)
+    prev_end = Column(String(10), nullable=True)
+    prev_format = Column(String(16), nullable=False)    # "sbr1" | "json.zlib"
+    prev_payload = Column(LargeBinary, nullable=False)
+    payload_bytes = Column(Integer, nullable=False, default=0)
 
 
 class AICache(Base):

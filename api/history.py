@@ -19,6 +19,7 @@ from services import jobs as jobsvc
 from services import long_history
 
 BACKFILL_KIND = "history_backfill"
+MIGRATION_KIND = "bar_storage_migration"
 
 router = APIRouter(prefix="/api/history", tags=["history"])
 
@@ -35,12 +36,17 @@ def history_status(db: Session = Depends(get_db), user: User = Depends(get_curre
     jobsvc.reap_stale(db)
     job = _latest_backfill(db)
     last = jobsvc.result_of(job) if job is not None and job.status == "done" else None
+    from services import bar_store
+    mig = (db.query(BackgroundJob).filter(BackgroundJob.kind == MIGRATION_KIND)
+           .order_by(BackgroundJob.created_at.desc()).first())
     return {
         **long_history.status(db),
         "tiingo_configured": bool((get_settings().tiingo_api_key or "").strip()),
         "job": jobsvc.to_dict(job),
         "last_result": last,
         "can_start": bool(user.is_admin),
+        # ML4T gap 9 — columnar storage progress and the revision store.
+        "storage": {**bar_store.storage_status(db), "job": jobsvc.to_dict(mig)},
     }
 
 
@@ -60,4 +66,28 @@ def start_backfill(
         # same rows and double the load on Yahoo/Tiingo.
         return {"status": "running", "started": False, "job": jobsvc.to_dict(running)}
     job, created = jobsvc.enqueue(db, admin.id, BACKFILL_KIND, {"force": bool(force)})
+    return {"status": "running", "started": created, "job": jobsvc.to_dict(job)}
+
+
+def start_storage_migration(db: Session, user_id: int, vacuum: bool = False):
+    """Enqueue the columnar-storage conversion unless one is running. Returns
+    (job, created). Shared by the endpoint and the one-time startup kick."""
+    running = (db.query(BackgroundJob)
+               .filter(BackgroundJob.kind == MIGRATION_KIND,
+                       BackgroundJob.status.in_(jobsvc.ACTIVE_STATUSES))
+               .first())
+    if running is not None:
+        return running, False
+    return jobsvc.enqueue(db, user_id, MIGRATION_KIND, {"vacuum": bool(vacuum)})
+
+
+@router.post("/storage/migrate")
+def migrate_storage(
+    vacuum: bool = Query(False, description="Compact the database file afterwards (briefly locks the DB)"),
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Convert stored price history to the columnar format in the background.
+    Resumable and safe to repeat; returns at once. Admin-only (shared data)."""
+    job, created = start_storage_migration(db, admin.id, vacuum)
     return {"status": "running", "started": created, "job": jobsvc.to_dict(job)}

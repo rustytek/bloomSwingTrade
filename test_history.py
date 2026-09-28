@@ -426,6 +426,335 @@ def test_worker_registers_the_new_job_kinds():
     assert {"history_backfill", "edge_matrix"} <= set(HANDLERS)
 
 
+# ── ML4T gap 9: columnar storage, data versions, revisions ─────────────────
+from services import bar_store as bs  # noqa: E402
+
+
+def _nan_eq(a, b) -> bool:
+    """Deep equality where NaN == NaN and -0.0 is distinguished from 0.0."""
+    if isinstance(a, float) and isinstance(b, float):
+        if math.isnan(a) or math.isnan(b):
+            return math.isnan(a) and math.isnan(b)
+        return a == b and math.copysign(1, a) == math.copysign(1, b)
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, dict):
+        return list(a) == list(b) and all(_nan_eq(a[k], b[k]) for k in a)
+    if isinstance(a, list):
+        return len(a) == len(b) and all(_nan_eq(x, y) for x, y in zip(a, b))
+    return a == b
+
+
+@test
+def test_codec_round_trips_exactly_including_nan_none_and_big_volumes():
+    bars = [
+        {"i": 0, "date": "2024-01-02", "open": 1.1, "high": float("nan"), "low": -0.0,
+         "close": 1.23456789012345, "vol": 9_000_000_000_123},
+        {"i": 1, "date": "2024-01-03", "open": None, "high": float("inf"), "low": 5e-324,
+         "close": 2.0, "vol": None},
+        {"i": 2, "date": None, "open": 3.0, "high": float("-inf"), "low": 1e308,
+         "close": 0.1 + 0.2, "vol": 0},
+    ]
+    blob = bs.encode_bars(bars)
+    assert blob is not None and bs.is_blob(blob) and bs.blob_count(blob) == 3
+    back = bs.decode_bars(blob)
+    assert _nan_eq(back, bars), back
+    assert all(type(b["i"]) is int for b in back) and type(back[0]["vol"]) is int
+    # Key order is preserved (the archive's order differs from the cache's).
+    arch = [{"date": "2024-01-02", "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "vol": 5, "i": 0}]
+    assert list(bs.decode_bars(bs.encode_bars(arch))[0]) == list(arch[0])
+    assert bs.decode_bars(bs.encode_bars([])) == []
+
+
+@test
+def test_codec_refuses_what_it_cannot_hold_exactly_and_writers_fall_back_to_json():
+    base = {"date": "2024-01-02", "close": 1.0, "vol": 1}
+    for bad in (
+        [dict(base, vol=True)],                                 # bool is not an int here
+        [base, dict(base, vol=1.5)],                            # mixed int/float column
+        [base, {"date": "2024-01-03", "close": 1.0}],           # rows with different keys
+        [dict(base, date="2024-01-0\u00e9")],                   # non-ASCII string
+        [dict(base, vol=2 ** 70)],                              # beyond int64
+        "not a list",
+    ):
+        assert bs.encode_bars(bad) is None, bad
+    blob, text, version = bs.payload_for([dict(base, vol=True)])
+    assert blob is None and json.loads(text) == [dict(base, vol=True)]
+    assert version == bs.bars_version([dict(base, vol=True)])
+
+
+@test
+def test_read_bars_prefers_blob_falls_back_to_json_and_trims_like_json():
+    bars = make_bars(trading_days("2020-01-01", 300))
+    text = json.dumps(bars)
+    blob = bs.encode_bars(bars)
+    assert bs.read_bars(blob, None) == bars
+    assert bs.read_bars(None, text) == bars                      # not migrated yet
+    assert bs.read_bars(b"SBR1garbage", text) == bars            # unreadable BLOB -> JSON
+    since = bars[200]["date"]
+    assert bs.read_bars(blob, None, since=since, keep_before=50) == bars[150:]
+    assert bs.read_bars(None, text, since=since, keep_before=50) == bars[150:]
+    assert bs.read_bars(blob, None, since=since, keep_before=500) == bars
+    assert bs.bar_count(blob, None) == 300 and bs.bar_count(None, text) == 300
+
+
+@test
+def test_data_version_is_the_same_before_and_after_migration():
+    bars = make_bars(trading_days("2021-01-01", 50))
+    text = json.dumps(bars)
+    v = bs.bars_version(bars)
+    assert bs.text_version(text) == v
+    assert bs.row_version(bs.encode_bars(bars), None, None) == v
+    assert bs.row_version(None, text, None) == v
+    assert bs.row_version(None, text, "stored") == "stored"
+    bars2 = [dict(b) for b in bars]
+    bars2[10]["close"] += 0.01
+    assert bs.bars_version(bars2) != v
+
+
+def _legacy_rows(db, n=4):
+    """JSON rows exactly as pre-gap-9 versions of the app wrote them."""
+    wipe(db)
+    days = trading_days("2019-01-01", 400)
+    series = {}
+    for k in range(n):
+        t = f"L{k}"
+        bars = make_bars(days, start_px=20 + k)
+        series[t] = bars
+        db.add(StockCache(ticker=t, history_json=json.dumps(bars[200:])))
+        db.add(HistoryArchive(ticker=t, bars_json=json.dumps(bars), start_date=days[0], end_date=days[-1]))
+    db.commit()
+    return series
+
+
+@test
+def test_migration_is_verified_resumable_and_idempotent():
+    db = SessionLocal()
+    series = _legacy_rows(db)
+    before = {t: (lh.load_cache_bars(db, t), lh.load_archive_bars(db, t)) for t in series}
+    first = bs.migrate(db, max_rows=3)                             # interrupted part-way
+    assert first["cache"] + first["archive"] == 3 and first["remaining"] == 5, first
+    second = bs.migrate(db)                                       # resumes
+    assert second["remaining"] == 0 and second["cache"] + second["archive"] == 5, second
+    third = bs.migrate(db)                                        # nothing left to do
+    assert third["cache"] == third["archive"] == 0 and third["remaining"] == 0
+    db.expire_all()
+    for t in series:
+        c = db.query(StockCache).filter(StockCache.ticker == t).one()
+        a = db.query(HistoryArchive).filter(HistoryArchive.ticker == t).one()
+        assert c.history_json is None and c.history_blob and a.bars_json == "" and a.bars_blob
+        assert c.history_version == bs.bars_version(before[t][0])
+        assert lh.load_cache_bars(db, t) == before[t][0]
+        assert lh.load_archive_bars(db, t) == before[t][1]
+    st = bs.storage_status(db)
+    assert st["migrated"] and st["cache_columnar"] == 4 and st["archive_columnar"] == 4
+    db.close()
+
+
+@test
+def test_migration_keeps_json_it_cannot_reproduce_and_never_overwrites_a_newer_write():
+    db = SessionLocal()
+    wipe(db)
+    odd = [{"date": "2024-01-02", "close": 1.0, "vol": True}]      # the codec refuses bools
+    db.add(StockCache(ticker="ODD", history_json=json.dumps(odd)))
+    good = make_bars(trading_days("2024-01-01", 30))
+    db.add(StockCache(ticker="RACE", history_json=json.dumps(good)))
+    db.commit()
+    newer = make_bars(trading_days("2024-01-01", 31), start_px=77)
+    real = bs._verified_blob
+
+    def racing(text):
+        # The web process refreshes RACE between this run's read and its write.
+        if text == json.dumps(good):
+            other = SessionLocal()
+            row = other.query(StockCache).filter(StockCache.ticker == "RACE").one()
+            row.history_json = json.dumps(newer)
+            other.commit()
+            other.close()
+        return real(text)
+
+    bs._verified_blob = racing
+    try:
+        res = bs.migrate(db)
+    finally:
+        bs._verified_blob = real
+    assert {"store": "cache", "ticker": "ODD"} in res["kept_json"]
+    assert res["raced"] >= 1, res
+    db.expire_all()
+    assert json.loads(db.query(StockCache).filter(StockCache.ticker == "ODD").one().history_json) == odd
+    assert lh.load_cache_bars(db, "RACE") == newer, "the newer write must survive"
+    assert bs.migrate(db)["cache"] == 1, "the raced row converts on the next run"
+    assert lh.load_cache_bars(db, "RACE") == newer
+    db.close()
+
+
+@test
+def test_compare_series_classifies_adjustments_corrections_and_ignores_growth():
+    days = trading_days("2023-01-02", 120)
+    old = make_bars(days[:100])
+    assert bs.compare_series(old, old) is None
+    grown = old + make_bars(days[100:], start_px=old[-1]["close"])
+    assert bs.compare_series(old, grown) is None, "a longer series is not a revision"
+    rolled = old[20:] + make_bars(days[100:], start_px=old[-1]["close"])
+    assert bs.compare_series(old, rolled) is None, "a rolled-forward window is not a revision"
+    last_changed = [dict(b) for b in old]
+    last_changed[-1]["close"] *= 1.05                             # an in-progress session settled
+    assert bs.compare_series(old, last_changed) is None
+    # A dividend: every bar before the ex-date scaled by the same factor.
+    div = [dict(b) for b in old]
+    for b in div[:60]:
+        for k in ("open", "high", "low", "close"):
+            b[k] = round(b[k] * 0.99, 4)
+    ch = bs.compare_series(old, div)
+    assert ch and ch["kind"] == "adjustment" and ch["changed"] == 60 and abs(ch["factor"] - 0.99) < 1e-3, ch
+    split = [dict(b) for b in old]
+    for b in split[:60]:
+        for k in ("open", "high", "low", "close"):
+            b[k] = round(b[k] / 4, 4)
+    assert bs.compare_series(old, split)["kind"] == "split"
+    fixed = [dict(b) for b in old]
+    fixed[40]["high"] *= 1.2
+    ch = bs.compare_series(old, fixed)
+    assert ch["kind"] == "correction" and ch["changed"] == 1, ch
+    tiny = [dict(b) for b in old]
+    tiny[40]["close"] *= 1.0001                                   # rounding noise
+    tiny[41]["vol"] += 12345                                      # volume revisions are routine
+    assert bs.compare_series(old, tiny) is None
+
+
+@test
+def test_archive_rewrite_keeps_the_previous_series_and_identical_refetch_does_not():
+    from database.models import HistoryRevision
+    db = SessionLocal()
+    wipe(db)
+    db.query(HistoryRevision).delete()
+    db.commit()
+    days = trading_days("2020-01-01", 200)
+    v1 = make_bars(days)
+    lh._store(db, "ADJ", v1, "yfinance", days[0], [])
+    lh._store(db, "ADJ", v1, "yfinance", days[0], [])              # identical re-download
+    assert db.query(HistoryRevision).count() == 0
+    v2 = [dict(b) for b in v1]
+    for b in v2[:150]:
+        for k in ("open", "high", "low", "close"):
+            b[k] = round(b[k] * 0.985, 4)
+    lh._store(db, "ADJ", v2, "yfinance", days[0], [])
+    revs = db.query(HistoryRevision).all()
+    assert len(revs) == 1 and revs[0].kind == "adjustment" and revs[0].store == "archive", revs
+    assert bs.revision_bars(revs[0]) == v1, "the old series must be reconstructable"
+    assert revs[0].prev_version == bs.bars_version(v1) and revs[0].new_version == bs.bars_version(v2)
+    row = db.query(HistoryArchive).filter(HistoryArchive.ticker == "ADJ").one()
+    assert row.bars_blob and row.data_version == bs.bars_version(v2) and lh.load_archive_bars(db, "ADJ") == v2
+    db.close()
+
+
+@test
+def test_cache_refetch_records_a_revision_and_stores_columnar():
+    import asyncio
+    from database.models import HistoryRevision
+    from services import market_data as md
+    db = SessionLocal()
+    wipe(db)
+    db.query(HistoryRevision).delete()
+    db.commit()
+    days = trading_days("2021-01-01", 300)
+    v1 = make_bars(days[:299])
+    db.add(StockCache(ticker="CACHEX", history_json=json.dumps(v1)))   # legacy JSON row
+    db.commit()
+    v2 = [dict(b) for b in v1]
+    for b in v2[:250]:
+        b["close"] = round(b["close"] * 0.99, 4)
+    v2.append(make_bars(days[299:], start_px=v1[-1]["close"])[0])
+    real = md._fetch_history_sync
+    md._fetch_history_sync = lambda ticker, period="5y": v2
+    md._mem_cache.pop("history:CACHEX", None)
+    try:
+        got = asyncio.run(md.get_history("CACHEX", db, force_refresh=True))
+    finally:
+        md._fetch_history_sync = real
+    assert got == v2
+    db.expire_all()
+    row = db.query(StockCache).filter(StockCache.ticker == "CACHEX").one()
+    assert row.history_blob and row.history_json is None and row.history_version == bs.bars_version(v2)
+    rev = db.query(HistoryRevision).filter(HistoryRevision.ticker == "CACHEX").one()
+    assert rev.store == "cache" and bs.revision_bars(rev) == v1
+    assert rev.prev_version == bs.text_version(json.dumps(v1))
+    db.close()
+
+
+@test
+def test_revision_retention_per_series_and_total_bytes():
+    from database.models import HistoryRevision
+    db = SessionLocal()
+    db.query(HistoryRevision).delete()
+    db.commit()
+    bars = make_bars(trading_days("2022-01-03", 50))
+    change = {"kind": "correction", "reason": "test"}
+    for _ in range(bs.REVISIONS_PER_SERIES + 3):
+        bs.record_revision(db, "KEEP", "cache", bars, change, "a", "b")
+    db.commit()
+    assert db.query(HistoryRevision).filter(HistoryRevision.ticker == "KEEP").count() == bs.REVISIONS_PER_SERIES
+    old_cap = bs.REVISIONS_MAX_BYTES
+    try:
+        size = db.query(HistoryRevision).first().payload_bytes
+        bs.REVISIONS_MAX_BYTES = size * 4 + 1
+        for t in ("B1", "B2", "B3"):
+            bs.record_revision(db, t, "cache", bars, change, "a", "b")
+        db.commit()
+        total = sum(r.payload_bytes for r in db.query(HistoryRevision).all())
+        assert total <= bs.REVISIONS_MAX_BYTES, total
+        assert db.query(HistoryRevision).filter(HistoryRevision.ticker == "B3").count() == 1, \
+            "the newest revision survives; the oldest are pruned first"
+    finally:
+        bs.REVISIONS_MAX_BYTES = old_cap
+    db.close()
+
+
+@test
+def test_walk_forward_reports_a_stable_data_fingerprint_and_sources():
+    from services.backtest import run_walk_forward_backtest
+    db = SessionLocal()
+    seed_engine_world(db)
+    kw = dict(strategy_id="momentum_rotation", source="universe", history="20y", max_window_years=None)
+    a = run_walk_forward_backtest(db, 1, **kw)
+    b = run_walk_forward_backtest(db, 1, **kw)
+    dv = a["data_versions"]
+    assert dv["fingerprint"] and dv["fingerprint"] == b["data_versions"]["fingerprint"]
+    assert dv["tickers"] >= 5 and dv["unversioned"] == 0
+    assert any(s.startswith("archive:") for s in dv["sources"]), dv["sources"]
+    assert a["data_quality"]["sources"] and any(c["id"] == "data_sources" for c in a["caveats"])
+    # Migrating to the columnar format must not change the data version...
+    bs.migrate(db)
+    c = run_walk_forward_backtest(db, 1, **kw)
+    assert c["data_versions"]["fingerprint"] == dv["fingerprint"]
+    assert c["equity"] == a["equity"] and c["trades"] == a["trades"] and c["metrics"] == a["metrics"]
+    # ...but changing one stored series must.
+    t = next(x for x in dv["versions"] if x not in ("SPY", "^VIX"))
+    bars = lh.load_cache_bars(db, t)
+    bars[-2]["close"] = round(bars[-2]["close"] * 1.03, 4)
+    put_cache(db, t, bars)
+    row = db.query(StockCache).filter(StockCache.ticker == t).one()
+    row.history_blob, row.history_version = None, None
+    db.commit()
+    d = run_walk_forward_backtest(db, 1, **kw)
+    assert d["data_versions"]["fingerprint"] != dv["fingerprint"]
+    assert d["data_versions"]["versions"][t]["cache"] != dv["versions"][t]["cache"]
+    five = run_walk_forward_backtest(db, 1, strategy_id="momentum_rotation", source="universe")
+    assert five["data_versions"]["fingerprint"] and five["data_versions"]["sources"].get("cache")
+    db.close()
+
+
+@test
+def test_storage_status_and_migration_endpoint_are_wired():
+    from services.job_worker import HANDLERS
+    assert "bar_storage_migration" in HANDLERS
+    db = SessionLocal()
+    st = bs.storage_status(db)
+    assert {"cache_columnar", "archive_columnar", "pending_cache", "pending_archive",
+            "revisions", "revision_limits"} <= set(st)
+    db.close()
+
+
 def main() -> int:
     passed = failed = 0
     failures = []

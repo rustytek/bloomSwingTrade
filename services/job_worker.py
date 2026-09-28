@@ -238,12 +238,26 @@ def _history_backfill(db, user_id: int, params: dict, tick) -> dict:
                         force=bool(params.get("force")), progress=tick)
 
 
+def _bar_storage_migration(db, user_id: int, params: dict, tick) -> dict:
+    """Convert stored price history from JSON to the verified columnar format
+    (ML4T gap 9, services/bar_store.py). Resumable: only unconverted rows are
+    touched, and every row is checked to decode to exactly its JSON before the
+    JSON is cleared. `vacuum` compacts the file afterwards (locks the DB while
+    it runs, so it is opt-in)."""
+    import logging
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s: [storage worker] %(message)s")
+    from services import bar_store
+    tick(0.01, "Converting stored price history to the columnar format…")
+    return bar_store.migrate(db, progress=tick, vacuum=bool(params.get("vacuum")))
+
 
 HANDLERS = {
     "edge_matrix": _edge_matrix,
     "selftest": _selftest,
     "daily_report": _daily_report,
     "history_backfill": _history_backfill,
+    "bar_storage_migration": _bar_storage_migration,
 }
 
 

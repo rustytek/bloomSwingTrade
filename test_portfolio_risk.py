@@ -757,6 +757,24 @@ _CB_HIST = [("2026-09-01", 100000.0), ("2026-09-02", 110000.0), ("2026-09-03", 1
 
 
 @test
+def test_breaker_treats_an_account_size_change_as_a_deposit_not_a_drawdown():
+    """Lowering Settings' account size from 100k to 50k must not read as a
+    50 % drawdown and halt the account (cash is not tracked, so account size
+    is the capital base inside every equity figure)."""
+    cb = _cb()
+    rows = [("2026-09-01", 100000.0, 100000.0), ("2026-09-02", 104000.0, 100000.0)]
+    snaps = cb.rebase_snapshots(rows, 50000.0)
+    assert snaps == [("2026-09-01", 50000.0), ("2026-09-02", 54000.0)], snaps
+    state = cb.evaluate(snaps, 54000.0, "2026-09-03", 0, cb.thresholds_for(None), {})
+    assert state["level"] == "ok", state
+    # A real loss after the change is still caught, measured on the new base.
+    state = cb.evaluate(snaps, 47000.0, "2026-09-03", 0, cb.thresholds_for(None), {})
+    assert state["level"] == "halt", state
+    # Legacy rows with no stored account size are used as they are.
+    assert cb.rebase_snapshots([("2026-09-01", 1000.0, None)], 5000.0) == [("2026-09-01", 1000.0)]
+
+
+@test
 def test_breaker_escalates_warn_reduce_halt_with_multipliers():
     cb = _cb()
     t = cb.thresholds_for(None)

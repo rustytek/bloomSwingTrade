@@ -1099,7 +1099,11 @@ def test_breaker_snapshots_close_rows_win_and_acknowledge_needs_a_halt():
     yday = datetime(2026, 9, 23, 18, 0, tzinfo=timezone.utc)
     now = datetime(2026, 9, 24, 18, 0, tzinfo=timezone.utc)
     cb.record_snapshot(db, u, source="close", now=yday)
-    u.account_size = 9000.0
+    # A real realized loss (not an account-size edit — that is a withdrawal,
+    # see test_portfolio_risk's rebase test) takes equity from 10000 to 9000.
+    from database.models import ClosedTrade
+    db.add(ClosedTrade(user_id=u.id, ticker="LOSS", shares=10, avg_cost=200.0, exit_price=100.0,
+                       pnl=-1000.0, pnl_pct=-50.0))
     db.commit()
     cb.record_snapshot(db, u, source="intraday", now=yday)      # must not replace the close row
     row = db.query(EquitySnapshot).filter(EquitySnapshot.user_id == u.id).one()

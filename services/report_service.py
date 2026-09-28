@@ -66,7 +66,8 @@ Rules:
    BOTTOM signal: price rising (chg_pct > 0) AND vol_r > 1.2  →  accumulation breakout
                OR price falling (chg_pct < 0) AND vol_r < 0.85 →  low-volume pullback / shakeout
    NEUTRAL: mixed or no clear signal
-5. Sell/Exit candidates: ann_ret (1-month annualized) < 10% OR sharpe < 0.5
+5. Sell/Exit candidates: ann_ret_1m (1-month pace, annualized) < 10% OR sharpe < 0.5.
+   ann_ret is the FULL-HISTORY annualized return — never quote it as a 1-month figure.
 6. Annualized return formula: cost_multiplier ^ (52 / weeks_held)  then convert to %
 7. Keep the markdown table formatting intact.
 8. "Same Shape" groups are PRE-COMPUTED — use the provided correlation_groups directly.
@@ -271,7 +272,8 @@ async def _gather_context(user_id: int, db: Session) -> dict:
             "rsi": q.get("rsi"),
             "vol_r": q.get("vol_r"),
             "chg_pct": q.get("chg_pct"),
-            "ann_ret": q.get("ann_ret"),      # 1-month annualized
+            "ann_ret": q.get("ann_ret"),        # full-history annualized (schema_v 2)
+            "ann_ret_1m": q.get("ann_ret_1m"),  # 21-bar pace, annualized — the sell rule reads this
             "sharpe": q.get("sharpe"),
             "macd_sig": q.get("macd_sig"),
             "vs_ma50": q.get("vs_ma50"),
@@ -291,6 +293,7 @@ async def _gather_context(user_id: int, db: Session) -> dict:
             "rsi": q.get("rsi"),
             "score": q.get("score"),
             "ann_ret": q.get("ann_ret"),
+            "ann_ret_1m": q.get("ann_ret_1m"),
             "sharpe": q.get("sharpe"),
             "sector": q.get("sector", "Unknown"),
             "macd_sig": q.get("macd_sig"),

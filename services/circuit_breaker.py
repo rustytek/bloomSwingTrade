@@ -81,7 +81,8 @@ STREAK_LOOKBACK_TRADES = 50
 EQUITY_DEFINITION = (
     "Equity = account size (Settings) + realized P&L from the journal + unrealized P&L on open "
     "positions at their last cached price. The app doesn't track cash, so deposits and withdrawals "
-    "only show up if you change the account size."
+    "only show up if you change the account size — and such a change is treated as a deposit or "
+    "withdrawal (past equity is rebased onto the new size), never as a gain or a drawdown."
 )
 
 
@@ -167,6 +168,28 @@ def compute_equity(account_size, realized_pnl, positions: list[dict]) -> dict:
         "open_value": round(open_value, 2),
         "unpriced": unpriced,
     }
+
+
+def rebase_snapshots(rows, current_account_size) -> list[tuple[str, float]]:
+    """(date, equity) history re-expressed on TODAY's account size.
+
+    The app does not track cash, so `account_size` (a Settings value) is the
+    capital base inside every equity figure. Editing it is a deposit or a
+    withdrawal, not a gain or a loss: without this, lowering the account size
+    from 100k to 50k reads as a 50 % drawdown and trips the halt. Each
+    snapshot is shifted by (current account size - its own account size);
+    rows recorded without one are left as they are."""
+    cur = _f(current_account_size)
+    out = []
+    for row in rows:
+        d, e = row[0], _f(row[1])
+        if e is None:
+            continue
+        base = _f(row[2]) if len(row) > 2 else None
+        if cur is not None and base is not None:
+            e = e + (cur - base)
+        out.append((d, e))
+    return out
 
 
 def loss_streak(pnls_newest_first: list[float]) -> int:
@@ -412,8 +435,9 @@ def current_state(db: Session, user: User, record: bool = True, now: datetime | 
             record_snapshot(db, user, source="intraday", now=now, eq=eq)
         today = session_date(now).isoformat()
         since = (session_date(now) - timedelta(days=SNAPSHOT_LOOKBACK_DAYS)).isoformat()
-        snaps = [(r.date, r.equity) for r in db.query(EquitySnapshot.date, EquitySnapshot.equity)
-                 .filter(EquitySnapshot.user_id == user.id, EquitySnapshot.date >= since).all()]
+        rows = (db.query(EquitySnapshot.date, EquitySnapshot.equity, EquitySnapshot.account_size)
+                .filter(EquitySnapshot.user_id == user.id, EquitySnapshot.date >= since).all())
+        snaps = rebase_snapshots(rows, eq["account_size"])
         pnls = [r[0] for r in db.query(ClosedTrade.pnl).filter(ClosedTrade.user_id == user.id)
                 .order_by(ClosedTrade.closed_at.desc(), ClosedTrade.id.desc())
                 .limit(STREAK_LOOKBACK_TRADES).all()]

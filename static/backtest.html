@@ -728,7 +728,7 @@ function edgeCellHtml(strategyId, q, maxAbs) {
     : '';
   const qv = N(c.q_value);
   const sig = qv !== null
-    ? `<div class="c-n hint" data-tip="False-discovery-adjusted p-value across all ${esc(EDGE.tests_corrected_for ?? '')} judged cells (Benjamini-Hochberg). A verdict needs q ≤ ${esc(EDGE.fdr_q ?? 0.1)}. Effective n ${esc(c.n_effective ?? '--')} after correcting for correlated periods.">q=${num(qv, 2)}${Number(qv) <= Number(EDGE.fdr_q ?? 0.1) ? ' ✓' : ''}</div>`
+    ? `<div class="c-n hint" data-tip="False-discovery-adjusted p-value across all ${esc(EDGE.tests_corrected_for ?? '')} judged cells (Benjamini-Hochberg). A verdict needs q ≤ ${esc(EDGE.fdr_q ?? 0.1)}. Effective n ${esc(c.n_effective ?? '--')} after correcting for correlated periods${N(c.episodes) !== null ? ` and clustering by the ${esc(c.episodes)} separate regime episode${Number(c.episodes) === 1 ? '' : 's'} (one unbroken stay in the regime counts closer to one sample than to one per week)` : ''}.">q=${num(qv, 2)}${Number(qv) <= Number(EDGE.fdr_q ?? 0.1) ? ' ✓' : ''}</div>`
     : '';
   const vtip = [c.verdict_detail || verdict, c.verdict_reason ? 'Why: ' + c.verdict_reason : ''].filter(Boolean).join(' — ');
 
@@ -741,7 +741,7 @@ function edgeCellHtml(strategyId, q, maxAbs) {
     q.label || q.id,
     c.verdict_detail ? String(c.verdict_detail) : '',
     c.verdict_reason ? 'Why: ' + String(c.verdict_reason) : '',
-    `avg/period ${signed(c.avg_period_return, 2, '%')} · cumulative ${signed(c.cum_return, 2, '%')} · n=${n === null ? '--' : n} invested periods${N(c.idle_periods) ? ` (+${c.idle_periods} idle, excluded)` : ''} · confidence ${conf}`,
+    `avg/period ${signed(c.avg_period_return, 2, '%')} · cumulative ${signed(c.cum_return, 2, '%')} · n=${n === null ? '--' : n} invested periods${N(c.idle_periods) ? ` (+${c.idle_periods} idle, excluded)` : ''}${N(c.episodes) !== null ? ` · ${c.episodes} regime episodes, effective n ${num(c.n_effective, 0)}` : ''} · confidence ${conf}`,
   ].filter(Boolean).join(' — ');
 
   return `<td class="${isNow ? 'col-current' : ''}" style="${bg}">
@@ -749,6 +749,7 @@ function edgeCellHtml(strategyId, q, maxAbs) {
       <div class="c-ret" style="color:${fg};">${signed(c.avg_period_return, 2, '%')}</div>
       <div class="c-win">win ${esc(win)}</div>
       <div class="c-n">n=${n === null ? '--' : esc(n)} · cum ${signed(c.cum_return, 1, '%')}</div>
+      ${N(c.episodes) !== null ? `<div class="c-n hint" data-tip="Separate stays in this regime the periods came from${N(c.episodes_raw) !== null ? ` (${esc(c.episodes_raw)} before merging stays interrupted by ${esc((EDGE.thresholds || {}).episode_merge_gap_periods ?? 4)} periods or fewer of another regime)` : ''}. Weeks inside one episode move together, so significance and the win-rate interval use an effective sample of ${esc(c.n_effective ?? '--')}, not n=${n === null ? '--' : esc(n)}.">${esc(c.episodes)} episode${Number(c.episodes) === 1 ? '' : 's'} · n<sub>eff</sub> ${num(c.n_effective, 0)}</div>` : ''}
       ${N(c.idle_periods) ? `<div class="c-n hint" data-tip="Periods in this regime where the strategy held nothing. They are excluded from n and the averages: a cash period says nothing about how the strategy trades here.">+${esc(c.idle_periods)} idle (in cash)</div>` : ''}
       ${oot}
       ${sig}

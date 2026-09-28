@@ -94,30 +94,111 @@ def lag1_autocorr(xs: list[float]) -> float:
 def effective_n(xs: list[float]) -> tuple[float, float]:
     """(n_eff, rho) under an AR(1) approximation: n·(1−ρ)/(1+ρ), ρ clipped to
     [0, AR1_RHO_MAX]. Consecutive holding periods share positions and regimes,
-    so they are not independent draws; this is the conservative first cut
-    (ML4T gap 3 refines it with episode-level clustering)."""
+    so they are not independent draws. Lag-1 only sees dependence between
+    NEIGHBOURING periods; `cluster_se` covers dependence across a whole regime
+    episode, and `mean_test` uses whichever is more conservative."""
     rho = max(0.0, min(AR1_RHO_MAX, lag1_autocorr(xs)))
     return len(xs) * (1.0 - rho) / (1.0 + rho), rho
 
 
-def mean_test(xs: list[float]) -> dict:
+def episode_ids(labels: list, merge_gap: int = 0) -> list[int]:
+    """Episode number for every position of a label sequence.
+
+    A RUN is a maximal stretch of one label. With `merge_gap=0` every run is
+    its own episode. With `merge_gap=k`, a run joins the previous episode of
+    the SAME label when at most k positions of other labels separate them —
+    hysteresis for a classifier that flickers across a threshold: a bull
+    market interrupted by two weeks of "choppy" is still one bull market.
+    Merging is per label, so the interrupting blip stays its own episode of
+    its own label (and chains with that label's other runs only if they are
+    also within k). Used on the full run's per-period quadrant sequence, so
+    periods the strategy sat idle inside a stay are part of it."""
+    runs: list[list] = []            # [label, start, end_exclusive]
+    for i, lab in enumerate(labels):
+        if runs and runs[-1][0] == lab:
+            runs[-1][2] = i + 1
+        else:
+            runs.append([lab, i, i + 1])
+    out: list[int] = [0] * len(labels)
+    last: dict = {}                  # label -> (episode id, end of its last run)
+    next_id = 0
+    for lab, start, end in runs:
+        prev = last.get(lab)
+        # start - prev_end = number of other-label positions in between (>= 1).
+        if prev is not None and start - prev[1] <= merge_gap:
+            ep = prev[0]
+        else:
+            ep, next_id = next_id, next_id + 1
+        for i in range(start, end):
+            out[i] = ep
+        last[lab] = (ep, end)
+    return out
+
+
+def cluster_se(xs: list[float], clusters: list) -> tuple[float | None, int]:
+    """(standard error of the mean, number of clusters) with a cluster-robust
+    (CR1) estimator: residuals are summed within each cluster before squaring,
+    so periods of one regime episode that move together count as one draw,
+    not many. Needs >= 2 clusters; None otherwise."""
+    n = len(xs)
+    groups: dict = {}
+    for x, c in zip(xs, clusters):
+        groups.setdefault(c, []).append(x)
+    g = len(groups)
+    if n < 2 or g < 2:
+        return None, g
+    m = mean(xs)
+    sums = [sum(x - m for x in members) for members in groups.values()]
+    var = (g / (g - 1)) * sum(v * v for v in sums) / (n * n)
+    return math.sqrt(max(var, 0.0)), g
+
+
+def mean_test(xs: list[float], clusters: list | None = None) -> dict:
     """Is the mean of `xs` distinguishable from zero?
 
-    One-sample t-test whose sample size is the AR(1) effective n, so a run of
-    correlated periods is not counted as many independent observations.
-    Returns {t_stat, p_value, n_eff, rho}; p_value is two-sided, 1.0 when
-    there is nothing to test."""
+    One-sample t-test that never treats dependent periods as independent.
+    Two corrections are computed and the MORE CONSERVATIVE one wins:
+      * AR(1): the naive standard error inflated for lag-1 autocorrelation;
+      * episode clusters (when `clusters` is given): a cluster-robust standard
+        error with G-1 degrees of freedom, G = number of episodes. A cell made
+        of a single episode (G < 2) can never be significant — one bear market
+        is one observation of how a strategy does in bear markets, however many
+        weeks it lasted.
+    `n_eff` is the sample size the winning standard error corresponds to
+    (s² / SE², clipped to [1, n]). p_value is two-sided, 1.0 when there is
+    nothing to test."""
     n = len(xs)
+    base = {"t_stat": None, "p_value": 1.0, "n_eff": float(n), "rho": 0.0,
+            "episodes": None, "n_eff_ar1": float(n), "n_eff_cluster": None}
+    if clusters is not None and len(clusters) != n:
+        clusters = None
+    if clusters is not None:
+        base["episodes"] = len(set(clusters))
     if n < 3:
-        return {"t_stat": None, "p_value": 1.0, "n_eff": float(n), "rho": 0.0}
-    n_eff, rho = effective_n(xs)
+        return base
+    n_ar1, rho = effective_n(xs)
+    base.update({"rho": rho, "n_eff_ar1": n_ar1, "n_eff": n_ar1})
     sd = stdev(xs)
+    m = mean(xs)
     if sd <= 0:
-        m = mean(xs)
-        return {"t_stat": None, "p_value": 1.0 if m == 0 else 0.0, "n_eff": n_eff, "rho": rho}
-    t = mean(xs) / (sd / math.sqrt(n_eff))
-    return {"t_stat": t, "p_value": t_two_sided_p(t, max(1.0, n_eff - 1.0)),
-            "n_eff": n_eff, "rho": rho}
+        base["p_value"] = 1.0 if m == 0 else 0.0
+        return base
+    se, df = sd / math.sqrt(n_ar1), max(1.0, n_ar1 - 1.0)
+    if clusters is not None:
+        cse, g = cluster_se(xs, clusters)
+        if cse is None:
+            # One episode: no between-episode variation to test against.
+            base.update({"n_eff": 1.0, "n_eff_cluster": 1.0})
+            return base
+        n_cl = max(1.0, min(float(n), (sd / cse) ** 2)) if cse > 0 else float(n)
+        base["n_eff_cluster"] = n_cl
+        df = min(df, float(g - 1))
+        if cse > se:
+            se = cse
+            base["n_eff"] = n_cl
+    t = m / se
+    base.update({"t_stat": t, "p_value": t_two_sided_p(t, max(1.0, df))})
+    return base
 
 
 # ── multiple testing ───────────────────────────────────────────────────────
